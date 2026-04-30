@@ -1,12 +1,12 @@
 """Optimized screen capture and color extraction with GPU acceleration and adaptive FPS."""
 
+import gc
 import threading
 import time
-import gc
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
-from typing import Callable, Mapping, Optional, Sequence
+from dataclasses import dataclass
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 from PIL import Image
@@ -21,7 +21,6 @@ except ImportError:
 import mss
 
 from .screen_sync import (
-    SCREEN_REGIONS,
     CaptureConfig,
     adaptive_color_boost,
     crop_content_area,
@@ -1143,6 +1142,10 @@ def is_gpu_capture_available() -> bool:
     try:
         cam = dxcam.create()
         if cam is not None:
+            try:
+                cam.release()
+            except Exception:
+                pass
             del cam
             return True
     except Exception:

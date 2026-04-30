@@ -33,8 +33,7 @@ def test_microphone():
         nonlocal max_peak
         samples = np.abs(indata[:, 0])
         peak = float(np.max(samples))
-        rms = float(np.sqrt(np.mean(samples ** 2)))
-        
+
         if peak > max_peak:
             max_peak = peak
         

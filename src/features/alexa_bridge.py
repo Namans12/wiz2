@@ -2,9 +2,11 @@
 
 import json
 import threading
+import urllib.parse
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 from ..core.async_runtime import run_sync
 
@@ -146,11 +148,8 @@ def create_default_bridge(controller, bulb_ips: list[str]) -> AlexaBridge:
     return bridge
 
 
-# Simple HTTP server to receive fauxmo commands
-# This allows fauxmo to call back into our Python code
-
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import urllib.parse
+# Simple HTTP server to receive fauxmo commands.
+# This allows fauxmo to call back into our Python code.
 
 _action_handlers: dict[str, dict[str, Callable]] = {}
 

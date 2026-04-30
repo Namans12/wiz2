@@ -1169,15 +1169,19 @@ class ScreenCaptureService : Service() {
 
     private fun sendColor(ip: String, color: RgbColor) {
         val mapped = mapToWizPilotColor(color)
+        val isOn =
+            mapped.rgb.r > 0 ||
+                mapped.rgb.g > 0 ||
+                mapped.rgb.b > 0 ||
+                mapped.warmWhite > 0
         val params =
             JSONObject()
-                .put("state", true)
+                .put("state", isOn)
                 .put("r", mapped.rgb.r)
                 .put("g", mapped.rgb.g)
                 .put("b", mapped.rgb.b)
-        if (mapped.warmWhite > 0) {
-            params.put("w", mapped.warmWhite)
-        }
+                .put("c", 0)
+                .put("w", mapped.warmWhite)
 
         val payload = JSONObject()
             .put("method", "setPilot")

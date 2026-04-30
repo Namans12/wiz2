@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from src.core.calibration import BulbCalibrationTable, CalibrationSample

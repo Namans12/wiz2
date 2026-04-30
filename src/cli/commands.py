@@ -416,7 +416,6 @@ def alexa(ctx, verbose):
     Requires fauxmo: pip install fauxmo
     """
     import subprocess
-    import sys
     
     from ..features.alexa_bridge import (
         create_default_bridge,

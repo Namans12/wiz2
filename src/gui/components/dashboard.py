@@ -1,12 +1,11 @@
 """Bulb Dashboard with status cards for WizLight GUI."""
 
-from typing import Callable, Optional, List, Dict, Any
 from dataclasses import dataclass
-from concurrent.futures import Future
+from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
 
-from ...core.bulb_controller import BulbController, BulbState
+from ...core.bulb_controller import BulbController
 
 
 @dataclass

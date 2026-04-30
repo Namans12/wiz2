@@ -34,7 +34,7 @@ async def diagnose_bulb(ip: str) -> dict:
         sock.close()
     
     # 2. UDP port test
-    print(f"[2/4] Testing UDP port 38899...")
+    print("[2/4] Testing UDP port 38899...")
     try:
         # Send WiZ getPilot request
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -53,7 +53,7 @@ async def diagnose_bulb(ip: str) -> dict:
         sock.close()
     
     # 3. pywizlight connection test
-    print(f"[3/4] Testing pywizlight connection...")
+    print("[3/4] Testing pywizlight connection...")
     try:
         bulb = wizlight(ip)
         state = await bulb.updateState()
@@ -74,7 +74,7 @@ async def diagnose_bulb(ip: str) -> dict:
     
     # 4. Control test
     if results["wiz_response"]:
-        print(f"[4/4] Testing bulb control (toggle)...")
+        print("[4/4] Testing bulb control (toggle)...")
         try:
             bulb = wizlight(ip)
             state = await bulb.updateState()

@@ -1,6 +1,6 @@
 """Animation utilities for smooth GUI transitions."""
 
-from typing import Callable, Optional, Any
+from typing import Callable, Optional
 import customtkinter as ctk
 
 

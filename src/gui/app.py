@@ -635,7 +635,8 @@ class WizLightGUI:
                 self.root.after(0, self._update_bulb_list)
                 self.root.after(0, lambda: self._set_status(f"Found {len(bulbs)} bulb(s)"))
             except Exception as exc:
-                self.root.after(0, lambda: self._set_status(f"Discovery failed: {exc}"))
+                message = f"Discovery failed: {exc}"
+                self.root.after(0, lambda msg=message: self._set_status(msg))
 
         self._run_async(discover())
 
@@ -657,7 +658,8 @@ class WizLightGUI:
                 else:
                     self.root.after(0, lambda: self._set_status("No stale bulbs found"))
             except Exception as exc:
-                self.root.after(0, lambda: self._set_status(f"Stale check failed: {exc}"))
+                message = f"Stale check failed: {exc}"
+                self.root.after(0, lambda msg=message: self._set_status(msg))
 
         self._run_async(prune())
 

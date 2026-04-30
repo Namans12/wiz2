@@ -22,7 +22,7 @@ from ..features.fast_udp_sender import FastBulbSenderPool
 from ..features.sync_dispatcher import CoalescingAsyncDispatcher
 
 # Import new components
-from .components.animations import AnimationMixin, animate_value, ease_out_cubic
+from .components.animations import AnimationMixin
 from .components.color_wheel import ColorWheelPicker
 from .components.dashboard import BulbDashboard, BulbInfo
 from .components.smooth_scrollable_frame import SmoothScrollableFrame
@@ -649,7 +649,8 @@ class WizLightModernGUI(AnimationMixin):
                 self.root.after(0, self._update_bulb_status)
                 self.root.after(0, lambda: self._set_status(f"Found {len(bulbs)} bulb(s)"))
             except Exception as exc:
-                self.root.after(0, lambda: self._set_status(f"Error: {exc}"))
+                message = f"Error: {exc}"
+                self.root.after(0, lambda msg=message: self._set_status(msg))
 
         self._run_async(discover())
 
@@ -671,7 +672,8 @@ class WizLightModernGUI(AnimationMixin):
                 else:
                     self.root.after(0, lambda: self._set_status("No stale bulbs found"))
             except Exception as exc:
-                self.root.after(0, lambda: self._set_status(f"Stale check failed: {exc}"))
+                message = f"Stale check failed: {exc}"
+                self.root.after(0, lambda msg=message: self._set_status(msg))
 
         self._run_async(prune())
 

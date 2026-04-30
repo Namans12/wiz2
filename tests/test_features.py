@@ -428,7 +428,7 @@ def test_motion_detector_detects_change():
     
     # First frame - baseline
     frame1 = np.zeros((64, 64, 3), dtype=np.uint8)
-    score1 = detector.update(frame1)
+    detector.update(frame1)
     
     # Second frame - different
     frame2 = np.full((64, 64, 3), fill_value=200, dtype=np.uint8)

@@ -1,12 +1,12 @@
 """System tray integration for WizLight."""
 
 import threading
-from typing import Callable, Optional, Dict, Any
 from pathlib import Path
+from typing import Callable, Optional
 
 try:
     import pystray
-    from PIL import Image, ImageDraw
+    from PIL import Image
     TRAY_AVAILABLE = True
 except ImportError:
     TRAY_AVAILABLE = False
