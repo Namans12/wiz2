@@ -135,3 +135,5 @@ Thumbs.db
 
 # Project-specific
 *.log
+output/
+hardware_targets.json

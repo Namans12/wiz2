@@ -1,0 +1,29 @@
+{
+  "video": "C:/Users/naman/Videos/color-test.mp4",
+  "output_dir": "output/hardware-runs",
+  "mean_error_threshold": 95.0,
+  "max_error_threshold": 170.0,
+  "sample_step": 1.0,
+  "scene_gap": 4.0,
+  "scene_threshold": 22.0,
+  "max_scenes": 10,
+  "settle": 0.45,
+  "frames": 6,
+  "warmup_frames": 4,
+  "command_timeout": 8.0,
+  "retries": 3,
+  "retry_delay": 0.4,
+  "camera_stabilize_seconds": 4.0,
+  "ignore_tone_lut": false,
+  "save_tone_lut": false,
+  "targets": [
+    {
+      "name": "desk-left",
+      "ip": "192.168.1.3",
+      "camera": 0,
+      "roi": [120, 80, 90, 90],
+      "mean_error_threshold": 90.0,
+      "max_error_threshold": 160.0
+    }
+  ]
+}
