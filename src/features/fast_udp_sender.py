@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
-import json
 import queue
 import socket
 import threading
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
 WIZ_PORT = 38899
 DEFAULT_MAX_SEND_HZ = 28.0
+_SNDBUF = 262144
 
 _ENCODE_CACHE: dict[tuple[int, ...], bytes] = {}
 _CACHE_LOCK = threading.Lock()
 _MAX_CACHE_SIZE = 4096
+_CACHE_EVICT_SIZE = 512
+
+_FMT_5 = (
+    b'{"method":"setPilot","params":{"state":%s,'
+    b'"r":%d,"g":%d,"b":%d,"c":%d,"w":%d%s}}'
+)
+_FMT_4 = (
+    b'{"method":"setPilot","params":{"state":%s,'
+    b'"r":%d,"g":%d,"b":%d,"c":0,"w":%d%s}}'
+)
+_FMT_DIM = b',"dimming":%d'
 
 
 def _clamp_channel(value: int) -> int:
@@ -33,34 +44,21 @@ def encode_set_pilot_payload(
     channels = tuple(_clamp_channel(value) for value in payload)
     dimming = None if brightness is None else max(10, min(100, round(int(brightness) / 255 * 100)))
     key = channels if dimming is None else (*channels, dimming)
-    with _CACHE_LOCK:
-        cached = _ENCODE_CACHE.get(key)
-        if cached is not None:
-            return cached
 
-    params = {
-        "state": any(channels),
-        "r": channels[0],
-        "g": channels[1],
-        "b": channels[2],
-    }
+    cached = _ENCODE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    state = b"true" if any(channels) else b"false"
+    dim_part = b"" if dimming is None or not any(channels) else _FMT_DIM % dimming
     if len(channels) == 5:
-        params["c"] = channels[3]
-        params["w"] = channels[4]
+        encoded = _FMT_5 % (state, channels[0], channels[1], channels[2], channels[3], channels[4], dim_part)
     else:
-        params["c"] = 0
-        params["w"] = channels[3]
-    if dimming is not None and params["state"]:
-        params["dimming"] = dimming
-
-    encoded = json.dumps(
-        {"method": "setPilot", "params": params},
-        separators=(",", ":"),
-    ).encode("utf-8")
+        encoded = _FMT_4 % (state, channels[0], channels[1], channels[2], channels[3], dim_part)
 
     with _CACHE_LOCK:
         if len(_ENCODE_CACHE) >= _MAX_CACHE_SIZE:
-            for old_key in list(_ENCODE_CACHE)[:512]:
+            for old_key in list(_ENCODE_CACHE)[:_CACHE_EVICT_SIZE]:
                 _ENCODE_CACHE.pop(old_key, None)
         _ENCODE_CACHE[key] = encoded
     return encoded
@@ -87,6 +85,10 @@ class BulbUDPSocket:
     def _connect(self) -> socket.socket:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(0.004)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, _SNDBUF)
+        except OSError:
+            pass
         sock.connect((self.ip, WIZ_PORT))
         return sock
 
@@ -159,10 +161,17 @@ class BulbUDPSocket:
 class FastBulbSenderPool:
     """Thread-safe pool of latest-wins UDP senders."""
 
-    def __init__(self, max_send_hz: float = DEFAULT_MAX_SEND_HZ):
+    def __init__(
+        self,
+        max_send_hz: float = DEFAULT_MAX_SEND_HZ,
+        prewarm_ips: Optional[Sequence[str]] = None,
+    ):
         self.max_send_hz = max_send_hz
         self._senders: dict[str, BulbUDPSocket] = {}
         self._lock = threading.Lock()
+        if prewarm_ips:
+            for ip in prewarm_ips:
+                self._get(ip)
 
     def _get(self, ip: str) -> BulbUDPSocket:
         with self._lock:
@@ -181,7 +190,7 @@ class FastBulbSenderPool:
         brightness: Optional[int] = None,
     ) -> None:
         for ip, payload in payloads_by_ip.items():
-            self.send_payload(ip, payload, brightness)
+            self._get(ip).send(encode_set_pilot_payload(payload, brightness))
 
     def close(self) -> None:
         with self._lock:

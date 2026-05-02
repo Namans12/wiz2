@@ -1,71 +1,95 @@
-# WizLight Android Tablet Sync
+# WizLight Android Screen Sync
 
-Sync up to 2 WiZ bulbs directly from your Android tablet without routing through the PC app.
+Android companion app for syncing tablet/phone screen colors directly to WiZ bulbs over the local network. It does not require the Windows app for normal direct-to-bulb sync.
 
-## What Changed
+## Features
 
-- Direct local WiZ discovery on the tablet over UDP
-- Manual add-by-IP fallback when discovery is blocked
-- On-device screen sync using MediaProjection
-- Smarter single-bulb cinematic extraction for movies and video
-- Left/right zone sync for 2-bulb ambient setups
-- Adaptive FPS, smoothing, letterbox rejection, and runtime status in the UI
+- Local WiZ discovery over UDP broadcast.
+- Manual add-by-IP fallback.
+- Saved bulbs and sync settings through `shared_preferences`.
+- Native Android MediaProjection capture through `ScreenCaptureService`.
+- Foreground service while capture is active.
+- Single ambient mode for one or more bulbs.
+- Left/right zone mode for two-bulb ambient setups.
+- Cinematic extraction, palette hold, smoothing, adaptive FPS, adaptive send delta, and letterbox rejection.
+- WiZ-aware RGB plus explicit `c`/`w` payloads to avoid washed-out firmware white-channel inference.
+- Runtime status for mode, FPS, send rate, motion score, smoothing, extractor, target color, output color, update count, and errors.
+- In-app guide explaining sync controls.
 
 ## Requirements
 
-- Android 7.0+ (API 24+)
-- WiZ bulbs on the same Wi-Fi network as the tablet
-- `Local communication` enabled in the WiZ app
+- Android 7.0+ API 24+
+- WiZ bulbs on the same Wi-Fi/LAN as the Android device
+- Local communication enabled in the WiZ app
+- Android screen-capture permission granted when starting sync
 
 ## Build
 
-```bash
-cd wizlight-android
+```powershell
+cd C:\Users\naman\Desktop\wizlight-master\wizlight-android
 flutter pub get
+flutter analyze
 flutter test
 flutter build apk --debug
 ```
 
-Debug APK output:
+Debug APK:
 
 ```text
-build/app/outputs/apk/debug/app-debug.apk
+build\app\outputs\flutter-apk\app-debug.apk
+```
+
+Release APK:
+
+```powershell
+flutter build apk --release
+```
+
+App bundle:
+
+```powershell
+flutter build appbundle --release
 ```
 
 ## Install
 
-```bash
-adb install build/app/outputs/apk/debug/app-debug.apk
+```powershell
+adb install .\build\app\outputs\flutter-apk\app-debug.apk
 ```
 
 ## Usage
 
-1. Open the app on the tablet.
-2. Tap `Discover` to find WiZ bulbs on the local network.
-3. If discovery misses a bulb, use `Add IP`.
-4. Assign up to 2 bulbs to `Left` and `Right`.
-5. Pick `Single` or `Left + Right` mode.
-6. Tap `Start Tablet Sync` and grant screen capture permission.
+1. Open the app.
+2. Tap the search icon to discover WiZ bulbs.
+3. If discovery misses a bulb, tap the add icon and enter its IP address.
+4. Assign bulbs to `Left` or `Right` if using two-bulb zone mode.
+5. Pick `Single` or `Left + Right`.
+6. Adjust FPS, smoothing, color boost, and letterbox handling.
+7. Tap `Start Sync` and grant Android screen-capture permission.
 
 ## Tuning
 
-- `Single` mode is best for 1 bulb and is tuned for richer movie ambience.
-- `Left + Right` is for 2-bulb ambient setups.
-- Raise `Max FPS` for faster matching.
-- Raise `Color Boost` for stronger saturation.
-- Keep `Ignore Letterbox Bars` on for movies.
+- `Single` is best for one bulb or multiple bulbs showing the same ambient color.
+- `Left + Right` is for two-bulb setups placed around the display.
+- Higher `Max FPS` reacts faster; WiZ bulbs generally cap around 28 updates per second.
+- Lower `Smoothing` feels more immediate; higher values reduce flicker.
+- Higher `Color Boost` increases saturation; too much can make scenes look artificial.
+- Keep `Ignore letterbox bars` enabled for movies and YouTube content with black bars.
 
 ## Architecture
 
 ```text
 lib/
-├── models/wiz_bulb.dart
-├── screens/home_screen.dart
-├── screens/settings_screen.dart
-├── services/wiz_bulb_service.dart
-├── services/sync_service.dart
-├── services/settings_service.dart
-└── services/screen_capture_service.dart
+├── main.dart
+├── models/
+│   └── wiz_bulb.dart
+├── screens/
+│   └── home_screen.dart
+└── services/
+    ├── screen_capture_service.dart
+    ├── settings_service.dart
+    ├── sync_service.dart
+    └── wiz_bulb_service.dart
 
 android/app/src/main/kotlin/com/wizlight/app/
 ├── MainActivity.kt
@@ -74,25 +98,25 @@ android/app/src/main/kotlin/com/wizlight/app/
 
 ## Troubleshooting
 
-### No bulbs discovered
+No bulbs discovered:
 
-- Confirm `Local communication` is enabled in the WiZ app.
-- Make sure the tablet is on the same Wi-Fi as the bulbs.
-- Try `Add IP` using the IP shown in the WiZ app.
+- Confirm local communication is enabled in the WiZ app.
+- Keep the Android device and bulbs on the same LAN.
+- Disable guest-network or AP isolation.
+- Use manual Add IP if UDP broadcast is blocked.
 
-### Screen capture starts but lights do not react
+Screen capture starts but lights do not react:
 
-- Recheck that the bulbs were discovered or added locally in the app.
-- Verify the bulbs still respond in the WiZ app on the same Wi-Fi.
-- Some DRM-heavy apps can block capture or return black frames.
+- Confirm bulbs are configured in the app.
+- Confirm the bulbs respond in the WiZ app.
+- Some DRM-heavy apps can return black frames through MediaProjection.
 
-### Build fails on Windows
-
-- If Gradle/Kotlin cache files get stuck, stop Gradle and clear the app `build/` folder:
+Build fails on Windows:
 
 ```powershell
-cd wizlight-android\android
+cd C:\Users\naman\Desktop\wizlight-master\wizlight-android\android
 .\gradlew.bat --stop
 cd ..
-Remove-Item build -Recurse -Force
+flutter clean
+flutter pub get
 ```

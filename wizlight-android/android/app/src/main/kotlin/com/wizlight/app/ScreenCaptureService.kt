@@ -27,7 +27,6 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONArray
-import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -164,6 +163,12 @@ class ScreenCaptureService : Service() {
     private val lastSentColors = mutableMapOf<String, RgbColor>()
     private val lastTargetColors = mutableMapOf<String, RgbColor>()
     private val predictionTargets = mutableMapOf<String, RgbColor>()
+    private val addressCache = mutableMapOf<String, InetAddress>()
+    private val packetCache = object : LinkedHashMap<String, ByteArray>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?): Boolean {
+            return size > 4096
+        }
+    }
     private val wizBasis = arrayOf(
         doubleArrayOf(cos(0.0), sin(0.0)),
         doubleArrayOf(cos((2.0 * PI) / 3.0), sin((2.0 * PI) / 3.0)),
@@ -277,7 +282,9 @@ class ScreenCaptureService : Service() {
             mainHandler,
         )
 
-        udpSocket = DatagramSocket()
+        udpSocket = DatagramSocket().apply {
+            sendBufferSize = 262144
+        }
         previousMotionSample = null
         previousSingleColor = null
         lastMotionScore = 0.0
@@ -293,6 +300,8 @@ class ScreenCaptureService : Service() {
         lastSentColors.clear()
         lastTargetColors.clear()
         predictionTargets.clear()
+        addressCache.clear()
+        packetCache.clear()
 
         captureThread = HandlerThread("WizLightCaptureThread").also { it.start() }
         captureHandler = Handler(captureThread!!.looper)
@@ -316,6 +325,7 @@ class ScreenCaptureService : Service() {
             lastTargetColors.putAll(targetColors)
 
             val smoothingFactor = targetSmoothing(motionScore)
+            val sendThreshold = sendDeltaThreshold(motionScore)
             val mappedBulbColors = buildBulbColorMap(targetColors)
             val appliedColors = mutableMapOf<String, RgbColor>()
             var sentAnyUpdate = false
@@ -332,7 +342,7 @@ class ScreenCaptureService : Service() {
                 appliedColors[ip] = smoothed
 
                 val lastSent = lastSentColors[ip]
-                if (lastSent == null || colorDistance(smoothed, lastSent) >= minColorDelta) {
+                if (lastSent == null || colorDistance(smoothed, lastSent) >= sendThreshold) {
                     sendColor(ip, smoothed)
                     lastSentColors[ip] = smoothed
                     sentAnyUpdate = true
@@ -1080,6 +1090,15 @@ class ScreenCaptureService : Service() {
         return factor.coerceIn(0.06, 0.9)
     }
 
+    private fun sendDeltaThreshold(motionScore: Double): Int {
+        if (!adaptiveFps) {
+            return minColorDelta
+        }
+        val motionFactor = min(1.0, motionScore / 0.05)
+        val staticExtra = ((1.0 - motionFactor) * 14.0).roundToInt()
+        return max(minColorDelta, minColorDelta + staticExtra)
+    }
+
     private fun mapToWizPilotColor(color: RgbColor): WizPilotColor {
         var red = color.r / 255.0
         var green = color.g / 255.0
@@ -1174,22 +1193,18 @@ class ScreenCaptureService : Service() {
                 mapped.rgb.g > 0 ||
                 mapped.rgb.b > 0 ||
                 mapped.warmWhite > 0
-        val params =
-            JSONObject()
-                .put("state", isOn)
-                .put("r", mapped.rgb.r)
-                .put("g", mapped.rgb.g)
-                .put("b", mapped.rgb.b)
-                .put("c", 0)
-                .put("w", mapped.warmWhite)
 
-        val payload = JSONObject()
-            .put("method", "setPilot")
-            .put("params", params)
-            .toString()
-            .toByteArray(StandardCharsets.UTF_8)
+        val cacheKey =
+            "${if (isOn) 1 else 0}:${mapped.rgb.r}:${mapped.rgb.g}:${mapped.rgb.b}:${mapped.warmWhite}"
+        val payload = packetCache.getOrPut(cacheKey) {
+            (
+                """{"method":"setPilot","params":{"state":$isOn,""" +
+                    """"r":${mapped.rgb.r},"g":${mapped.rgb.g},"b":${mapped.rgb.b},""" +
+                    """"c":0,"w":${mapped.warmWhite}}}"""
+                ).toByteArray(StandardCharsets.UTF_8)
+        }
 
-        val address = InetAddress.getByName(ip)
+        val address = addressCache.getOrPut(ip) { InetAddress.getByName(ip) }
         val packet = DatagramPacket(payload, payload.size, address, WIZ_PORT)
         udpSocket?.send(packet)
     }

@@ -17,14 +17,32 @@ class ClapConfig:
     min_peak_to_rms: float = 2.7  # Clap should be a short transient, not steady noise
     adaptive_multiplier: float = 5.0  # Dynamic threshold factor over ambient noise floor
     noise_floor_decay: float = 0.985  # Smoothing for ambient-noise tracking
+    noise_floor_fast_rise: float = 0.30  # Faster rise when ambient noise increases
     min_duration: float = 0.005  # Minimum clap duration in seconds
     max_duration: float = 0.2  # Maximum clap duration in seconds
     cooldown: float = 0.45  # Minimum time between triggered actions
     double_clap: bool = True  # Require double clap to trigger
     double_clap_window: float = 0.85  # Max time between double claps
+    use_freq_gate: bool = True
+    freq_gate_low_hz: float = 800.0
+    freq_gate_high_hz: float = 5000.0
+    freq_band_ratio_min: float = 0.12
     sample_rate: int = 44100
-    block_size: int = 512
+    block_size: int = 256
     device_index: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        self.threshold = 0.055 if self.threshold > 0.2 else self.threshold
+        self.threshold = max(0.01, min(0.2, float(self.threshold)))
+        self.rms_threshold = max(0.002, min(0.05, float(self.rms_threshold)))
+        self.min_peak_to_rms = max(1.2, min(6.0, float(self.min_peak_to_rms)))
+        self.adaptive_multiplier = max(1.5, min(12.0, float(self.adaptive_multiplier)))
+        self.noise_floor_fast_rise = max(0.05, min(0.8, float(self.noise_floor_fast_rise)))
+        self.min_duration = max(0.002, min(0.05, float(self.min_duration)))
+        self.max_duration = max(0.04, min(0.4, float(self.max_duration)))
+        self.cooldown = max(0.1, min(2.0, float(self.cooldown)))
+        self.double_clap_window = max(0.25, min(1.5, float(self.double_clap_window)))
+        self.block_size = max(64, min(1024, int(self.block_size)))
 
 
 class ClapDetector:
@@ -49,11 +67,19 @@ class ClapDetector:
         
         # State for detection
         self._last_clap_time = 0.0
-        self._single_clap_time = 0.0  # For double clap detection
+        self._single_clap_time: Optional[float] = None  # For double clap detection
         self._in_clap = False
         self._clap_start_time = 0.0
         self._last_signal_time = 0.0
         self._noise_floor = max(self.config.rms_threshold / 4, 1e-4)
+        self._noise_floor_fast = self._noise_floor
+        if self.config.use_freq_gate:
+            freqs = np.fft.rfftfreq(self.config.block_size, d=1.0 / self.config.sample_rate)
+            self._freq_low_idx = int(np.searchsorted(freqs, self.config.freq_gate_low_hz))
+            self._freq_high_idx = int(np.searchsorted(freqs, self.config.freq_gate_high_hz))
+        else:
+            self._freq_low_idx = 0
+            self._freq_high_idx = 0
     
     def start(self) -> None:
         """Start clap detection."""
@@ -85,37 +111,55 @@ class ClapDetector:
         if status:
             print(f"Audio status: {status}")
 
-        samples = np.abs(indata[:, 0].astype(np.float32))
+        raw_samples = indata[:, 0].astype(np.float32, copy=False)
+        samples = np.abs(raw_samples)
         rms = float(np.sqrt(np.mean(samples ** 2)))
         peak = float(np.max(samples))
-        local_floor = float(np.quantile(samples, 0.90))
+        local_floor = float(np.quantile(samples, 0.75))
         current_time = time.time()
 
-        if self._single_clap_time and current_time - self._single_clap_time > self.config.double_clap_window:
-            self._single_clap_time = 0.0
-
         if not self._in_clap:
+            quiet_rms = min(rms, self.config.rms_threshold * 1.5)
             self._noise_floor = (
                 self._noise_floor * self.config.noise_floor_decay
-                + min(rms, self.config.rms_threshold * 2.0) * (1 - self.config.noise_floor_decay)
+                + quiet_rms * (1 - self.config.noise_floor_decay)
             )
+            if quiet_rms > self._noise_floor_fast:
+                self._noise_floor_fast = (
+                    self._noise_floor_fast * (1.0 - self.config.noise_floor_fast_rise)
+                    + quiet_rms * self.config.noise_floor_fast_rise
+                )
+            else:
+                self._noise_floor_fast = (
+                    self._noise_floor_fast * self.config.noise_floor_decay
+                    + quiet_rms * (1 - self.config.noise_floor_decay)
+                )
+
+        noise_floor = max(self._noise_floor, self._noise_floor_fast, 1e-5)
 
         dynamic_rms_threshold = max(
             self.config.rms_threshold,
-            self._noise_floor * self.config.adaptive_multiplier,
+            noise_floor * self.config.adaptive_multiplier,
         )
         dynamic_peak_threshold = max(
             self.config.threshold,
             dynamic_rms_threshold * 2.5,
         )
         peak_to_rms = peak / max(rms, 1e-6)
-        peak_to_floor = peak / max(local_floor, self._noise_floor, 1e-6)
+        peak_to_floor = peak / max(local_floor, noise_floor, 1e-6)
         is_clap_block = (
             peak >= dynamic_peak_threshold
-            and rms >= dynamic_rms_threshold * 0.4
+            and rms >= dynamic_rms_threshold * 0.35
             and peak_to_rms >= self.config.min_peak_to_rms
-            and peak_to_floor >= 1.65
+            and peak_to_floor >= 1.60
         )
+        if is_clap_block and self.config.use_freq_gate:
+            spectrum = np.abs(np.fft.rfft(raw_samples))
+            total_energy = float((spectrum ** 2).sum()) + 1e-12
+            band_energy = float((spectrum[self._freq_low_idx : self._freq_high_idx] ** 2).sum())
+            if band_energy / total_energy < self.config.freq_band_ratio_min:
+                is_clap_block = False
+
         block_duration = frames / self.config.sample_rate
 
         if is_clap_block and not self._in_clap:
@@ -143,17 +187,13 @@ class ClapDetector:
             return
         
         if self.config.double_clap:
-            # Double clap mode
-            if self._single_clap_time == 0:
-                # First clap of potential double
+            if self._single_clap_time is None:
                 self._single_clap_time = current_time
             elif current_time - self._single_clap_time <= self.config.double_clap_window:
-                # Second clap within window - trigger!
-                self._single_clap_time = 0
+                self._single_clap_time = None
                 self._last_clap_time = current_time
                 self._trigger_callback()
             else:
-                # Too slow, start over
                 self._single_clap_time = current_time
         else:
             # Single clap mode

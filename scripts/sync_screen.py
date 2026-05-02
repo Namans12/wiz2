@@ -52,7 +52,10 @@ def main():
         runner.submit,
         controller.set_screen_sync_map,
     )
-    fast_sender = FastBulbSenderPool(max_send_hz=min(28, max(12, screen_settings.max_fps)))
+    fast_sender = FastBulbSenderPool(
+        max_send_hz=min(28, max(12, screen_settings.max_fps)),
+        prewarm_ips=ips,
+    )
 
     def on_color_change(colors_by_target):
         bulb_colors = build_bulb_color_map(

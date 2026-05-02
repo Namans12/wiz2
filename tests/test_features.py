@@ -36,6 +36,8 @@ from src.features.screen_sync_v2 import (
     extract_dominant_kmeans,
     extract_dominant_weighted,
     should_use_gpu_capture,
+    _DxcamRecoveryNoiseFilter,
+    _dxcam_recovery_state,
 )
 
 
@@ -491,6 +493,27 @@ def test_gpu_capture_manager_releases_camera_on_stop():
     assert capture._camera is None
 
 
+def test_dxcam_recovery_noise_filter_suppresses_expected_warning():
+    import logging
+
+    before, _ = _dxcam_recovery_state()
+    record = logging.LogRecord(
+        name="dxcam.core.dxgi_duplicator",
+        level=logging.WARNING,
+        pathname="",
+        lineno=0,
+        msg="Desktop duplication access loss/system transition detected (HRESULT=0x887A0026).",
+        args=(),
+        exc_info=None,
+    )
+
+    assert _DxcamRecoveryNoiseFilter().filter(record) is False
+
+    after, message = _dxcam_recovery_state()
+    assert after == before + 1
+    assert "Desktop duplication access loss" in message
+
+
 def test_color_predictor_extrapolates_trend():
     """Color predictor should extrapolate based on history."""
     predictor = ColorPredictor(history_size=3, weight=0.5)
@@ -625,6 +648,7 @@ def test_optimized_screen_sync_debug_snapshot_reports_runtime_stats():
     snapshot = sync.debug_snapshot
 
     assert snapshot["capture_method"] == "dxcam"
+    assert snapshot["capture_status"] == "Ready"
     assert snapshot["current_fps"] == 22
     assert snapshot["target_colors"]["all"] == (12, 22, 32)
     assert snapshot["current_colors"]["all"] == (10, 20, 30)

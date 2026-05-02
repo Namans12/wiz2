@@ -363,7 +363,10 @@ def serve(ctx, port, host):
         ctx.obj["runner"].submit,
         controller.set_screen_sync_map,
     )
-    fast_sender = FastBulbSenderPool(max_send_hz=min(28, max(12, config.screen_sync.max_fps)))
+    fast_sender = FastBulbSenderPool(
+        max_send_hz=min(28, max(12, config.screen_sync.max_fps)),
+        prewarm_ips=ips,
+    )
     
     def on_color_change(colors: dict) -> None:
         """Handle color changes from WebSocket clients."""

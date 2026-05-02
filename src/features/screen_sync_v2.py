@@ -1,6 +1,7 @@
 """Optimized screen capture and color extraction with GPU acceleration and adaptive FPS."""
 
 import gc
+import logging
 import threading
 import time
 from collections import deque
@@ -32,6 +33,48 @@ from .screen_sync import (
     effective_screen_sync_mode,
     _resolve_monitor,
 )
+
+_DXCAM_RECOVERY_LOCK = threading.Lock()
+_DXCAM_RECOVERY_EVENTS = 0
+_DXCAM_RECOVERY_LAST_MESSAGE = ""
+
+
+class _DxcamRecoveryNoiseFilter(logging.Filter):
+    """Hide expected DXGI recovery warnings while keeping a status counter."""
+
+    _NOISY_MARKERS = (
+        "Desktop duplication access loss/system transition detected",
+        "Output change/access loss detected",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if any(marker in message for marker in self._NOISY_MARKERS):
+            global _DXCAM_RECOVERY_EVENTS, _DXCAM_RECOVERY_LAST_MESSAGE
+            with _DXCAM_RECOVERY_LOCK:
+                _DXCAM_RECOVERY_EVENTS += 1
+                _DXCAM_RECOVERY_LAST_MESSAGE = message
+            return False
+        return True
+
+
+def _install_dxcam_noise_filter() -> None:
+    if not HAS_DXCAM:
+        return
+
+    noise_filter = _DxcamRecoveryNoiseFilter()
+    for logger_name in ("dxcam.dxcam", "dxcam.core.dxgi_duplicator"):
+        logger = logging.getLogger(logger_name)
+        if not any(isinstance(existing, _DxcamRecoveryNoiseFilter) for existing in logger.filters):
+            logger.addFilter(noise_filter)
+
+
+def _dxcam_recovery_state() -> tuple[int, str]:
+    with _DXCAM_RECOVERY_LOCK:
+        return _DXCAM_RECOVERY_EVENTS, _DXCAM_RECOVERY_LAST_MESSAGE
+
+
+_install_dxcam_noise_filter()
 
 
 @dataclass
@@ -95,11 +138,28 @@ def _sample_pixels(
     image: np.ndarray,
     sample_size: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Resize an image once and return pixel arrays for shared color analysis."""
+    """Downsample once and return pixel arrays for shared color analysis.
 
-    img = Image.fromarray(image)
-    img = img.resize((sample_size, sample_size), Image.Resampling.BILINEAR)
-    pixels = np.array(img).astype(np.float32)
+    The hot path only needs a stable color sample, not a high-quality image
+    resize. Strided sampling avoids PIL object creation and large resize
+    allocations while keeping the existing cinematic algorithm intact.
+    """
+
+    height, width = image.shape[:2]
+    if height <= 0 or width <= 0:
+        pixels = np.zeros((sample_size, sample_size, 3), dtype=np.float32)
+        return pixels, pixels
+
+    step_y = max(1, height // sample_size)
+    step_x = max(1, width // sample_size)
+    sampled = image[::step_y, ::step_x, :3][:sample_size, :sample_size]
+    if sampled.shape[0] < sample_size or sampled.shape[1] < sample_size:
+        padded = np.empty((sample_size, sample_size, 3), dtype=image.dtype)
+        padded[:] = sampled[-1:, -1:, :] if sampled.size else 0
+        padded[: sampled.shape[0], : sampled.shape[1], :] = sampled
+        sampled = padded
+
+    pixels = sampled.astype(np.float32, copy=False)
     return pixels, pixels / 255.0
 
 
@@ -524,9 +584,7 @@ class GPUCaptureManager:
         
         try:
             frame = self._camera.get_latest_frame()
-            if frame is not None:
-                return frame.copy()
-            return None
+            return frame if frame is not None else None
         except Exception:
             return None
     
@@ -782,6 +840,9 @@ class OptimizedScreenSync:
         # Performance stats
         self._frame_times: deque = deque(maxlen=30)
         self._capture_method = "mss"
+        self._capture_status = "Ready"
+        self._dxcam_recovery_events_seen = 0
+        self._dxcam_recovery_status_until = 0.0
     
     def start(self) -> None:
         """Start optimized screen sync."""
@@ -802,6 +863,9 @@ class OptimizedScreenSync:
             self._updates_sent = 0
             self._frames_processed = 0
             self._last_error = None
+            self._capture_status = "OK"
+            self._dxcam_recovery_events_seen, _ = _dxcam_recovery_state()
+            self._dxcam_recovery_status_until = 0.0
         
         # Initialize GPU capture if available and enabled
         if should_use_gpu_capture(self.config):
@@ -853,7 +917,16 @@ class OptimizedScreenSync:
         # Try GPU capture first
         if self._gpu_capture and self._gpu_capture.is_active:
             frame = self._gpu_capture.grab()
+            recovery_events, _ = _dxcam_recovery_state()
+            if recovery_events > self._dxcam_recovery_events_seen:
+                self._dxcam_recovery_events_seen = recovery_events
+                self._dxcam_recovery_status_until = time.perf_counter() + 4.0
+                with self._stats_lock:
+                    self._capture_status = "GPU capture recovered"
             if frame is not None:
+                if time.perf_counter() > self._dxcam_recovery_status_until:
+                    with self._stats_lock:
+                        self._capture_status = "OK"
                 return frame
         
         # Fallback to mss
@@ -871,8 +944,15 @@ class OptimizedScreenSync:
                     monitor = _resolve_monitor(monitors, self.config.monitor)
                 
                 screenshot = self._mss_instance.grab(monitor)
-                image = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-                return np.array(image)
+                raw = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(
+                    screenshot.height,
+                    screenshot.width,
+                    4,
+                )
+                if time.perf_counter() > self._dxcam_recovery_status_until:
+                    with self._stats_lock:
+                        self._capture_status = "OK"
+                return raw[:, :, 2::-1].copy()
             except Exception:
                 pass
         
@@ -978,6 +1058,16 @@ class OptimizedScreenSync:
 
         normalized_motion = min(1.0, motion_score / max(self.config.motion_threshold * 4.0, 0.02))
         return self.config.prediction_weight * max(0.0, 1.0 - normalized_motion)
+
+    def _send_delta_threshold(self, motion_score: float) -> int:
+        """Raise send threshold during static scenes and lower it during motion."""
+
+        base = max(1, int(self.config.min_color_delta))
+        if not self.config.adaptive_fps:
+            return base
+        motion_factor = min(1.0, motion_score / max(self.config.motion_threshold * 4.0, 0.02))
+        static_extra = int((1.0 - motion_factor) * 14)
+        return max(base, base + static_extra)
     
     def _sync_loop(self) -> None:
         """Main sync loop with all optimizations."""
@@ -1007,6 +1097,7 @@ class OptimizedScreenSync:
                 with self._stats_lock:
                     self._last_target_colors = dict(target_colors)
                 changed_colors: dict[str, tuple[int, int, int]] = {}
+                send_threshold = self._send_delta_threshold(motion_score)
                 
                 for key, target in target_colors.items():
                     with self._stats_lock:
@@ -1040,7 +1131,7 @@ class OptimizedScreenSync:
                     # Check if change is significant
                     with self._stats_lock:
                         last_sent = self._last_sent_colors.get(key)
-                    if last_sent is None or color_distance(smoothed, last_sent) >= self.config.min_color_delta:
+                    if last_sent is None or color_distance(smoothed, last_sent) >= send_threshold:
                         with self._stats_lock:
                             self._last_sent_colors[key] = smoothed
                         changed_colors[key] = smoothed
@@ -1106,6 +1197,7 @@ class OptimizedScreenSync:
                 "running": self._running,
                 "mode": self._effective_mode,
                 "capture_method": self._capture_method,
+                "capture_status": self._capture_status,
                 "current_fps": self._current_fps,
                 "average_frame_time_ms": avg_frame_time_ms,
                 "motion_score": self._motion_score,

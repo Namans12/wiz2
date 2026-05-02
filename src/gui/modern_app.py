@@ -660,8 +660,10 @@ class WizLightModernGUI(AnimationMixin):
             average_colors(tuple(current_colors.values())) if current_colors else None
         )
 
+        status = snapshot.get("capture_status") or "OK"
+        status_part = f" | {status}" if status != "OK" else ""
         self.screen_sync_debug_runtime.set(
-            f"Runtime: {snapshot['capture_method'].upper()} | {snapshot['mode']}"
+            f"Runtime: {snapshot['capture_method'].upper()} | {snapshot['mode']}{status_part}"
         )
         self.screen_sync_debug_target.set(f"Target: {self._format_debug_color(target)}")
         self.screen_sync_debug_output.set(f"Output: {self._format_debug_color(output)}")
@@ -851,6 +853,7 @@ class WizLightModernGUI(AnimationMixin):
         )
         self._screen_sync_fast_sender = FastBulbSenderPool(
             max_send_hz=min(28, max(12, settings.max_fps)),
+            prewarm_ips=ips,
         )
 
         def on_color_change(colors_by_target):
