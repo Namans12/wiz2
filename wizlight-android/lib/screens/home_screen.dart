@@ -159,9 +159,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     setState(() {
       _syncRunning = started;
-      _status = started
-          ? 'Screen sync running'
-          : 'Could not start screen sync.';
+      _status =
+          started ? 'Screen sync running' : 'Could not start screen sync.';
     });
   }
 
@@ -173,7 +172,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('WizLight Tablet Sync'),
+        title: const Text('WizLight Sync'),
         actions: <Widget>[
           IconButton(
             onPressed: _discover,
@@ -195,6 +194,8 @@ class _HomeScreenState extends State<HomeScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: <Widget>[
+          _buildSyncHero(),
+          const SizedBox(height: 16),
           ..._bulbs.map(_buildBulbTile),
           if (_bulbs.isEmpty)
             const ListTile(
@@ -206,17 +207,93 @@ class _HomeScreenState extends State<HomeScreen> {
           _buildSyncControls(),
           const SizedBox(height: 16),
           _buildRuntimeCard(),
-          if (_status != null) ...<Widget>[
-            const SizedBox(height: 12),
-            Text(_status!, style: Theme.of(context).textTheme.bodyMedium),
-          ],
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _toggleSync,
-        icon: Icon(_syncRunning ? Icons.stop : Icons.play_arrow),
-        label: Text(_syncRunning ? 'Stop Sync' : 'Start Sync'),
+    );
+  }
+
+  Widget _buildSyncHero() {
+    final stats = _runtimeStats;
+    final color = stats?.primaryOutputColor;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Icon(
+                  _syncRunning ? Icons.sync : Icons.sync_disabled,
+                  color: _syncRunning ? Colors.green : null,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        _syncRunning
+                            ? 'Screen sync running'
+                            : 'Screen sync idle',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      Text(
+                        _status ?? '${_bulbs.length} bulb(s) configured',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                if (color != null)
+                  Container(
+                    width: 44,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Theme.of(context).dividerColor),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                _buildStatChip('FPS', '${stats?.currentFps ?? '-'}'),
+                _buildStatChip(
+                  'Send',
+                  '${stats?.sendRateHz.toStringAsFixed(1) ?? '-'} Hz',
+                ),
+                _buildStatChip(
+                  'Motion',
+                  stats?.motionScore.toStringAsFixed(3) ?? '-',
+                ),
+                _buildStatChip('Mode', stats?.mode ?? _settings.mode),
+              ],
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _toggleSync,
+                icon: Icon(_syncRunning ? Icons.stop : Icons.play_arrow),
+                label: Text(
+                    _syncRunning ? 'Stop Screen Sync' : 'Start Screen Sync'),
+              ),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildStatChip(String label, String value) {
+    return Chip(
+      label: Text('$label: $value'),
+      visualDensity: VisualDensity.compact,
     );
   }
 

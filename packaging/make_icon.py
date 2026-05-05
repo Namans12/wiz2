@@ -8,7 +8,9 @@ from PIL import Image, ImageDraw, ImageFilter
 
 
 ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "assets" / "wizlight_icon.png"
 OUT = ROOT / "assets" / "wizlight.ico"
+ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 
 
 def make_icon(size: int) -> Image.Image:
@@ -56,8 +58,13 @@ def make_icon(size: int) -> Image.Image:
 
 def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    images = [make_icon(size) for size in (16, 24, 32, 48, 64, 128, 256)]
-    images[-1].save(OUT, sizes=[(image.width, image.height) for image in images])
+    if SOURCE.exists():
+        Image.open(SOURCE).convert("RGBA").save(OUT, format="ICO", sizes=ICO_SIZES)
+        print(f"Wrote {OUT} from {SOURCE}")
+        return
+
+    images = [make_icon(size) for size, _ in ICO_SIZES]
+    images[-1].save(OUT, sizes=ICO_SIZES)
     print(f"Wrote {OUT}")
 
 
