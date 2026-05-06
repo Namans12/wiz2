@@ -388,6 +388,21 @@ class WizLightModernGUI(AnimationMixin):
         self.use_gpu_var = ctk.BooleanVar(value=self.config.screen_sync.use_gpu)
         self.adaptive_fps_var = ctk.BooleanVar(value=self.config.screen_sync.adaptive_fps)
         self.predictive_smoothing_var = ctk.BooleanVar(value=self.config.screen_sync.predictive_smoothing)
+        self.color_source_labels = {
+            "Standard / sRGB": "srgb",
+            "Display P3 OLED": "display-p3",
+            "Rec.2020 HDR": "rec2020",
+        }
+        self.color_source_value = ctk.StringVar(
+            value=next(
+                (
+                    label
+                    for label, key in self.color_source_labels.items()
+                    if key == self.config.screen_sync.source_color_space
+                ),
+                "Standard / sRGB",
+            )
+        )
 
         self.fps_label, self.fps_slider = self._slider_control(
             settings,
@@ -427,6 +442,17 @@ class WizLightModernGUI(AnimationMixin):
             min(60, self.min_brightness_value.get()),
             60,
         )
+
+        ctk.CTkLabel(settings, text="Color Source", anchor="w").pack(
+            fill="x", padx=14, pady=(2, 4)
+        )
+        self.color_source_menu = ctk.CTkOptionMenu(
+            settings,
+            values=list(self.color_source_labels.keys()),
+            variable=self.color_source_value,
+            command=self._queue_screen_sync_settings_save,
+        )
+        self.color_source_menu.pack(fill="x", padx=14, pady=(0, 10))
 
         flags = ctk.CTkFrame(settings, fg_color=self._surface_color(settings))
         flags.pack(fill="x", padx=14, pady=(0, 10))
@@ -676,6 +702,10 @@ class WizLightModernGUI(AnimationMixin):
         settings.min_brightness = int(self.min_brightness_value.get())
         settings.ignore_letterbox = True
         settings.color_algorithm = "auto"
+        settings.source_color_space = self.color_source_labels.get(
+            self.color_source_value.get(),
+            "srgb",
+        )
         settings.use_gpu = bool(self.use_gpu_var.get())
         settings.adaptive_fps = True
         settings.predictive_smoothing = True
@@ -1100,7 +1130,10 @@ class WizLightModernGUI(AnimationMixin):
         settings = self.config.screen_sync
         try:
             self._async_runner.run(
-                self.controller.prepare_screen_sync_mappers(ips),
+                self.controller.prepare_screen_sync_mappers(
+                    ips,
+                    source_color_space=settings.source_color_space,
+                ),
                 timeout=8.0,
             )
         except Exception:

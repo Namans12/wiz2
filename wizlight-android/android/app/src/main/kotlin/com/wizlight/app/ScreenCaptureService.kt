@@ -61,6 +61,8 @@ class ScreenCaptureService : Service() {
         const val EXTRA_ADAPTIVE_FPS = "adaptiveFps"
         const val EXTRA_PREDICTIVE_SMOOTHING = "predictiveSmoothing"
         const val EXTRA_IGNORE_LETTERBOX = "ignoreLetterbox"
+        const val EXTRA_SOURCE_COLOR_SPACE = "sourceColorSpace"
+        const val EXTRA_HDR_TONE_MAPPING = "hdrToneMapping"
 
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "wizlight_capture"
@@ -146,6 +148,8 @@ class ScreenCaptureService : Service() {
     private var edgeWeight = 1.5
     private var predictiveSmoothing = true
     private var predictionWeight = 0.3
+    private var sourceColorSpace = "srgb"
+    private var hdrToneMapping = false
 
     private var isRunning = false
     private var previousMotionSample: FloatArray? = null
@@ -176,6 +180,16 @@ class ScreenCaptureService : Service() {
         doubleArrayOf(cos(0.0), sin(0.0)),
         doubleArrayOf(cos((2.0 * PI) / 3.0), sin((2.0 * PI) / 3.0)),
         doubleArrayOf(cos((4.0 * PI) / 3.0), sin((4.0 * PI) / 3.0)),
+    )
+    private val DISPLAY_P3_TO_SRGB = arrayOf(
+        doubleArrayOf(1.2249401, -0.2249404, 0.0),
+        doubleArrayOf(-0.0420569, 1.0420571, 0.0),
+        doubleArrayOf(-0.0196376, -0.0786361, 1.0982735),
+    )
+    private val REC2020_TO_SRGB = arrayOf(
+        doubleArrayOf(1.6602270, -0.5875478, -0.0728387),
+        doubleArrayOf(-0.1245535, 1.1329261, -0.0083495),
+        doubleArrayOf(-0.0181551, -0.1006030, 1.1189980),
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -239,6 +253,8 @@ class ScreenCaptureService : Service() {
                 adaptiveFps = intent.getBooleanExtra(EXTRA_ADAPTIVE_FPS, true)
                 predictiveSmoothing = intent.getBooleanExtra(EXTRA_PREDICTIVE_SMOOTHING, true)
                 ignoreLetterbox = intent.getBooleanExtra(EXTRA_IGNORE_LETTERBOX, true)
+                sourceColorSpace = normalizeColorSpace(intent.getStringExtra(EXTRA_SOURCE_COLOR_SPACE))
+                hdrToneMapping = intent.getBooleanExtra(EXTRA_HDR_TONE_MAPPING, false)
                 effectiveMode = resolveEffectiveMode(requestedMode, bulbTargets)
                 startCapture()
             }
@@ -536,7 +552,7 @@ class ScreenCaptureService : Service() {
             } else {
                 extractColor(sampled)
             }
-            val enhanced = enhanceColor(extracted)
+            val enhanced = enhanceColor(mapSourceColorToSrgb(extracted))
             val held = applyCinematicPaletteHold(enhanced, previousSingleColor, motionScore)
             previousSingleColor = held
             mapOf("all" to held)
@@ -546,7 +562,7 @@ class ScreenCaptureService : Service() {
             for (region in bulbTargets.map { it.region }.toSet()) {
                 val regionFrame = cropRelativeRegion(source, region)
                 val sampled = sampleFrame(regionFrame, sampleSize)
-                val color = enhanceColor(extractColor(sampled))
+                val color = enhanceColor(mapSourceColorToSrgb(extractColor(sampled)))
                 targets[region] = color
             }
             targets
@@ -557,6 +573,14 @@ class ScreenCaptureService : Service() {
         return when (raw?.lowercase()) {
             "auto", "weighted", "kmeans", "histogram" -> raw.lowercase()
             else -> "auto"
+        }
+    }
+
+    private fun normalizeColorSpace(raw: String?): String {
+        return when (raw?.lowercase()?.replace("_", "-")) {
+            "p3", "display-p3" -> "display-p3"
+            "bt2020", "bt.2020", "rec-2020", "rec2020" -> "rec2020"
+            else -> "srgb"
         }
     }
 
@@ -972,6 +996,66 @@ class ScreenCaptureService : Service() {
         )
     }
 
+    private fun mapSourceColorToSrgb(color: RgbColor): RgbColor {
+        if (sourceColorSpace == "srgb" && !hdrToneMapping) {
+            return color
+        }
+
+        val linear = doubleArrayOf(
+            srgbDecode(color.r / 255.0),
+            srgbDecode(color.g / 255.0),
+            srgbDecode(color.b / 255.0),
+        )
+        val converted = when (sourceColorSpace) {
+            "display-p3" -> multiplyColorMatrix(DISPLAY_P3_TO_SRGB, linear)
+            "rec2020" -> multiplyColorMatrix(REC2020_TO_SRGB, linear)
+            else -> linear
+        }
+        val compressed = compressToSrgb(converted)
+        val mapped = if (hdrToneMapping) acesToneMap(compressed) else compressed
+        return RgbColor(
+            (srgbEncode(mapped[0]) * 255.0).roundToInt().coerceIn(0, 255),
+            (srgbEncode(mapped[1]) * 255.0).roundToInt().coerceIn(0, 255),
+            (srgbEncode(mapped[2]) * 255.0).roundToInt().coerceIn(0, 255),
+        )
+    }
+
+    private fun multiplyColorMatrix(matrix: Array<DoubleArray>, color: DoubleArray): DoubleArray {
+        return doubleArrayOf(
+            matrix[0][0] * color[0] + matrix[0][1] * color[1] + matrix[0][2] * color[2],
+            matrix[1][0] * color[0] + matrix[1][1] * color[1] + matrix[1][2] * color[2],
+            matrix[2][0] * color[0] + matrix[2][1] * color[1] + matrix[2][2] * color[2],
+        )
+    }
+
+    private fun compressToSrgb(color: DoubleArray): DoubleArray {
+        return DoubleArray(3) { index ->
+            val value = max(0.0, color[index])
+            if (value <= 0.82) {
+                value
+            } else {
+                0.82 + 0.18 * (1.0 - kotlin.math.exp(-((value - 0.82) / 0.18) * 2.5))
+            }.coerceIn(0.0, 1.0)
+        }
+    }
+
+    private fun acesToneMap(color: DoubleArray): DoubleArray {
+        return DoubleArray(3) { index ->
+            val x = max(0.0, color[index]) * 4.5
+            ((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)).coerceIn(0.0, 1.0)
+        }
+    }
+
+    private fun srgbDecode(value: Double): Double {
+        val v = value.coerceIn(0.0, 1.0)
+        return if (v <= 0.04045) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4)
+    }
+
+    private fun srgbEncode(value: Double): Double {
+        val v = value.coerceIn(0.0, 1.0)
+        return if (v <= 0.0031308) v * 12.92 else 1.055 * Math.pow(v, 1.0 / 2.4) - 0.055
+    }
+
     private fun enhanceColor(color: RgbColor): RgbColor {
         lastEffectiveColorBoost = colorBoost
         val mean = (color.r + color.g + color.b) / 3.0
@@ -1249,6 +1333,8 @@ class ScreenCaptureService : Service() {
             "deltaThreshold" to lastDeltaThreshold,
             "captureBackend" to "mediaprojection",
             "colorAlgorithm" to colorAlgorithm,
+            "sourceColorSpace" to sourceColorSpace,
+            "hdrToneMapping" to hdrToneMapping,
             "predictiveSmoothing" to predictiveSmoothing,
             "updatesSent" to updatesSent,
             "targetColors" to lastTargetColors.mapValues { listOf(it.value.r, it.value.g, it.value.b) },

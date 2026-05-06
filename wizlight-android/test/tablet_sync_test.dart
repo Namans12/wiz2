@@ -57,6 +57,8 @@ void main() {
       'minBrightness': 20,
       'deltaThreshold': 6,
       'captureBackend': 'mediaprojection',
+      'sourceColorSpace': 'display-p3',
+      'hdrToneMapping': true,
       'updatesSent': 9,
     });
 
@@ -67,5 +69,19 @@ void main() {
     expect(stats.minBrightness, 20);
     expect(stats.deltaThreshold, 6);
     expect(stats.captureBackend, 'mediaprojection');
+    expect(stats.sourceColorSpace, 'display-p3');
+    expect(stats.hdrToneMapping, isTrue);
+  });
+
+  test('SyncSettings passes wide gamut settings to native capture', () {
+    const settings = SyncSettings(
+      sourceColorSpace: 'display-p3',
+      hdrToneMapping: true,
+    );
+
+    final args = settings.toMethodArgs(const <WizBulb>[]);
+
+    expect(args['sourceColorSpace'], 'display-p3');
+    expect(args['hdrToneMapping'], isTrue);
   });
 }

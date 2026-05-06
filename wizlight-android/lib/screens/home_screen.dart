@@ -302,6 +302,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   stats?.motionScore.toStringAsFixed(3) ?? '-',
                 ),
                 _buildStatChip('Mode', stats?.mode ?? _settings.mode),
+                _buildStatChip(
+                  'Color',
+                  stats?.sourceColorSpace ?? _settings.sourceColorSpace,
+                ),
               ],
             ),
             const SizedBox(height: 14),
@@ -386,6 +390,13 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             ListTile(
+              leading: Icon(Icons.color_lens_outlined),
+              title: Text('Color Source'),
+              subtitle: Text(
+                'Use sRGB for normal apps, Display P3 for OLED wide-gamut content, and Rec.2020 HDR for HDR tests.',
+              ),
+            ),
+            ListTile(
               leading: Icon(Icons.crop_16_9),
               title: Text('Ignore letterbox bars'),
               subtitle: Text(
@@ -416,6 +427,30 @@ class _HomeScreenState extends State<HomeScreen> {
               onSelectionChanged: (selection) {
                 _saveSettings(_settings.copyWith(mode: selection.first));
               },
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _settings.sourceColorSpace,
+              decoration: const InputDecoration(labelText: 'Color Source'),
+              items: const <DropdownMenuItem<String>>[
+                DropdownMenuItem(value: 'srgb', child: Text('Standard / sRGB')),
+                DropdownMenuItem(
+                  value: 'display-p3',
+                  child: Text('Display P3 OLED'),
+                ),
+                DropdownMenuItem(value: 'rec2020', child: Text('Rec.2020 HDR')),
+              ],
+              onChanged: (value) {
+                if (value != null) {
+                  _saveSettings(_settings.copyWith(sourceColorSpace: value));
+                }
+              },
+            ),
+            SwitchListTile(
+              value: _settings.hdrToneMapping,
+              onChanged: (value) =>
+                  _saveSettings(_settings.copyWith(hdrToneMapping: value)),
+              title: const Text('HDR tone mapping'),
             ),
             _buildSlider(
               label: 'Max FPS',
@@ -512,6 +547,10 @@ class _HomeScreenState extends State<HomeScreen> {
             Text('Delta: ${stats?.deltaThreshold ?? '-'}'),
             Text('Capture: ${stats?.captureBackend ?? '-'}'),
             Text('Extractor: ${stats?.colorAlgorithm ?? '-'}'),
+            Text(
+                'Color source: ${stats?.sourceColorSpace ?? _settings.sourceColorSpace}'),
+            Text(
+                'HDR tone map: ${stats?.hdrToneMapping ?? _settings.hdrToneMapping}'),
             Text('Updates: ${stats?.updatesSent ?? 0}'),
             if (color != null) ...<Widget>[
               const SizedBox(height: 12),

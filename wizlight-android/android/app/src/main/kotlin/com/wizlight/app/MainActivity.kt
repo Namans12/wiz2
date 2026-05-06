@@ -37,6 +37,8 @@ class MainActivity : FlutterActivity() {
                     adaptiveFps = call.argument<Boolean>("adaptiveFps") ?: true,
                     predictiveSmoothing = call.argument<Boolean>("predictiveSmoothing") ?: true,
                     ignoreLetterbox = call.argument<Boolean>("ignoreLetterbox") ?: true,
+                    sourceColorSpace = call.argument<String>("sourceColorSpace") ?: "srgb",
+                    hdrToneMapping = call.argument<Boolean>("hdrToneMapping") ?: false,
                     result = result,
                 )
 
@@ -71,6 +73,8 @@ class MainActivity : FlutterActivity() {
         adaptiveFps: Boolean,
         predictiveSmoothing: Boolean,
         ignoreLetterbox: Boolean,
+        sourceColorSpace: String,
+        hdrToneMapping: Boolean,
         result: MethodChannel.Result,
     ) {
         if (ScreenCaptureService.hasProjectionPermission().not()) {
@@ -94,6 +98,8 @@ class MainActivity : FlutterActivity() {
             putExtra(ScreenCaptureService.EXTRA_ADAPTIVE_FPS, adaptiveFps)
             putExtra(ScreenCaptureService.EXTRA_PREDICTIVE_SMOOTHING, predictiveSmoothing)
             putExtra(ScreenCaptureService.EXTRA_IGNORE_LETTERBOX, ignoreLetterbox)
+            putExtra(ScreenCaptureService.EXTRA_SOURCE_COLOR_SPACE, sourceColorSpace)
+            putExtra(ScreenCaptureService.EXTRA_HDR_TONE_MAPPING, hdrToneMapping)
         }
 
         ScreenCaptureService.setMethodChannel(methodChannel)

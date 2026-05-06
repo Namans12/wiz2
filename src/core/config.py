@@ -30,6 +30,7 @@ class BulbConfig:
 
 
 COLOR_ALGORITHMS = ("auto", "weighted", "kmeans", "histogram")
+COLOR_SOURCE_SPACES = ("srgb", "display-p3", "rec2020")
 
 
 @dataclass
@@ -56,6 +57,8 @@ class ScreenSyncConfig:
     max_fps: int = 24
     color_algorithm: str = "auto"
     predictive_smoothing: bool = True
+    source_color_space: str = "srgb"
+    hdr_tone_mapping: bool = False
 
     def __post_init__(self) -> None:
         self.mode = self.mode if self.mode in SCREEN_SYNC_MODES else "single"
@@ -79,6 +82,18 @@ class ScreenSyncConfig:
         self.use_gpu = bool(self.use_gpu)
         self.adaptive_fps = bool(self.adaptive_fps)
         self.predictive_smoothing = bool(self.predictive_smoothing)
+        normalized_space = str(self.source_color_space).lower().replace("_", "-")
+        aliases = {
+            "p3": "display-p3",
+            "display_p3": "display-p3",
+            "bt2020": "rec2020",
+            "bt.2020": "rec2020",
+            "rec-2020": "rec2020",
+        }
+        self.source_color_space = aliases.get(normalized_space, normalized_space)
+        if self.source_color_space not in COLOR_SOURCE_SPACES:
+            self.source_color_space = "srgb"
+        self.hdr_tone_mapping = bool(self.hdr_tone_mapping)
 
 
 @dataclass

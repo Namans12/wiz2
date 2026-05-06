@@ -78,6 +78,7 @@ class BulbController:
         self._tone_store = ToneCalibrationStore()
         self._calibration_tables: dict[str, BulbCalibrationTable] = {}
         self._tone_tables: dict[str, BulbCalibrationTable] = {}
+        self._screen_sync_source_color_space = "srgb"
     
     async def discover(self, broadcast_space: str = "192.168.1.255") -> list[dict]:
         """
@@ -156,6 +157,7 @@ class BulbController:
             render_factor=tuple(int(value) for value in model_result.get("renderFactor", ())),
             fade_in_ms=int(user_result.get("fadeIn", 0)),
             fade_out_ms=int(user_result.get("fadeOut", 0)),
+            source_color_space=self._screen_sync_source_color_space,
         )
         calibration = self._load_calibration(profile.mac, ip)
         tone_lut = self._load_tone_lut(profile.mac, ip)
@@ -169,6 +171,7 @@ class BulbController:
                 render_factor=profile.render_factor,
                 fade_in_ms=profile.fade_in_ms,
                 fade_out_ms=profile.fade_out_ms,
+                source_color_space=profile.source_color_space,
             )
         self._color_profiles[ip] = profile
         self._gamut_mappers[ip] = BulbGamutMapper(
@@ -271,13 +274,34 @@ class BulbController:
         self.invalidate_screen_sync_mapping(ips)
         return await self.resolve_screen_sync_targets(ips)
 
-    async def prepare_screen_sync_mappers(self, ips: list[str]) -> None:
+    async def prepare_screen_sync_mappers(
+        self,
+        ips: list[str],
+        source_color_space: str = "srgb",
+    ) -> None:
         """Preload per-bulb screen-sync mappers for synchronous real-time sends."""
+
+        normalized_space = self._normalize_source_color_space(source_color_space)
+        if normalized_space != self._screen_sync_source_color_space:
+            self._screen_sync_source_color_space = normalized_space
+            self.invalidate_screen_sync_mapping(ips)
 
         await asyncio.gather(
             *(self.get_color_profile(ip) for ip in ips),
             return_exceptions=True,
         )
+
+    def _normalize_source_color_space(self, source_color_space: str) -> str:
+        normalized = str(source_color_space).lower().replace("_", "-")
+        aliases = {
+            "p3": "display-p3",
+            "display_p3": "display-p3",
+            "bt2020": "rec2020",
+            "bt.2020": "rec2020",
+            "rec-2020": "rec2020",
+        }
+        normalized = aliases.get(normalized, normalized)
+        return normalized if normalized in {"srgb", "display-p3", "dci-p3", "rec2020", "scrgb"} else "srgb"
 
     def map_screen_sync_payload_cached(
         self,
@@ -332,6 +356,8 @@ class BulbController:
 
         flags = [self.get_screen_sync_mapping_flags(ip) for ip in ips]
         parts: list[str] = []
+        if self._screen_sync_source_color_space != "srgb":
+            parts.append(self._screen_sync_source_color_space)
         if any(bool(flag["camera_calibration"]) for flag in flags):
             parts.append("camera calibration")
         if any(bool(flag["tone_lut"]) for flag in flags):

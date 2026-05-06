@@ -17,6 +17,8 @@ class SyncSettings {
     this.adaptiveFps = true,
     this.predictiveSmoothing = true,
     this.ignoreLetterbox = true,
+    this.sourceColorSpace = 'srgb',
+    this.hdrToneMapping = false,
   });
 
   final String mode;
@@ -32,6 +34,8 @@ class SyncSettings {
   final bool adaptiveFps;
   final bool predictiveSmoothing;
   final bool ignoreLetterbox;
+  final String sourceColorSpace;
+  final bool hdrToneMapping;
 
   SyncSettings copyWith({
     String? mode,
@@ -47,6 +51,8 @@ class SyncSettings {
     bool? adaptiveFps,
     bool? predictiveSmoothing,
     bool? ignoreLetterbox,
+    String? sourceColorSpace,
+    bool? hdrToneMapping,
   }) {
     return SyncSettings(
       mode: mode ?? this.mode,
@@ -62,6 +68,8 @@ class SyncSettings {
       adaptiveFps: adaptiveFps ?? this.adaptiveFps,
       predictiveSmoothing: predictiveSmoothing ?? this.predictiveSmoothing,
       ignoreLetterbox: ignoreLetterbox ?? this.ignoreLetterbox,
+      sourceColorSpace: sourceColorSpace ?? this.sourceColorSpace,
+      hdrToneMapping: hdrToneMapping ?? this.hdrToneMapping,
     );
   }
 
@@ -81,6 +89,8 @@ class SyncSettings {
       'adaptiveFps': adaptiveFps,
       'predictiveSmoothing': predictiveSmoothing,
       'ignoreLetterbox': ignoreLetterbox,
+      'sourceColorSpace': sourceColorSpace,
+      'hdrToneMapping': hdrToneMapping,
     };
   }
 
@@ -99,6 +109,8 @@ class SyncSettings {
       'adaptiveFps': adaptiveFps,
       'predictiveSmoothing': predictiveSmoothing,
       'ignoreLetterbox': ignoreLetterbox,
+      'sourceColorSpace': sourceColorSpace,
+      'hdrToneMapping': hdrToneMapping,
     };
   }
 
@@ -117,7 +129,25 @@ class SyncSettings {
       adaptiveFps: json['adaptiveFps'] as bool? ?? true,
       predictiveSmoothing: json['predictiveSmoothing'] as bool? ?? true,
       ignoreLetterbox: json['ignoreLetterbox'] as bool? ?? true,
+      sourceColorSpace: _normalizeSourceColorSpace(
+        json['sourceColorSpace'] as String? ?? 'srgb',
+      ),
+      hdrToneMapping: json['hdrToneMapping'] as bool? ?? false,
     );
+  }
+
+  static String _normalizeSourceColorSpace(String value) {
+    final normalized = value.toLowerCase().replaceAll('_', '-');
+    if (normalized == 'p3' || normalized == 'display-p3') {
+      return 'display-p3';
+    }
+    if (normalized == 'bt2020' ||
+        normalized == 'bt.2020' ||
+        normalized == 'rec-2020' ||
+        normalized == 'rec2020') {
+      return 'rec2020';
+    }
+    return 'srgb';
   }
 }
 
@@ -136,6 +166,8 @@ class SyncRuntimeStats {
     this.deltaThreshold = 0,
     this.captureBackend = 'unknown',
     this.colorAlgorithm = 'auto',
+    this.sourceColorSpace = 'srgb',
+    this.hdrToneMapping = false,
     this.predictiveSmoothing = true,
     this.targetColors = const <String, Color>{},
     this.outputColors = const <String, Color>{},
@@ -155,6 +187,8 @@ class SyncRuntimeStats {
   final String captureBackend;
   final int updatesSent;
   final String colorAlgorithm;
+  final String sourceColorSpace;
+  final bool hdrToneMapping;
   final bool predictiveSmoothing;
   final Map<String, Color> targetColors;
   final Map<String, Color> outputColors;
@@ -190,6 +224,8 @@ class SyncRuntimeStats {
       'deltaThreshold': deltaThreshold,
       'captureBackend': captureBackend,
       'colorAlgorithm': colorAlgorithm,
+      'sourceColorSpace': sourceColorSpace,
+      'hdrToneMapping': hdrToneMapping,
       'predictiveSmoothing': predictiveSmoothing,
       'updatesSent': updatesSent,
       'targetColors': _encodeColorMap(targetColors),
@@ -216,6 +252,8 @@ class SyncRuntimeStats {
       captureBackend: map['captureBackend'] as String? ?? 'unknown',
       updatesSent: (map['updatesSent'] as num?)?.toInt() ?? 0,
       colorAlgorithm: map['colorAlgorithm'] as String? ?? 'auto',
+      sourceColorSpace: map['sourceColorSpace'] as String? ?? 'srgb',
+      hdrToneMapping: map['hdrToneMapping'] as bool? ?? false,
       predictiveSmoothing: map['predictiveSmoothing'] as bool? ?? true,
       targetColors: _decodeColorMap(map['targetColors']),
       outputColors: _decodeColorMap(map['outputColors']),
