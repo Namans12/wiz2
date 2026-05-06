@@ -639,6 +639,8 @@ def test_optimized_screen_sync_debug_snapshot_reports_runtime_stats():
         sync._motion_score = 0.02
         sync._smoothing_factor = 0.18
         sync._prediction_strength = 0.11
+        sync._effective_color_boost = 1.12
+        sync._send_delta_threshold_value = 6
         sync._current_colors = {"all": (10, 20, 30)}
         sync._last_target_colors = {"all": (12, 22, 32)}
         sync._send_intervals.extend([0.05, 0.1])
@@ -649,10 +651,21 @@ def test_optimized_screen_sync_debug_snapshot_reports_runtime_stats():
 
     assert snapshot["capture_method"] == "dxcam"
     assert snapshot["capture_status"] == "Ready"
+    assert snapshot["requestedFps"] == sync.config.max_fps
     assert snapshot["current_fps"] == 22
+    assert snapshot["currentFps"] == 22
+    assert snapshot["frameTimeMs"] == snapshot["average_frame_time_ms"]
+    assert snapshot["smoothingFactor"] == 0.18
+    assert snapshot["effectiveColorBoost"] == 1.12
+    assert snapshot["minBrightness"] == sync.config.min_brightness
+    assert snapshot["deltaThreshold"] == 6
+    assert snapshot["captureBackend"] == "dxcam"
     assert snapshot["target_colors"]["all"] == (12, 22, 32)
+    assert snapshot["targetColors"]["all"] == (12, 22, 32)
     assert snapshot["current_colors"]["all"] == (10, 20, 30)
+    assert snapshot["outputColors"]["all"] == (10, 20, 30)
     assert snapshot["send_interval_ms"] == pytest.approx(75.0)
     assert round(snapshot["send_rate_hz"], 3) == round(1 / 0.075, 3)
+    assert round(snapshot["sendRateHz"], 3) == round(1 / 0.075, 3)
     assert snapshot["updates_sent"] == 4
     assert snapshot["frames_processed"] == 8

@@ -24,10 +24,12 @@ void main() {
   test('SyncRuntimeStats primary color averages per-bulb output', () {
     const runtime = SyncRuntimeStats(
       mode: 'zones',
+      requestedFps: 24,
       currentFps: 24,
+      frameTimeMs: 8.5,
       sendRateHz: 12.0,
       motionScore: 0.02,
-      smoothing: 0.2,
+      smoothingFactor: 0.2,
       updatesSent: 3,
       outputColors: <String, Color>{
         '192.168.1.4': Color.fromARGB(255, 200, 100, 0),
@@ -40,5 +42,30 @@ void main() {
     expect((average.r * 255.0).round(), 100);
     expect((average.g * 255.0).round(), 100);
     expect((average.b * 255.0).round(), 100);
+  });
+
+  test('SyncRuntimeStats decodes production diagnostics fields', () {
+    final stats = SyncRuntimeStats.fromMap(<String, Object?>{
+      'mode': 'single',
+      'requestedFps': 28,
+      'currentFps': 22,
+      'frameTimeMs': 6.25,
+      'sendRateHz': 18.0,
+      'motionScore': 0.04,
+      'smoothingFactor': 0.16,
+      'effectiveColorBoost': 1.12,
+      'minBrightness': 20,
+      'deltaThreshold': 6,
+      'captureBackend': 'mediaprojection',
+      'updatesSent': 9,
+    });
+
+    expect(stats.requestedFps, 28);
+    expect(stats.frameTimeMs, 6.25);
+    expect(stats.smoothingFactor, 0.16);
+    expect(stats.effectiveColorBoost, 1.12);
+    expect(stats.minBrightness, 20);
+    expect(stats.deltaThreshold, 6);
+    expect(stats.captureBackend, 'mediaprojection');
   });
 }

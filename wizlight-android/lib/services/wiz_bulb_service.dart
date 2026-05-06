@@ -31,9 +31,8 @@ class WizBulbService {
         }
         final result = message['result'];
         final mac = result is Map ? result['mac'] as String? : null;
-        final moduleName = result is Map
-            ? result['moduleName'] as String?
-            : null;
+        final moduleName =
+            result is Map ? result['moduleName'] as String? : null;
         final ip = packet.address.address;
         bulbs[ip] = WizBulb(
           ip: ip,

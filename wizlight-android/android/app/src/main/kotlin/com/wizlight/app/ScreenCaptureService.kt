@@ -154,9 +154,12 @@ class ScreenCaptureService : Service() {
     private var lastError: String? = null
     private var lastStatusUpdateAt = 0L
     private var lastSendAt: Long? = null
+    private var lastEffectiveColorBoost = 1.18
+    private var lastDeltaThreshold = 8
     private var cachedContentBounds: Rect? = null
     private var cachedContentBoundsAtFrame = -1
     private val sendIntervalsMs = ArrayDeque<Long>()
+    private val frameTimesMs = ArrayDeque<Long>()
     private var updatesSent = 0
     private var framesProcessed = 0
     private val currentOutputColors = mutableMapOf<String, RgbColor>()
@@ -193,6 +196,10 @@ class ScreenCaptureService : Service() {
             val startedAt = SystemClock.elapsedRealtime()
             captureFrame()
             val elapsed = SystemClock.elapsedRealtime() - startedAt
+            frameTimesMs.addLast(elapsed)
+            while (frameTimesMs.size > 30) {
+                frameTimesMs.removeFirst()
+            }
             val frameDelay = max(5L, (1000L / max(currentFps, 1)) - elapsed)
             captureHandler?.postDelayed(this, frameDelay)
         }
@@ -291,9 +298,12 @@ class ScreenCaptureService : Service() {
         lastError = null
         lastStatusUpdateAt = 0L
         lastSendAt = null
+        lastEffectiveColorBoost = colorBoost
+        lastDeltaThreshold = minColorDelta
         cachedContentBounds = null
         cachedContentBoundsAtFrame = -1
         sendIntervalsMs.clear()
+        frameTimesMs.clear()
         updatesSent = 0
         framesProcessed = 0
         currentOutputColors.clear()
@@ -326,6 +336,7 @@ class ScreenCaptureService : Service() {
 
             val smoothingFactor = targetSmoothing(motionScore)
             val sendThreshold = sendDeltaThreshold(motionScore)
+            lastDeltaThreshold = sendThreshold
             val mappedBulbColors = buildBulbColorMap(targetColors)
             val appliedColors = mutableMapOf<String, RgbColor>()
             var sentAnyUpdate = false
@@ -962,6 +973,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun enhanceColor(color: RgbColor): RgbColor {
+        lastEffectiveColorBoost = colorBoost
         val mean = (color.r + color.g + color.b) / 3.0
         var red = mean + (color.r - mean) * colorBoost
         var green = mean + (color.g - mean) * colorBoost
@@ -1221,13 +1233,21 @@ class ScreenCaptureService : Service() {
 
         val intervalAverage = if (sendIntervalsMs.isEmpty()) 0.0 else sendIntervalsMs.average()
         val sendRateHz = if (intervalAverage > 0.0) 1000.0 / intervalAverage else 0.0
+        val frameTimeMs = if (frameTimesMs.isEmpty()) 0.0 else frameTimesMs.average()
 
         val payload = mapOf(
             "mode" to effectiveMode,
+            "requestedFps" to maxFps,
             "currentFps" to currentFps,
+            "frameTimeMs" to frameTimeMs,
             "sendRateHz" to sendRateHz,
             "motionScore" to lastMotionScore,
             "smoothing" to smoothingFactor,
+            "smoothingFactor" to smoothingFactor,
+            "effectiveColorBoost" to lastEffectiveColorBoost,
+            "minBrightness" to minBrightness,
+            "deltaThreshold" to lastDeltaThreshold,
+            "captureBackend" to "mediaprojection",
             "colorAlgorithm" to colorAlgorithm,
             "predictiveSmoothing" to predictiveSmoothing,
             "updatesSent" to updatesSent,

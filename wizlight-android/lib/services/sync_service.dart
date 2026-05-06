@@ -124,11 +124,17 @@ class SyncSettings {
 class SyncRuntimeStats {
   const SyncRuntimeStats({
     required this.mode,
+    required this.requestedFps,
     required this.currentFps,
+    required this.frameTimeMs,
     required this.sendRateHz,
     required this.motionScore,
-    required this.smoothing,
+    required this.smoothingFactor,
     required this.updatesSent,
+    this.effectiveColorBoost = 1.0,
+    this.minBrightness = 0,
+    this.deltaThreshold = 0,
+    this.captureBackend = 'unknown',
     this.colorAlgorithm = 'auto',
     this.predictiveSmoothing = true,
     this.targetColors = const <String, Color>{},
@@ -137,10 +143,16 @@ class SyncRuntimeStats {
   });
 
   final String mode;
+  final int requestedFps;
   final int currentFps;
+  final double frameTimeMs;
   final double sendRateHz;
   final double motionScore;
-  final double smoothing;
+  final double smoothingFactor;
+  final double effectiveColorBoost;
+  final int minBrightness;
+  final int deltaThreshold;
+  final String captureBackend;
   final int updatesSent;
   final String colorAlgorithm;
   final bool predictiveSmoothing;
@@ -164,13 +176,44 @@ class SyncRuntimeStats {
     return Color.fromARGB(255, red ~/ count, green ~/ count, blue ~/ count);
   }
 
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'mode': mode,
+      'requestedFps': requestedFps,
+      'currentFps': currentFps,
+      'frameTimeMs': frameTimeMs,
+      'sendRateHz': sendRateHz,
+      'motionScore': motionScore,
+      'smoothingFactor': smoothingFactor,
+      'effectiveColorBoost': effectiveColorBoost,
+      'minBrightness': minBrightness,
+      'deltaThreshold': deltaThreshold,
+      'captureBackend': captureBackend,
+      'colorAlgorithm': colorAlgorithm,
+      'predictiveSmoothing': predictiveSmoothing,
+      'updatesSent': updatesSent,
+      'targetColors': _encodeColorMap(targetColors),
+      'outputColors': _encodeColorMap(outputColors),
+      'lastError': lastError,
+    };
+  }
+
   factory SyncRuntimeStats.fromMap(Map<dynamic, dynamic> map) {
     return SyncRuntimeStats(
       mode: map['mode'] as String? ?? 'single',
+      requestedFps: (map['requestedFps'] as num?)?.toInt() ?? 0,
       currentFps: (map['currentFps'] as num?)?.toInt() ?? 0,
+      frameTimeMs: (map['frameTimeMs'] as num?)?.toDouble() ?? 0.0,
       sendRateHz: (map['sendRateHz'] as num?)?.toDouble() ?? 0.0,
       motionScore: (map['motionScore'] as num?)?.toDouble() ?? 0.0,
-      smoothing: (map['smoothing'] as num?)?.toDouble() ?? 0.0,
+      smoothingFactor: (map['smoothingFactor'] as num?)?.toDouble() ??
+          (map['smoothing'] as num?)?.toDouble() ??
+          0.0,
+      effectiveColorBoost:
+          (map['effectiveColorBoost'] as num?)?.toDouble() ?? 1.0,
+      minBrightness: (map['minBrightness'] as num?)?.toInt() ?? 0,
+      deltaThreshold: (map['deltaThreshold'] as num?)?.toInt() ?? 0,
+      captureBackend: map['captureBackend'] as String? ?? 'unknown',
       updatesSent: (map['updatesSent'] as num?)?.toInt() ?? 0,
       colorAlgorithm: map['colorAlgorithm'] as String? ?? 'auto',
       predictiveSmoothing: map['predictiveSmoothing'] as bool? ?? true,
@@ -199,5 +242,18 @@ class SyncRuntimeStats {
         ),
       );
     });
+  }
+
+  static Map<String, List<int>> _encodeColorMap(Map<String, Color> colors) {
+    return colors.map(
+      (key, color) => MapEntry(
+        key,
+        <int>[
+          (color.r * 255.0).round(),
+          (color.g * 255.0).round(),
+          (color.b * 255.0).round(),
+        ],
+      ),
+    );
   }
 }

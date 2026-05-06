@@ -817,6 +817,8 @@ class OptimizedScreenSync:
         self._motion_score = 0.0
         self._smoothing_factor = self.config.smoothing
         self._prediction_strength = 0.0
+        self._effective_color_boost = self.config.color_boost
+        self._send_delta_threshold_value = self.config.min_color_delta
         self._updates_sent = 0
         self._frames_processed = 0
         self._last_error: Optional[str] = None
@@ -860,6 +862,8 @@ class OptimizedScreenSync:
             self._motion_score = 0.0
             self._smoothing_factor = self.config.smoothing
             self._prediction_strength = 0.0
+            self._effective_color_boost = self.config.color_boost
+            self._send_delta_threshold_value = self.config.min_color_delta
             self._updates_sent = 0
             self._frames_processed = 0
             self._last_error = None
@@ -980,16 +984,17 @@ class OptimizedScreenSync:
             )
         return self._extract_color(image)
     
-    def _process_region(self, content: np.ndarray, region: str) -> tuple[str, tuple[int, int, int]]:
+    def _process_region(self, content: np.ndarray, region: str) -> tuple[str, tuple[int, int, int], float]:
         """Process a single region (for parallel execution)."""
         region_image = crop_relative_region(content, region)
         color = self._extract_color(region_image)
+        effective_boost = adaptive_color_boost(color, self.config.color_boost)
         enhanced = enhance_color(
             color,
-            color_boost=adaptive_color_boost(color, self.config.color_boost),
+            color_boost=effective_boost,
             min_brightness=self.config.min_brightness,
         )
-        return region, enhanced
+        return region, enhanced, effective_boost
     
     def _extract_colors(self, image: np.ndarray) -> dict[str, tuple[int, int, int]]:
         """Extract colors from image, using parallel processing if enabled."""
@@ -997,10 +1002,13 @@ class OptimizedScreenSync:
         
         if self._effective_mode == "single":
             color = self._extract_single_color(content)
+            effective_boost = adaptive_color_boost(color, self.config.color_boost)
+            with self._stats_lock:
+                self._effective_color_boost = effective_boost
             return {
                 "all": enhance_color(
                     color,
-                    color_boost=adaptive_color_boost(color, self.config.color_boost),
+                    color_boost=effective_boost,
                     min_brightness=self.config.min_brightness,
                 )
             }
@@ -1014,17 +1022,27 @@ class OptimizedScreenSync:
                 self._executor.submit(self._process_region, content, region)
                 for region in self.config.active_regions
             ]
+            boosts: list[float] = []
             for future in futures:
                 try:
-                    region, color = future.result(timeout=0.1)
+                    region, color, effective_boost = future.result(timeout=0.1)
                     colors[region] = color
+                    boosts.append(effective_boost)
                 except Exception:
                     pass
+            if boosts:
+                with self._stats_lock:
+                    self._effective_color_boost = float(np.mean(boosts))
         else:
             # Sequential processing
+            boosts = []
             for region in self.config.active_regions:
-                _, color = self._process_region(content, region)
+                _, color, effective_boost = self._process_region(content, region)
                 colors[region] = color
+                boosts.append(effective_boost)
+            if boosts:
+                with self._stats_lock:
+                    self._effective_color_boost = float(np.mean(boosts))
         
         return colors
     
@@ -1098,6 +1116,8 @@ class OptimizedScreenSync:
                     self._last_target_colors = dict(target_colors)
                 changed_colors: dict[str, tuple[int, int, int]] = {}
                 send_threshold = self._send_delta_threshold(motion_score)
+                with self._stats_lock:
+                    self._send_delta_threshold_value = send_threshold
                 
                 for key, target in target_colors.items():
                     with self._stats_lock:
@@ -1193,23 +1213,43 @@ class OptimizedScreenSync:
             avg_frame_time_ms = float(np.mean(frame_times) * 1000) if frame_times else 0.0
             avg_send_interval_ms = float(np.mean(send_intervals) * 1000) if send_intervals else 0.0
             send_rate_hz = float(1.0 / np.mean(send_intervals)) if send_intervals else 0.0
+            requested_fps = self.config.max_fps if self.config.adaptive_fps else self.config.fps
             return {
                 "running": self._running,
                 "mode": self._effective_mode,
                 "capture_method": self._capture_method,
                 "capture_status": self._capture_status,
+                "requested_fps": requested_fps,
+                "requestedFps": requested_fps,
                 "current_fps": self._current_fps,
+                "currentFps": self._current_fps,
                 "average_frame_time_ms": avg_frame_time_ms,
+                "frameTimeMs": avg_frame_time_ms,
                 "motion_score": self._motion_score,
+                "motionScore": self._motion_score,
                 "smoothing_factor": self._smoothing_factor,
+                "smoothingFactor": self._smoothing_factor,
                 "prediction_weight": self._prediction_strength,
+                "effective_color_boost": self._effective_color_boost,
+                "effectiveColorBoost": self._effective_color_boost,
+                "min_brightness": self.config.min_brightness,
+                "minBrightness": self.config.min_brightness,
+                "delta_threshold": self._send_delta_threshold_value,
+                "deltaThreshold": self._send_delta_threshold_value,
+                "captureBackend": self._capture_method,
                 "target_colors": target_colors,
+                "targetColors": target_colors,
                 "current_colors": current_colors,
+                "outputColors": current_colors,
                 "send_interval_ms": avg_send_interval_ms,
                 "send_rate_hz": send_rate_hz,
+                "sendRateHz": send_rate_hz,
                 "updates_sent": self._updates_sent,
+                "updatesSent": self._updates_sent,
                 "frames_processed": self._frames_processed,
+                "framesProcessed": self._frames_processed,
                 "last_error": self._last_error,
+                "lastError": self._last_error,
             }
     
     @property

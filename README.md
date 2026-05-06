@@ -8,7 +8,11 @@ WiZ bulbs are controlled locally over UDP. Your bulbs and controlling device mus
 
 - [Command Reference](docs/commands.md): setup, CLI, GUI, tests, Android builds, Windows installer, and cleanup commands.
 - [File Structure](docs/file-structure.md): important files, generated files, and safe cleanup targets.
+- [Control Truth Audit](docs/control-audit.md): visible controls, runtime metrics, and keep/hide/remove decisions.
+- [Production Validation](docs/production-validation.md): automated, manual, packaging, and hardware gates.
+- [Latency And Accuracy Testing](docs/latency-and-accuracy-testing.md): synthetic benchmarks, fake UDP bulb, control-effect checks, and real hardware measurement.
 - [Hardware Color Accuracy](docs/hardware-color-accuracy.md): real-bulb camera verification flow.
+- [macOS And iOS Platform Notes](docs/apple-platform-notes.md): second-milestone Apple support direction.
 - [Alexa Setup](docs/alexa-setup.md): optional fauxmo/Alexa bridge setup.
 - [Android App README](wizlight-android/README.md): Android screen-sync usage and build notes.
 

@@ -1,9 +1,11 @@
 """Modern GUI for WizLight using CustomTkinter."""
 
 import gc
+import json
 import sys
 from concurrent.futures import Future
 from pathlib import Path
+from tkinter import filedialog
 from typing import Optional
 
 import customtkinter as ctk
@@ -11,6 +13,7 @@ import customtkinter as ctk
 from ..core.async_runtime import BackgroundAsyncLoop
 from ..core.bulb_controller import BulbController, PRESETS, apply_preset
 from ..core.config import Config, SCREEN_SYNC_REGIONS
+from ..core.diagnostics import build_diagnostics_report
 from ..features.clap_detector import ClapConfig, ClapDetector
 from ..features.screen_sync import (
     average_colors,
@@ -540,6 +543,13 @@ class WizLightModernGUI(AnimationMixin):
             fg_color="transparent",
             border_width=1,
         ).pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkButton(
+            tools_card,
+            text="Export Diagnostics JSON",
+            command=self._export_diagnostics_report,
+            fg_color="transparent",
+            border_width=1,
+        ).pack(fill="x", padx=14, pady=(0, 8))
         ctk.CTkLabel(
             tools_card,
             text="Calibration and hardware tests are available from the scripts in docs/commands.md.",
@@ -592,6 +602,7 @@ class WizLightModernGUI(AnimationMixin):
         self.screen_sync_debug_perf = ctk.StringVar(value="FPS: -")
         self.screen_sync_debug_cadence = ctk.StringVar(value="Cadence: -")
         self.screen_sync_debug_motion = ctk.StringVar(value="Motion: -")
+        self.screen_sync_debug_settings = ctk.StringVar(value="Settings: -")
         self.screen_sync_debug_error = ctk.StringVar(value="")
 
         for variable in (
@@ -601,6 +612,7 @@ class WizLightModernGUI(AnimationMixin):
             self.screen_sync_debug_perf,
             self.screen_sync_debug_cadence,
             self.screen_sync_debug_motion,
+            self.screen_sync_debug_settings,
             self.screen_sync_debug_error,
         ):
             ctk.CTkLabel(card, textvariable=variable, anchor="w", justify="left").pack(
@@ -743,6 +755,36 @@ class WizLightModernGUI(AnimationMixin):
         if hasattr(self, "status_indicator"):
             self.status_indicator.configure(fg_color=self._sync_status_color(msg))
 
+    def _export_diagnostics_report(self) -> None:
+        report = build_diagnostics_report(
+            platform="windows-desktop",
+            app_version="0.1.0",
+            bulbs=[
+                {"name": bulb.name, "ip": bulb.ip, "mac": bulb.mac}
+                for bulb in self.config.bulbs
+            ],
+            screen_sync_settings=self.config.screen_sync.__dict__,
+            runtime_stats=self.screen_sync.debug_snapshot if self.screen_sync else None,
+            notes=[
+                "WiZ local communication must be enabled on the trusted LAN.",
+                "Hardware color accuracy still requires the camera validation flow.",
+            ],
+        )
+        path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Export WizLight diagnostics",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json")],
+            initialfile="wizlight-diagnostics.json",
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(json.dumps(report, indent=2), encoding="utf-8")
+            self._set_status(f"Diagnostics exported: {path}")
+        except Exception as exc:
+            self._set_status(f"Diagnostics export failed: {exc}")
+
     def _show_control_guide(self):
         guide = ctk.CTkToplevel(self.root)
         guide.title("Screen Sync Guide")
@@ -813,6 +855,7 @@ class WizLightModernGUI(AnimationMixin):
             self.screen_sync_debug_perf.set("FPS: -")
             self.screen_sync_debug_cadence.set("Cadence: -")
             self.screen_sync_debug_motion.set("Motion: -")
+            self.screen_sync_debug_settings.set("Settings: -")
             self.screen_sync_debug_error.set("")
             self.screen_sync_debug_preview.configure(fg_color="#000000")
             self._set_color_panel(self.sync_target_preview, None)
@@ -838,7 +881,7 @@ class WizLightModernGUI(AnimationMixin):
         status_display = "Running" if status == "OK" else status
         self._set_color_panel(self.sync_target_preview, target)
         self._set_color_panel(self.sync_output_preview, output)
-        self._set_metric("fps", str(snapshot["current_fps"]))
+        self._set_metric("fps", f"{snapshot['currentFps']}/{snapshot['requestedFps']}")
         self._set_metric("frame", f"{snapshot['average_frame_time_ms']:.1f}")
         self._set_metric("send", f"{snapshot['send_rate_hz']:.1f}" if snapshot["send_rate_hz"] > 0 else "warm")
         self._set_metric("motion", f"{snapshot['motion_score']:.3f}")
@@ -869,6 +912,9 @@ class WizLightModernGUI(AnimationMixin):
             )
         self.screen_sync_debug_motion.set(
             f"Motion: {snapshot['motion_score']:.3f} | smooth {snapshot['smoothing_factor']:.2f} | predict {snapshot['prediction_weight']:.2f}"
+        )
+        self.screen_sync_debug_settings.set(
+            f"Settings: boost {snapshot['effectiveColorBoost']:.2f}x | floor {snapshot['minBrightness']} | delta {snapshot['deltaThreshold']}"
         )
         self.screen_sync_debug_error.set(
             f"Error: {snapshot['last_error']}" if snapshot["last_error"] else ""

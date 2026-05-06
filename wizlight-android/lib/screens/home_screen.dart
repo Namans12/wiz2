@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/wiz_bulb.dart';
@@ -164,6 +167,31 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<void> _exportDiagnostics() async {
+    final report = <String, Object?>{
+      'schemaVersion': 1,
+      'generatedAt': DateTime.now().toUtc().toIso8601String(),
+      'platform': 'android',
+      'appVersion': '1.0.0+1',
+      'bulbs': _bulbs.map((bulb) => bulb.toJson()).toList(growable: false),
+      'screenSyncSettings': _settings.toJson(),
+      'runtimeStats': _runtimeStats?.toJson() ?? <String, Object?>{},
+      'notes': <String>[
+        'WiZ local communication must be enabled on the trusted LAN.',
+        'Hardware color accuracy still requires the camera validation flow.',
+      ],
+    };
+    final file = File(
+      '${Directory.systemTemp.path}/wizlight-diagnostics-${DateTime.now().millisecondsSinceEpoch}.json',
+    );
+    await file
+        .writeAsString(const JsonEncoder.withIndent('  ').convert(report));
+    if (!mounted) {
+      return;
+    }
+    setState(() => _status = 'Diagnostics exported: ${file.path}');
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -207,6 +235,8 @@ class _HomeScreenState extends State<HomeScreen> {
           _buildSyncControls(),
           const SizedBox(height: 16),
           _buildRuntimeCard(),
+          const SizedBox(height: 16),
+          _buildDiagnosticsCard(),
         ],
       ),
     );
@@ -462,12 +492,25 @@ class _HomeScreenState extends State<HomeScreen> {
             Text('Runtime', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text('Mode: ${stats?.mode ?? '-'}'),
-            Text('FPS: ${stats?.currentFps ?? '-'}'),
+            Text(
+              'FPS: ${stats?.currentFps ?? '-'} / requested ${stats?.requestedFps ?? '-'}',
+            ),
+            Text(
+              'Frame: ${stats?.frameTimeMs.toStringAsFixed(1) ?? '-'} ms',
+            ),
             Text(
               'Send rate: ${stats?.sendRateHz.toStringAsFixed(1) ?? '-'} Hz',
             ),
             Text('Motion: ${stats?.motionScore.toStringAsFixed(3) ?? '-'}'),
-            Text('Smoothing: ${stats?.smoothing.toStringAsFixed(2) ?? '-'}'),
+            Text(
+              'Smoothing: ${stats?.smoothingFactor.toStringAsFixed(2) ?? '-'}',
+            ),
+            Text(
+              'Color boost: ${stats?.effectiveColorBoost.toStringAsFixed(2) ?? '-'}',
+            ),
+            Text('Floor: ${stats?.minBrightness ?? '-'}'),
+            Text('Delta: ${stats?.deltaThreshold ?? '-'}'),
+            Text('Capture: ${stats?.captureBackend ?? '-'}'),
             Text('Extractor: ${stats?.colorAlgorithm ?? '-'}'),
             Text('Updates: ${stats?.updatesSent ?? 0}'),
             if (color != null) ...<Widget>[
@@ -507,6 +550,33 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDiagnosticsCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text('Diagnostics', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const Text(
+              'Exports a compact JSON report for support and production validation.',
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _exportDiagnostics,
+                icon: const Icon(Icons.description_outlined),
+                label: const Text('Export Diagnostics JSON'),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
