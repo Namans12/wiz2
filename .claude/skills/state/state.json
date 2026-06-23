@@ -1,0 +1,44 @@
+{
+  "app_name": "wizlight-master",
+  "version": "0.1.0",
+  "last_run": "2026-06-23",
+  "session_count": 4,
+  "user_preferences": {
+    "primary_target_device": "Sony Bravia 8 Mark II (2025, QD-OLED, Google TV)",
+    "build_targets": ["android-apk", "windows-exe", "macos-app"],
+    "color_parity": "Android Kotlin and Python color_mapping.py must stay in sync"
+  },
+  "last_output": "wizlight-android/build/app/outputs/flutter-apk/app-release.apk",
+  "history": [
+    {
+      "date": "2026-06-23",
+      "action": "Color pipeline overhaul: gamut/HDR auto-detect, device profiles (bravia/mac/wide_gamut_hdr), CCT cold/warm split, bounded palette hold, OLED true-black, per-HDR-type tone curves, FP16 BT.2020-PQ capture path; mirrored CCT split + auto-detect to Python desktop; added macOS PyInstaller spec + build_macos.sh.",
+      "output": "code changes across Kotlin/Dart/Python + packaging"
+    },
+    {
+      "date": "2026-06-23",
+      "action": "Built release Android APK with all color changes.",
+      "output": "wizlight-android/build/app/outputs/flutter-apk/app-release.apk (46 MB)"
+    },
+    {
+      "date": "2026-06-23",
+      "action": "Researched on-device color sync feasibility on Bravia 8 II. Verdict: pure on-TV app cannot capture DRM streaming (black frames) or external HDMI/tuner (separate hardware video plane). TV is Android 12/API 31, so FP16 BT.2020-PQ path (API 34+) will not engage; capture is 8-bit SDR. No HDR10+ (DV/HDR10/HLG only). Viable full-coverage paths: external HDMI sync box (companion device running our pipeline) or camera; on-TV app is limited to non-DRM content.",
+      "output": "research only (no artifact)"
+    },
+    {
+      "date": "2026-06-23",
+      "action": "Built BOTH capture modes. Extracted shared ColorSyncEngine.kt (single source of truth for color math + UDP). Refactored ScreenCaptureService to delegate to it. Added PlayerActivity.kt (ExoPlayer USB media player + TextureView.getBitmap frame grab -> engine) for non-DRM local USB playback (sidesteps MediaProjection/secure-surface). Added SyncBridge, Media3 deps (1.4.1), manifest entry, MainActivity pickMedia/playMedia/stopMedia (SAF), Flutter mode toggle + USB controls. Clean release build.",
+      "output": "wizlight-android/build/app/outputs/flutter-apk/app-release.apk (46.5 MB)"
+    },
+    {
+      "date": "2026-06-23",
+      "action": "Verified 9 cross-session R&D bug claims (BUG-01/02/03/06/07/08/09/10/13/14) against current repo. Verdict: 0 of 9 present — all already guarded here (threading.Lock in screen_sync.py, _resolve_monitor, crop size guards, gain clamp 0.70-1.0, dxcam None guards, websocket snapshot-before-broadcast, default-arg lambda binding). R&D fixes were against the earlier sandbox copy. Read-only; no code changed. Open follow-up: confirm V2 debug_snapshot read/write can't tear.",
+      "output": "verification only (no code change)"
+    }
+  ],
+  "flags": {
+    "setup_complete": true,
+    "last_error": null,
+    "release_signing_configured": false
+  }
+}

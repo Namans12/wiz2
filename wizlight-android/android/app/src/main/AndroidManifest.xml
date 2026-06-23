@@ -35,6 +35,16 @@
             android:name=".ScreenCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- USB media player (ExoPlayer) ambient-sync mode -->
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:theme="@style/LaunchTheme" />
         
         <meta-data
             android:name="flutterEmbedding"

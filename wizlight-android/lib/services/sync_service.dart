@@ -17,8 +17,9 @@ class SyncSettings {
     this.adaptiveFps = true,
     this.predictiveSmoothing = true,
     this.ignoreLetterbox = true,
-    this.sourceColorSpace = 'srgb',
+    this.sourceColorSpace = 'auto',
     this.hdrToneMapping = false,
+    this.hdrCapture = false,
   });
 
   final String mode;
@@ -36,6 +37,7 @@ class SyncSettings {
   final bool ignoreLetterbox;
   final String sourceColorSpace;
   final bool hdrToneMapping;
+  final bool hdrCapture;
 
   SyncSettings copyWith({
     String? mode,
@@ -53,6 +55,7 @@ class SyncSettings {
     bool? ignoreLetterbox,
     String? sourceColorSpace,
     bool? hdrToneMapping,
+    bool? hdrCapture,
   }) {
     return SyncSettings(
       mode: mode ?? this.mode,
@@ -70,6 +73,7 @@ class SyncSettings {
       ignoreLetterbox: ignoreLetterbox ?? this.ignoreLetterbox,
       sourceColorSpace: sourceColorSpace ?? this.sourceColorSpace,
       hdrToneMapping: hdrToneMapping ?? this.hdrToneMapping,
+      hdrCapture: hdrCapture ?? this.hdrCapture,
     );
   }
 
@@ -91,6 +95,7 @@ class SyncSettings {
       'ignoreLetterbox': ignoreLetterbox,
       'sourceColorSpace': sourceColorSpace,
       'hdrToneMapping': hdrToneMapping,
+      'hdrCapture': hdrCapture,
     };
   }
 
@@ -111,6 +116,7 @@ class SyncSettings {
       'ignoreLetterbox': ignoreLetterbox,
       'sourceColorSpace': sourceColorSpace,
       'hdrToneMapping': hdrToneMapping,
+      'hdrCapture': hdrCapture,
     };
   }
 
@@ -130,9 +136,10 @@ class SyncSettings {
       predictiveSmoothing: json['predictiveSmoothing'] as bool? ?? true,
       ignoreLetterbox: json['ignoreLetterbox'] as bool? ?? true,
       sourceColorSpace: _normalizeSourceColorSpace(
-        json['sourceColorSpace'] as String? ?? 'srgb',
+        json['sourceColorSpace'] as String? ?? 'auto',
       ),
       hdrToneMapping: json['hdrToneMapping'] as bool? ?? false,
+      hdrCapture: json['hdrCapture'] as bool? ?? false,
     );
   }
 
@@ -147,7 +154,10 @@ class SyncSettings {
         normalized == 'rec2020') {
       return 'rec2020';
     }
-    return 'srgb';
+    if (normalized == 'srgb') {
+      return 'srgb';
+    }
+    return 'auto';
   }
 }
 
@@ -169,6 +179,13 @@ class SyncRuntimeStats {
     this.sourceColorSpace = 'srgb',
     this.hdrToneMapping = false,
     this.predictiveSmoothing = true,
+    this.detectedDisplayGamut = 'srgb',
+    this.detectedHdrSupport = false,
+    this.deviceProfile = 'generic',
+    this.supportedHdrTypes = const <String>[],
+    this.primaryHdrType = 'none',
+    this.hdrCaptureActive = false,
+    this.captureBufferFormat = 'rgba8888',
     this.targetColors = const <String, Color>{},
     this.outputColors = const <String, Color>{},
     this.lastError,
@@ -190,6 +207,13 @@ class SyncRuntimeStats {
   final String sourceColorSpace;
   final bool hdrToneMapping;
   final bool predictiveSmoothing;
+  final String detectedDisplayGamut;
+  final bool detectedHdrSupport;
+  final String deviceProfile;
+  final List<String> supportedHdrTypes;
+  final String primaryHdrType;
+  final bool hdrCaptureActive;
+  final String captureBufferFormat;
   final Map<String, Color> targetColors;
   final Map<String, Color> outputColors;
   final String? lastError;
@@ -227,6 +251,13 @@ class SyncRuntimeStats {
       'sourceColorSpace': sourceColorSpace,
       'hdrToneMapping': hdrToneMapping,
       'predictiveSmoothing': predictiveSmoothing,
+      'detectedDisplayGamut': detectedDisplayGamut,
+      'detectedHdrSupport': detectedHdrSupport,
+      'deviceProfile': deviceProfile,
+      'supportedHdrTypes': supportedHdrTypes,
+      'primaryHdrType': primaryHdrType,
+      'hdrCaptureActive': hdrCaptureActive,
+      'captureBufferFormat': captureBufferFormat,
       'updatesSent': updatesSent,
       'targetColors': _encodeColorMap(targetColors),
       'outputColors': _encodeColorMap(outputColors),
@@ -255,6 +286,15 @@ class SyncRuntimeStats {
       sourceColorSpace: map['sourceColorSpace'] as String? ?? 'srgb',
       hdrToneMapping: map['hdrToneMapping'] as bool? ?? false,
       predictiveSmoothing: map['predictiveSmoothing'] as bool? ?? true,
+      detectedDisplayGamut: map['detectedDisplayGamut'] as String? ?? 'srgb',
+      detectedHdrSupport: map['detectedHdrSupport'] as bool? ?? false,
+      deviceProfile: map['deviceProfile'] as String? ?? 'generic',
+      supportedHdrTypes: ((map['supportedHdrTypes'] as List<dynamic>?) ?? const <dynamic>[])
+          .map((e) => e.toString())
+          .toList(),
+      primaryHdrType: map['primaryHdrType'] as String? ?? 'none',
+      hdrCaptureActive: map['hdrCaptureActive'] as bool? ?? false,
+      captureBufferFormat: map['captureBufferFormat'] as String? ?? 'rgba8888',
       targetColors: _decodeColorMap(map['targetColors']),
       outputColors: _decodeColorMap(map['outputColors']),
       lastError: map['lastError'] as String?,

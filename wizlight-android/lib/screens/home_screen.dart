@@ -26,6 +26,8 @@ class _HomeScreenState extends State<HomeScreen> {
   SyncRuntimeStats? _runtimeStats;
   bool _loading = true;
   bool _syncRunning = false;
+  bool _playerRunning = false;
+  String _syncBackend = 'screen'; // 'screen' | 'usb'
   String? _status;
 
   @override
@@ -164,6 +166,50 @@ class _HomeScreenState extends State<HomeScreen> {
       _syncRunning = started;
       _status =
           started ? 'Screen sync running' : 'Could not start screen sync.';
+    });
+  }
+
+  Future<void> _pickAndPlayUsb() async {
+    if (_playerRunning) {
+      await _captureService.stopMedia();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _playerRunning = false;
+        _status = 'USB player stopped';
+      });
+      return;
+    }
+
+    if (_bulbs.isEmpty) {
+      setState(() => _status = 'Add at least one bulb first.');
+      return;
+    }
+
+    setState(() => _status = 'Pick a video from your USB drive...');
+    final uri = await _captureService.pickMedia();
+    if (!mounted) {
+      return;
+    }
+    if (uri == null || uri.isEmpty) {
+      setState(() => _status = 'No file selected.');
+      return;
+    }
+
+    final started = await _captureService.playMedia(
+      mediaUri: uri,
+      bulbs: _bulbs,
+      settings: _settings,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _playerRunning = started;
+      _status = started
+          ? 'Playing USB media — driving bulbs from decoded frames'
+          : 'Could not start the USB player.';
     });
   }
 
@@ -309,14 +355,51 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             const SizedBox(height: 14),
+            SegmentedButton<String>(
+              segments: const <ButtonSegment<String>>[
+                ButtonSegment(
+                  value: 'screen',
+                  label: Text('Screen Capture'),
+                  icon: Icon(Icons.screenshot_monitor),
+                ),
+                ButtonSegment(
+                  value: 'usb',
+                  label: Text('USB Media'),
+                  icon: Icon(Icons.usb),
+                ),
+              ],
+              selected: <String>{_syncBackend},
+              onSelectionChanged: (_syncRunning || _playerRunning)
+                  ? null
+                  : (selection) =>
+                      setState(() => _syncBackend = selection.first),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _syncBackend == 'usb'
+                  ? 'Plays a video from USB in-app and drives bulbs from decoded frames. Works with non-DRM local files; no Netflix/HDMI.'
+                  : 'Mirrors the screen. Captures non-DRM apps, games and the home UI; DRM streaming and HDMI inputs appear black.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _toggleSync,
-                icon: Icon(_syncRunning ? Icons.stop : Icons.play_arrow),
-                label: Text(
-                    _syncRunning ? 'Stop Screen Sync' : 'Start Screen Sync'),
-              ),
+              child: _syncBackend == 'usb'
+                  ? FilledButton.icon(
+                      onPressed: _pickAndPlayUsb,
+                      icon: Icon(
+                          _playerRunning ? Icons.stop : Icons.video_library),
+                      label: Text(_playerRunning
+                          ? 'Stop USB Player'
+                          : 'Pick & Play USB Video'),
+                    )
+                  : FilledButton.icon(
+                      onPressed: _toggleSync,
+                      icon: Icon(_syncRunning ? Icons.stop : Icons.play_arrow),
+                      label: Text(_syncRunning
+                          ? 'Stop Screen Sync'
+                          : 'Start Screen Sync'),
+                    ),
             ),
           ],
         ),
@@ -433,6 +516,10 @@ class _HomeScreenState extends State<HomeScreen> {
               initialValue: _settings.sourceColorSpace,
               decoration: const InputDecoration(labelText: 'Color Source'),
               items: const <DropdownMenuItem<String>>[
+                DropdownMenuItem(
+                  value: 'auto',
+                  child: Text('Auto (detect display)'),
+                ),
                 DropdownMenuItem(value: 'srgb', child: Text('Standard / sRGB')),
                 DropdownMenuItem(
                   value: 'display-p3',
@@ -451,6 +538,14 @@ class _HomeScreenState extends State<HomeScreen> {
               onChanged: (value) =>
                   _saveSettings(_settings.copyWith(hdrToneMapping: value)),
               title: const Text('HDR tone mapping'),
+            ),
+            SwitchListTile(
+              value: _settings.hdrCapture,
+              onChanged: (value) =>
+                  _saveSettings(_settings.copyWith(hdrCapture: value)),
+              title: const Text('HDR-aware capture (Android 14+)'),
+              subtitle: const Text(
+                  'FP16 + BT.2020 PQ. Falls back automatically if unsupported.'),
             ),
             _buildSlider(
               label: 'Max FPS',
@@ -551,6 +646,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 'Color source: ${stats?.sourceColorSpace ?? _settings.sourceColorSpace}'),
             Text(
                 'HDR tone map: ${stats?.hdrToneMapping ?? _settings.hdrToneMapping}'),
+            Text('Device profile: ${stats?.deviceProfile ?? '-'}'),
+            Text(
+                'Detected gamut: ${stats?.detectedDisplayGamut ?? '-'}${(stats?.detectedHdrSupport ?? false) ? ' (HDR)' : ''}'),
+            Text(
+                'HDR types: ${(stats?.supportedHdrTypes.isEmpty ?? true) ? '-' : stats!.supportedHdrTypes.join(', ')}'),
+            Text('Primary HDR: ${stats?.primaryHdrType ?? '-'}'),
+            Text(
+                'Capture buffer: ${stats?.captureBufferFormat ?? '-'}${(stats?.hdrCaptureActive ?? false) ? ' (HDR active)' : ''}'),
             Text('Updates: ${stats?.updatesSent ?? 0}'),
             if (color != null) ...<Widget>[
               const SizedBox(height: 12),

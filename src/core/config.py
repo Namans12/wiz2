@@ -30,7 +30,8 @@ class BulbConfig:
 
 
 COLOR_ALGORITHMS = ("auto", "weighted", "kmeans", "histogram")
-COLOR_SOURCE_SPACES = ("srgb", "display-p3", "rec2020")
+COLOR_SOURCE_SPACES = ("auto", "srgb", "display-p3", "rec2020")
+DEVICE_PROFILES = ("auto", "generic", "mac", "bravia", "wide_gamut_hdr")
 
 
 @dataclass
@@ -57,8 +58,9 @@ class ScreenSyncConfig:
     max_fps: int = 24
     color_algorithm: str = "auto"
     predictive_smoothing: bool = True
-    source_color_space: str = "srgb"
+    source_color_space: str = "auto"
     hdr_tone_mapping: bool = False
+    device_profile: str = "auto"
 
     def __post_init__(self) -> None:
         self.mode = self.mode if self.mode in SCREEN_SYNC_MODES else "single"
@@ -92,8 +94,12 @@ class ScreenSyncConfig:
         }
         self.source_color_space = aliases.get(normalized_space, normalized_space)
         if self.source_color_space not in COLOR_SOURCE_SPACES:
-            self.source_color_space = "srgb"
+            self.source_color_space = "auto"
         self.hdr_tone_mapping = bool(self.hdr_tone_mapping)
+        normalized_profile = str(self.device_profile).lower().replace("-", "_")
+        if normalized_profile not in DEVICE_PROFILES:
+            normalized_profile = "auto"
+        self.device_profile = normalized_profile
 
 
 @dataclass

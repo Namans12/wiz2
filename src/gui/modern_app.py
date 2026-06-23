@@ -1129,10 +1129,26 @@ class WizLightModernGUI(AnimationMixin):
         self._save_screen_sync_settings()
         settings = self.config.screen_sync
         try:
+            from src.features.screen_sync_v2 import resolve_auto_display_profile
+            resolved = resolve_auto_display_profile(settings)
+        except Exception:
+            resolved = {}
+        effective_color_space = resolved.get(
+            "source_color_space", settings.source_color_space
+        )
+        if effective_color_space == "auto":
+            effective_color_space = "srgb"
+        effective_profile = resolved.get("device_profile", "generic")
+        if effective_profile in (None, "", "auto"):
+            effective_profile = "generic"
+        cool_bias = float(resolved.get("cool_mix_bias", 0.0))
+        try:
             self._async_runner.run(
                 self.controller.prepare_screen_sync_mappers(
                     ips,
-                    source_color_space=settings.source_color_space,
+                    source_color_space=effective_color_space,
+                    device_profile=effective_profile,
+                    cool_mix_bias=cool_bias,
                 ),
                 timeout=8.0,
             )

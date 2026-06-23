@@ -25,22 +25,18 @@ import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
-import io.flutter.plugin.common.MethodChannel
 import org.json.JSONArray
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
-import java.nio.charset.StandardCharsets
 import java.util.ArrayDeque
-import kotlin.math.abs
-import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sin
-import kotlin.math.sqrt
 
+/**
+ * Screen-capture front-end: mirrors the display via MediaProjection, samples each
+ * frame into an NxN ARGB grid, and hands it to [ColorSyncEngine] (the shared color
+ * pipeline). All color math, gamut/HDR mapping, smoothing and bulb-driving live in
+ * the engine — this class only owns capture + sampling + the status bridge.
+ */
 class ScreenCaptureService : Service() {
 
     companion object {
@@ -63,50 +59,23 @@ class ScreenCaptureService : Service() {
         const val EXTRA_IGNORE_LETTERBOX = "ignoreLetterbox"
         const val EXTRA_SOURCE_COLOR_SPACE = "sourceColorSpace"
         const val EXTRA_HDR_TONE_MAPPING = "hdrToneMapping"
+        const val EXTRA_HDR_CAPTURE = "hdrCapture"
 
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "wizlight_capture"
-        private const val WIZ_PORT = 38899
 
         private var mediaProjectionResultCode: Int = Activity.RESULT_CANCELED
         private var mediaProjectionData: Intent? = null
-        private var methodChannel: MethodChannel? = null
 
         fun setMediaProjectionIntent(resultCode: Int, data: Intent) {
             mediaProjectionResultCode = resultCode
             mediaProjectionData = data
         }
 
-        fun setMethodChannel(channel: MethodChannel?) {
-            methodChannel = channel
-        }
-
         fun hasProjectionPermission(): Boolean {
             return mediaProjectionResultCode == Activity.RESULT_OK && mediaProjectionData != null
         }
     }
-
-    private data class BulbTarget(
-        val ip: String,
-        val region: String,
-    )
-
-    private data class RgbColor(
-        val r: Int,
-        val g: Int,
-        val b: Int,
-    )
-
-    private data class WizPilotColor(
-        val rgb: RgbColor,
-        val warmWhite: Int,
-    )
-
-    private data class SampledFrame(
-        val pixels: IntArray,
-        val width: Int,
-        val height: Int,
-    )
 
     private data class ImageFrame(
         val buffer: java.nio.ByteBuffer,
@@ -120,10 +89,11 @@ class ScreenCaptureService : Service() {
         val height: Int,
     )
 
+    private val engine = ColorSyncEngine()
+
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-    private var udpSocket: DatagramSocket? = null
     private var captureThread: HandlerThread? = null
     private var captureHandler: Handler? = null
 
@@ -131,66 +101,23 @@ class ScreenCaptureService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
 
-    private var bulbTargets: List<BulbTarget> = emptyList()
+    private var bulbTargets: List<ColorSyncEngine.BulbTarget> = emptyList()
     private var requestedMode = "single"
-    private var effectiveMode = "single"
-    private var adaptiveFps = true
     private var ignoreLetterbox = true
-    private var minFps = 10
-    private var maxFps = 24
-    private var currentFps = 24
     private var sampleSize = 56
-    private var smoothing = 0.2
-    private var colorBoost = 1.18
-    private var colorAlgorithm = "auto"
-    private var minBrightness = 20
-    private var minColorDelta = 8
-    private var edgeWeight = 1.5
-    private var predictiveSmoothing = true
-    private var predictionWeight = 0.3
-    private var sourceColorSpace = "srgb"
-    private var hdrToneMapping = false
+    private var requestedColorSpace = "auto"
+    private var requestedHdrToneMapping = false
+    private var requestedHdrCapture = false
+    private var hdrCaptureActive = false
+    private var captureBufferFormat = "rgba8888"
 
     private var isRunning = false
-    private var previousMotionSample: FloatArray? = null
-    private var previousSingleColor: RgbColor? = null
-    private var lastMotionScore = 0.0
     private var lastError: String? = null
     private var lastStatusUpdateAt = 0L
-    private var lastSendAt: Long? = null
-    private var lastEffectiveColorBoost = 1.18
-    private var lastDeltaThreshold = 8
     private var cachedContentBounds: Rect? = null
     private var cachedContentBoundsAtFrame = -1
-    private val sendIntervalsMs = ArrayDeque<Long>()
     private val frameTimesMs = ArrayDeque<Long>()
-    private var updatesSent = 0
     private var framesProcessed = 0
-    private val currentOutputColors = mutableMapOf<String, RgbColor>()
-    private val lastSentColors = mutableMapOf<String, RgbColor>()
-    private val lastTargetColors = mutableMapOf<String, RgbColor>()
-    private val predictionTargets = mutableMapOf<String, RgbColor>()
-    private val addressCache = mutableMapOf<String, InetAddress>()
-    private val packetCache = object : LinkedHashMap<String, ByteArray>(128, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?): Boolean {
-            return size > 4096
-        }
-    }
-    private val wizBasis = arrayOf(
-        doubleArrayOf(cos(0.0), sin(0.0)),
-        doubleArrayOf(cos((2.0 * PI) / 3.0), sin((2.0 * PI) / 3.0)),
-        doubleArrayOf(cos((4.0 * PI) / 3.0), sin((4.0 * PI) / 3.0)),
-    )
-    private val DISPLAY_P3_TO_SRGB = arrayOf(
-        doubleArrayOf(1.2249401, -0.2249404, 0.0),
-        doubleArrayOf(-0.0420569, 1.0420571, 0.0),
-        doubleArrayOf(-0.0196376, -0.0786361, 1.0982735),
-    )
-    private val REC2020_TO_SRGB = arrayOf(
-        doubleArrayOf(1.6602270, -0.5875478, -0.0728387),
-        doubleArrayOf(-0.1245535, 1.1329261, -0.0083495),
-        doubleArrayOf(-0.0181551, -0.1006030, 1.1189980),
-    )
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val mediaProjectionCallback =
@@ -206,7 +133,6 @@ class ScreenCaptureService : Service() {
             if (!isRunning) {
                 return
             }
-
             val startedAt = SystemClock.elapsedRealtime()
             captureFrame()
             val elapsed = SystemClock.elapsedRealtime() - startedAt
@@ -214,7 +140,7 @@ class ScreenCaptureService : Service() {
             while (frameTimesMs.size > 30) {
                 frameTimesMs.removeFirst()
             }
-            val frameDelay = max(5L, (1000L / max(currentFps, 1)) - elapsed)
+            val frameDelay = max(5L, (1000L / max(engine.currentFps, 1)) - elapsed)
             captureHandler?.postDelayed(this, frameDelay)
         }
     }
@@ -240,22 +166,24 @@ class ScreenCaptureService : Service() {
             ACTION_START -> {
                 bulbTargets = parseBulbs(intent.getStringExtra(EXTRA_BULBS_JSON) ?: "[]")
                 requestedMode = intent.getStringExtra(EXTRA_MODE) ?: "single"
-                minFps = intent.getIntExtra(EXTRA_MIN_FPS, 10).coerceIn(4, 30)
-                maxFps = intent.getIntExtra(EXTRA_MAX_FPS, 24).coerceIn(minFps, 30)
-                currentFps = maxFps
-                smoothing = intent.getDoubleExtra(EXTRA_SMOOTHING, 0.2).coerceIn(0.05, 0.85)
+                engine.minFps = intent.getIntExtra(EXTRA_MIN_FPS, 10).coerceIn(4, 30)
+                engine.maxFps = intent.getIntExtra(EXTRA_MAX_FPS, 24).coerceIn(engine.minFps, 30)
+                engine.currentFps = engine.maxFps
+                engine.smoothing = intent.getDoubleExtra(EXTRA_SMOOTHING, 0.2).coerceIn(0.05, 0.85)
                 sampleSize = intent.getIntExtra(EXTRA_SAMPLE_SIZE, 56).coerceIn(24, 96)
-                colorBoost = intent.getDoubleExtra(EXTRA_COLOR_BOOST, 1.18).coerceIn(1.0, 1.8)
-                edgeWeight = intent.getDoubleExtra(EXTRA_EDGE_WEIGHT, 1.5).coerceIn(1.0, 2.5)
-                colorAlgorithm = normalizeAlgorithm(intent.getStringExtra(EXTRA_COLOR_ALGORITHM))
-                minBrightness = intent.getIntExtra(EXTRA_MIN_BRIGHTNESS, 20).coerceIn(0, 80)
-                minColorDelta = intent.getIntExtra(EXTRA_MIN_COLOR_DELTA, 8).coerceIn(2, 48)
-                adaptiveFps = intent.getBooleanExtra(EXTRA_ADAPTIVE_FPS, true)
-                predictiveSmoothing = intent.getBooleanExtra(EXTRA_PREDICTIVE_SMOOTHING, true)
+                engine.colorBoost = intent.getDoubleExtra(EXTRA_COLOR_BOOST, 1.18).coerceIn(1.0, 1.8)
+                engine.edgeWeight = intent.getDoubleExtra(EXTRA_EDGE_WEIGHT, 1.5).coerceIn(1.0, 2.5)
+                engine.colorAlgorithm = engine.normalizeAlgorithm(intent.getStringExtra(EXTRA_COLOR_ALGORITHM))
+                engine.minBrightness = intent.getIntExtra(EXTRA_MIN_BRIGHTNESS, 20).coerceIn(0, 80)
+                engine.minColorDelta = intent.getIntExtra(EXTRA_MIN_COLOR_DELTA, 8).coerceIn(2, 48)
+                engine.adaptiveFps = intent.getBooleanExtra(EXTRA_ADAPTIVE_FPS, true)
+                engine.predictiveSmoothing = intent.getBooleanExtra(EXTRA_PREDICTIVE_SMOOTHING, true)
                 ignoreLetterbox = intent.getBooleanExtra(EXTRA_IGNORE_LETTERBOX, true)
-                sourceColorSpace = normalizeColorSpace(intent.getStringExtra(EXTRA_SOURCE_COLOR_SPACE))
-                hdrToneMapping = intent.getBooleanExtra(EXTRA_HDR_TONE_MAPPING, false)
-                effectiveMode = resolveEffectiveMode(requestedMode, bulbTargets)
+                requestedColorSpace = intent.getStringExtra(EXTRA_SOURCE_COLOR_SPACE) ?: "auto"
+                requestedHdrToneMapping = intent.getBooleanExtra(EXTRA_HDR_TONE_MAPPING, false)
+                requestedHdrCapture = intent.getBooleanExtra(EXTRA_HDR_CAPTURE, false)
+                engine.bulbTargets = bulbTargets
+                engine.effectiveMode = resolveEffectiveMode(requestedMode, bulbTargets)
                 startCapture()
             }
 
@@ -271,28 +199,21 @@ class ScreenCaptureService : Service() {
         if (isRunning) {
             return
         }
-
         val projectionData = mediaProjectionData ?: run {
             stopSelf()
             return
         }
 
+        engine.configureAutoFromDisplay(this, requestedColorSpace, requestedHdrToneMapping)
+
         startForeground(NOTIFICATION_ID, createNotification())
 
         val projectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = projectionManager.getMediaProjection(
-            mediaProjectionResultCode,
-            projectionData,
-        )
+        mediaProjection = projectionManager.getMediaProjection(mediaProjectionResultCode, projectionData)
         mediaProjection?.registerCallback(mediaProjectionCallback, mainHandler)
 
-        imageReader = ImageReader.newInstance(
-            screenWidth,
-            screenHeight,
-            PixelFormat.RGBA_8888,
-            2,
-        )
+        imageReader = createImageReaderWithHdrFallback()
 
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "WizLightCapture",
@@ -305,29 +226,13 @@ class ScreenCaptureService : Service() {
             mainHandler,
         )
 
-        udpSocket = DatagramSocket().apply {
-            sendBufferSize = 262144
-        }
-        previousMotionSample = null
-        previousSingleColor = null
-        lastMotionScore = 0.0
+        engine.start()
         lastError = null
         lastStatusUpdateAt = 0L
-        lastSendAt = null
-        lastEffectiveColorBoost = colorBoost
-        lastDeltaThreshold = minColorDelta
         cachedContentBounds = null
         cachedContentBoundsAtFrame = -1
-        sendIntervalsMs.clear()
         frameTimesMs.clear()
-        updatesSent = 0
         framesProcessed = 0
-        currentOutputColors.clear()
-        lastSentColors.clear()
-        lastTargetColors.clear()
-        predictionTargets.clear()
-        addressCache.clear()
-        packetCache.clear()
 
         captureThread = HandlerThread("WizLightCaptureThread").also { it.start() }
         captureHandler = Handler(captureThread!!.looper)
@@ -335,96 +240,84 @@ class ScreenCaptureService : Service() {
         captureHandler?.post(captureRunnable)
     }
 
+    private fun createImageReaderWithHdrFallback(): ImageReader {
+        val sdrReader = {
+            captureBufferFormat = "rgba8888"
+            hdrCaptureActive = false
+            ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
+        }
+        if (!requestedHdrCapture) return sdrReader()
+        if (Build.VERSION.SDK_INT < 34) return sdrReader()
+        if (!engine.detectedHdrSupport && engine.deviceProfile != ColorSyncEngine.DeviceProfile.BRAVIA) {
+            return sdrReader()
+        }
+        return try {
+            val builderClass = Class.forName("android.media.ImageReader\$Builder")
+            val hwBufferClass = Class.forName("android.hardware.HardwareBuffer")
+            val dataSpaceClass = Class.forName("android.hardware.DataSpace")
+            val rgbaFp16 = hwBufferClass.getField("RGBA_FP16").getInt(null)
+            val bt2020Pq = dataSpaceClass.getField("DATASPACE_BT2020_PQ").getInt(null)
+            val builderCtor = builderClass.getConstructor(Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            val builder = builderCtor.newInstance(screenWidth, screenHeight)
+            builderClass.getMethod("setMaxImages", Int::class.javaPrimitiveType).invoke(builder, 2)
+            builderClass.getMethod("setDefaultHardwareBufferFormat", Int::class.javaPrimitiveType)
+                .invoke(builder, rgbaFp16)
+            builderClass.getMethod("setDefaultDataSpace", Int::class.javaPrimitiveType)
+                .invoke(builder, bt2020Pq)
+            val reader = builderClass.getMethod("build").invoke(builder) as ImageReader
+            captureBufferFormat = "rgba_fp16_bt2020_pq"
+            hdrCaptureActive = true
+            reader
+        } catch (_: Throwable) {
+            sdrReader()
+        }
+    }
+
     private fun captureFrame() {
         val image = imageReader?.acquireLatestImage() ?: return
-
         try {
             val frame = imageToFrame(image) ?: return
             val contentFrame = cropContentArea(frame, ignoreLetterbox)
 
-            val motionScore = computeMotionScore(contentFrame)
-            lastMotionScore = motionScore
-            updateAdaptiveFps(motionScore)
-
-            val targetColors = extractTargetColors(contentFrame, motionScore)
-            lastTargetColors.clear()
-            lastTargetColors.putAll(targetColors)
-
-            val smoothingFactor = targetSmoothing(motionScore)
-            val sendThreshold = sendDeltaThreshold(motionScore)
-            lastDeltaThreshold = sendThreshold
-            val mappedBulbColors = buildBulbColorMap(targetColors)
-            val appliedColors = mutableMapOf<String, RgbColor>()
-            var sentAnyUpdate = false
-
-            for ((ip, targetColor) in mappedBulbColors) {
-                val current = currentOutputColors[ip]
-                val predictedTarget = applyPredictiveTarget(ip, targetColor, motionScore)
-                val smoothed = if (current == null) {
-                    predictedTarget
-                } else {
-                    smoothColor(current, predictedTarget, smoothingFactor)
+            val grids = if (engine.effectiveMode == "single") {
+                mapOf("all" to sampleGrid(contentFrame, sampleSize))
+            } else {
+                val map = mutableMapOf<String, IntArray>()
+                for (region in bulbTargets.map { it.region }.toSet()) {
+                    map[region] = sampleGrid(cropRelativeRegion(contentFrame, region), sampleSize)
                 }
-                currentOutputColors[ip] = smoothed
-                appliedColors[ip] = smoothed
-
-                val lastSent = lastSentColors[ip]
-                if (lastSent == null || colorDistance(smoothed, lastSent) >= sendThreshold) {
-                    sendColor(ip, smoothed)
-                    lastSentColors[ip] = smoothed
-                    sentAnyUpdate = true
-                }
+                map
             }
 
-            val staleIps = currentOutputColors.keys - mappedBulbColors.keys
-            for (ip in staleIps) {
-                currentOutputColors.remove(ip)
-                lastSentColors.remove(ip)
-                predictionTargets.remove(ip)
-            }
-
+            engine.submitFrame(grids, sampleSize)
             framesProcessed += 1
-            if (sentAnyUpdate) {
-                val now = SystemClock.elapsedRealtime()
-                lastSendAt?.let {
-                    sendIntervalsMs.addLast(now - it)
-                    while (sendIntervalsMs.size > 30) {
-                        sendIntervalsMs.removeFirst()
-                    }
-                }
-                lastSendAt = now
-                updatesSent += 1
+            if (engine.updatesSent > 0) {
                 lastError = null
             }
-
-            maybePostStatus(appliedColors, smoothingFactor)
+            maybePostStatus()
         } catch (error: Exception) {
             lastError = error.message ?: error.toString()
-            maybePostStatus(currentOutputColors.toMap(), smoothing)
+            maybePostStatus()
         } finally {
             image.close()
         }
     }
 
-    private fun parseBulbs(rawJson: String): List<BulbTarget> {
-        val bulbs = mutableListOf<BulbTarget>()
+    private fun parseBulbs(rawJson: String): List<ColorSyncEngine.BulbTarget> {
+        val bulbs = mutableListOf<ColorSyncEngine.BulbTarget>()
         val array = JSONArray(rawJson)
         for (index in 0 until array.length()) {
             val item = array.optJSONObject(index) ?: continue
             val ip = item.optString("ip")
-            if (ip.isBlank()) {
-                continue
-            }
+            if (ip.isBlank()) continue
             val region = if (item.optString("region") == "right") "right" else "left"
-            bulbs.add(BulbTarget(ip = ip, region = region))
+            bulbs.add(ColorSyncEngine.BulbTarget(ip = ip, region = region))
         }
         return bulbs.take(2)
     }
 
-    private fun resolveEffectiveMode(mode: String, bulbs: List<BulbTarget>): String {
-        if (mode != "zones") {
-            return "single"
-        }
+    private fun resolveEffectiveMode(mode: String, bulbs: List<ColorSyncEngine.BulbTarget>): String {
+        if (mode != "zones") return "single"
         val regions = bulbs.map { it.region }.toSet()
         return if (regions.size >= 2 && bulbs.size >= 2) "zones" else "single"
     }
@@ -445,10 +338,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun cropContentArea(source: ImageFrame, shouldCrop: Boolean): ImageFrame {
-        if (!shouldCrop) {
-            return source
-        }
-
+        if (!shouldCrop) return source
         val shouldRefreshBounds =
             cachedContentBounds == null || framesProcessed - cachedContentBoundsAtFrame >= 12
         val bounds = if (shouldRefreshBounds) {
@@ -477,251 +367,43 @@ class ScreenCaptureService : Service() {
     }
 
     private fun detectContentBounds(source: ImageFrame): Rect {
-        val sample = sampleFrame(source, 64)
-        val width = sample.width
-        val height = sample.height
-
-        val rowActivity = DoubleArray(height)
-        val colActivity = DoubleArray(width)
-        for (y in 0 until height) {
+        val size = 64
+        val sample = sampleGrid(source, size)
+        val rowActivity = DoubleArray(size)
+        val colActivity = DoubleArray(size)
+        for (y in 0 until size) {
             var rowActive = 0
-            for (x in 0 until width) {
-                val luma = colorLuma(sample.pixels[y * width + x])
+            for (x in 0 until size) {
+                val luma = engine.colorLuma(sample[y * size + x])
                 if (luma * 255.0 > 16.0) {
                     rowActive += 1
                     colActivity[x] += 1.0
                 }
             }
-            rowActivity[y] = rowActive.toDouble() / width.toDouble()
+            rowActivity[y] = rowActive.toDouble() / size.toDouble()
         }
-
         val activeRows = rowActivity.indices.filter { rowActivity[it] > 0.02 }
-        val activeCols = colActivity.indices.filter { colActivity[it] / height.toDouble() > 0.02 }
+        val activeCols = colActivity.indices.filter { colActivity[it] / size.toDouble() > 0.02 }
         if (activeRows.isEmpty() || activeCols.isEmpty()) {
             return Rect(source.left, source.top, source.left + source.width, source.top + source.height)
         }
-
         val top = activeRows.first()
         val bottom = activeRows.last() + 1
         val left = activeCols.first()
         val right = activeCols.last() + 1
-
-        if ((bottom - top) < height * 0.45 || (right - left) < width * 0.45) {
+        if ((bottom - top) < size * 0.45 || (right - left) < size * 0.45) {
             return Rect(source.left, source.top, source.left + source.width, source.top + source.height)
         }
-
-        val mappedLeft = source.left + (left * source.width.toDouble() / width.toDouble()).roundToInt()
-        val mappedTop = source.top + (top * source.height.toDouble() / height.toDouble()).roundToInt()
-        val mappedRight =
-            source.left + (right * source.width.toDouble() / width.toDouble()).roundToInt()
-        val mappedBottom =
-            source.top + (bottom * source.height.toDouble() / height.toDouble()).roundToInt()
+        val mappedLeft = source.left + (left * source.width.toDouble() / size.toDouble()).roundToInt()
+        val mappedTop = source.top + (top * source.height.toDouble() / size.toDouble()).roundToInt()
+        val mappedRight = source.left + (right * source.width.toDouble() / size.toDouble()).roundToInt()
+        val mappedBottom = source.top + (bottom * source.height.toDouble() / size.toDouble()).roundToInt()
         return Rect(
             mappedLeft.coerceIn(source.left, source.left + source.width - 1),
             mappedTop.coerceIn(source.top, source.top + source.height - 1),
             mappedRight.coerceIn(source.left + 1, source.left + source.width),
             mappedBottom.coerceIn(source.top + 1, source.top + source.height),
         )
-    }
-
-    private fun computeMotionScore(source: ImageFrame): Double {
-        val sample = sampleFrame(source, 20)
-        val current = FloatArray(sample.pixels.size)
-        for (index in sample.pixels.indices) {
-            current[index] = colorLuma(sample.pixels[index]).toFloat()
-        }
-
-        val previous = previousMotionSample
-        previousMotionSample = current
-        if (previous == null || previous.size != current.size) {
-            return 0.0
-        }
-
-        var total = 0.0
-        for (index in current.indices) {
-            total += abs(current[index] - previous[index])
-        }
-        return min(1.0, total / current.size.toDouble())
-    }
-
-    private fun extractTargetColors(source: ImageFrame, motionScore: Double): Map<String, RgbColor> {
-        return if (effectiveMode == "single") {
-            val sampled = sampleFrame(source, sampleSize)
-            val extracted = if (colorAlgorithm == "auto") {
-                extractCinematicSingleColor(sampled)
-            } else {
-                extractColor(sampled)
-            }
-            val enhanced = enhanceColor(mapSourceColorToSrgb(extracted))
-            val held = applyCinematicPaletteHold(enhanced, previousSingleColor, motionScore)
-            previousSingleColor = held
-            mapOf("all" to held)
-        } else {
-            previousSingleColor = null
-            val targets = mutableMapOf<String, RgbColor>()
-            for (region in bulbTargets.map { it.region }.toSet()) {
-                val regionFrame = cropRelativeRegion(source, region)
-                val sampled = sampleFrame(regionFrame, sampleSize)
-                val color = enhanceColor(mapSourceColorToSrgb(extractColor(sampled)))
-                targets[region] = color
-            }
-            targets
-        }
-    }
-
-    private fun normalizeAlgorithm(raw: String?): String {
-        return when (raw?.lowercase()) {
-            "auto", "weighted", "kmeans", "histogram" -> raw.lowercase()
-            else -> "auto"
-        }
-    }
-
-    private fun normalizeColorSpace(raw: String?): String {
-        return when (raw?.lowercase()?.replace("_", "-")) {
-            "p3", "display-p3" -> "display-p3"
-            "bt2020", "bt.2020", "rec-2020", "rec2020" -> "rec2020"
-            else -> "srgb"
-        }
-    }
-
-    private fun extractColor(sample: SampledFrame): RgbColor {
-        return when (colorAlgorithm) {
-            "weighted" -> extractWeightedColor(sample)
-            "histogram" -> extractHistogramColor(sample)
-            "kmeans" -> extractKMeansColor(sample)
-            else -> extractBalancedAutoColor(sample)
-        }
-    }
-
-    private fun extractHistogramColor(sample: SampledFrame): RgbColor {
-        val binSize = 32
-        val bins = HashMap<Int, Int>()
-        val sums = HashMap<Int, IntArray>()
-        for (pixel in sample.pixels) {
-            val r = Color.red(pixel)
-            val g = Color.green(pixel)
-            val b = Color.blue(pixel)
-            val qr = (r / binSize).coerceIn(0, 7)
-            val qg = (g / binSize).coerceIn(0, 7)
-            val qb = (b / binSize).coerceIn(0, 7)
-            val key = (qr shl 6) or (qg shl 3) or qb
-            bins[key] = (bins[key] ?: 0) + 1
-            val sum = sums.getOrPut(key) { intArrayOf(0, 0, 0) }
-            sum[0] += r
-            sum[1] += g
-            sum[2] += b
-        }
-
-        val dominant = bins.maxByOrNull { it.value }?.key
-        if (dominant == null) {
-            return extractWeightedColor(sample)
-        }
-        val total = max(1, bins[dominant] ?: 1)
-        val sum = sums[dominant] ?: intArrayOf(128, 128, 128)
-        return RgbColor(sum[0] / total, sum[1] / total, sum[2] / total)
-    }
-
-    private fun extractKMeansColor(sample: SampledFrame): RgbColor {
-        if (sample.pixels.isEmpty()) {
-            return RgbColor(128, 128, 128)
-        }
-
-        val clusterCount = 3
-        val centroids = Array(clusterCount) { index ->
-            val pixel = sample.pixels[(index * sample.pixels.size / clusterCount).coerceIn(0, sample.pixels.size - 1)]
-            floatArrayOf(Color.red(pixel).toFloat(), Color.green(pixel).toFloat(), Color.blue(pixel).toFloat())
-        }
-
-        repeat(5) {
-            val sums = Array(clusterCount) { floatArrayOf(0f, 0f, 0f) }
-            val counts = IntArray(clusterCount)
-
-            for (pixel in sample.pixels) {
-                val r = Color.red(pixel).toFloat()
-                val g = Color.green(pixel).toFloat()
-                val b = Color.blue(pixel).toFloat()
-
-                var bestIndex = 0
-                var bestDistance = Double.MAX_VALUE
-                for (index in centroids.indices) {
-                    val dr = r - centroids[index][0]
-                    val dg = g - centroids[index][1]
-                    val db = b - centroids[index][2]
-                    val distance = (dr * dr + dg * dg + db * db).toDouble()
-                    if (distance < bestDistance) {
-                        bestDistance = distance
-                        bestIndex = index
-                    }
-                }
-
-                sums[bestIndex][0] += r
-                sums[bestIndex][1] += g
-                sums[bestIndex][2] += b
-                counts[bestIndex] += 1
-            }
-
-            for (index in centroids.indices) {
-                if (counts[index] == 0) {
-                    continue
-                }
-                centroids[index][0] = sums[index][0] / counts[index]
-                centroids[index][1] = sums[index][1] / counts[index]
-                centroids[index][2] = sums[index][2] / counts[index]
-            }
-        }
-
-        var dominantIndex = 0
-        var dominantScore = -1.0
-        for (index in centroids.indices) {
-            val saturation = rgbSaturation(
-                centroids[index][0].roundToInt(),
-                centroids[index][1].roundToInt(),
-                centroids[index][2].roundToInt(),
-            )
-            val luma = rgbLuma(
-                centroids[index][0].roundToInt(),
-                centroids[index][1].roundToInt(),
-                centroids[index][2].roundToInt(),
-            )
-            val score = saturation * 0.75 + luma * 0.25
-            if (score > dominantScore) {
-                dominantScore = score
-                dominantIndex = index
-            }
-        }
-
-        val chosen = centroids[dominantIndex]
-        return RgbColor(
-            chosen[0].roundToInt().coerceIn(0, 255),
-            chosen[1].roundToInt().coerceIn(0, 255),
-            chosen[2].roundToInt().coerceIn(0, 255),
-        )
-    }
-
-    private fun applyPredictiveTarget(ip: String, target: RgbColor, motionScore: Double): RgbColor {
-        if (!predictiveSmoothing) {
-            predictionTargets[ip] = target
-            return target
-        }
-
-        val previous = predictionTargets[ip]
-        predictionTargets[ip] = target
-        if (previous == null) {
-            return target
-        }
-
-        val normalizedMotion = min(1.0, motionScore / 0.05)
-        val weight = predictionWeight * (1.0 - normalizedMotion)
-        if (weight <= 0.0) {
-            return target
-        }
-
-        val predicted = RgbColor(
-            (target.r + (target.r - previous.r) * weight).roundToInt().coerceIn(0, 255),
-            (target.g + (target.g - previous.g) * weight).roundToInt().coerceIn(0, 255),
-            (target.b + (target.b - previous.b) * weight).roundToInt().coerceIn(0, 255),
-        )
-        return blendColors(target, predicted, weight)
     }
 
     private fun cropRelativeRegion(source: ImageFrame, region: String): ImageFrame {
@@ -732,7 +414,6 @@ class ScreenCaptureService : Service() {
                 source.left + source.width,
                 source.top + (source.height * 0.92).roundToInt(),
             )
-
             else -> Rect(
                 source.left,
                 source.top + (source.height * 0.08).roundToInt(),
@@ -740,20 +421,14 @@ class ScreenCaptureService : Service() {
                 source.top + (source.height * 0.92).roundToInt(),
             )
         }
-
         val left = rect.left.coerceIn(source.left, source.left + source.width - 1)
         val top = rect.top.coerceIn(source.top, source.top + source.height - 1)
         val right = rect.right.coerceIn(left + 1, source.left + source.width)
         val bottom = rect.bottom.coerceIn(top + 1, source.top + source.height)
-        return source.copy(
-            left = left,
-            top = top,
-            width = right - left,
-            height = bottom - top,
-        )
+        return source.copy(left = left, top = top, width = right - left, height = bottom - top)
     }
 
-    private fun sampleFrame(source: ImageFrame, size: Int): SampledFrame {
+    private fun sampleGrid(source: ImageFrame, size: Int): IntArray {
         val pixels = IntArray(size * size)
         val maxX = max(1, source.width - 1)
         val maxY = max(1, source.height - 1)
@@ -764,7 +439,7 @@ class ScreenCaptureService : Service() {
                 pixels[y * size + x] = pixelAt(source, sourceX, sourceY)
             }
         }
-        return SampledFrame(pixels = pixels, width = size, height = size)
+        return pixels
     }
 
     private fun pixelAt(source: ImageFrame, x: Int, y: Int): Int {
@@ -772,579 +447,37 @@ class ScreenCaptureService : Service() {
         val absoluteY = (source.top + y).coerceIn(0, source.sourceHeight - 1)
         val offset = absoluteY * source.rowStride + absoluteX * source.pixelStride
         val buffer = source.buffer
+        if (hdrCaptureActive && source.pixelStride >= 8) {
+            if (offset + 5 >= buffer.limit()) return Color.argb(255, 0, 0, 0)
+            return engine.fp16PqPixelToSrgbArgb(
+                buffer.getShort(offset),
+                buffer.getShort(offset + 2),
+                buffer.getShort(offset + 4),
+            )
+        }
         val red = buffer.get(offset).toInt() and 0xFF
         val green = buffer.get(offset + 1).toInt() and 0xFF
         val blue = buffer.get(offset + 2).toInt() and 0xFF
-        val alpha =
-            if (offset + 3 < buffer.limit()) buffer.get(offset + 3).toInt() and 0xFF else 0xFF
+        val alpha = if (offset + 3 < buffer.limit()) buffer.get(offset + 3).toInt() and 0xFF else 0xFF
         return Color.argb(alpha, red, green, blue)
     }
 
-    private fun extractBalancedAutoColor(sample: SampledFrame): RgbColor {
-        val weighted = extractWeightedColor(sample)
-        val accent = extractVibrantAccent(sample)
-        val saturationMean = averageSaturation(sample)
-        val vividRatio = vividRatio(sample, saturationThreshold = 0.35, lumaThreshold = 0.08)
-        val sceneEnergy = min(1.0, vividRatio * 2.2 + saturationMean * 1.8)
-
-        var accentWeight = 0.10 + sceneEnergy * 0.25
-        if (sceneEnergy < 0.35) {
-            accentWeight *= 0.5
-        }
-        return blendColors(weighted, accent, accentWeight)
-    }
-
-    private fun extractCinematicSingleColor(sample: SampledFrame): RgbColor {
-        val weighted = extractWeightedColor(sample)
-        val accent = extractVibrantAccent(sample)
-        val palette = extractPaletteAnchor(sample)
-        val saturationMean = averageSaturation(sample)
-        val vividRatio = vividRatio(sample, saturationThreshold = 0.32, lumaThreshold = 0.08)
-        val averageLuma = averageLuma(sample)
-
-        if (averageLuma < 0.03 && saturationMean < 0.04) {
-            return weighted
-        }
-
-        var accentWeight = 0.18 + min(0.34, saturationMean * 0.55 + vividRatio * 0.22)
-        var paletteWeight =
-            0.10 + min(0.26, vividRatio * 0.35 + max(0.0, saturationMean - 0.12) * 0.5)
-
-        if (saturationMean < 0.12) {
-            paletteWeight *= 0.5
-        }
-        if (saturationMean < 0.08 && averageLuma > 0.18) {
-            accentWeight *= 0.75
-        }
-
-        return blendColors(
-            blendColors(weighted, accent, accentWeight),
-            palette,
-            paletteWeight,
-        )
-    }
-
-    private fun extractWeightedColor(sample: SampledFrame): RgbColor {
-        val border = max(1, min(sample.width, sample.height) / 6)
-        var totalR = 0.0
-        var totalG = 0.0
-        var totalB = 0.0
-        var totalWeight = 0.0
-
-        for (y in 0 until sample.height) {
-            for (x in 0 until sample.width) {
-                val pixel = sample.pixels[y * sample.width + x]
-                val r = Color.red(pixel)
-                val g = Color.green(pixel)
-                val b = Color.blue(pixel)
-                val saturation = rgbSaturation(r, g, b)
-                val luma = rgbLuma(r, g, b)
-                var weight = 0.15 + saturation * 2.2 + luma * 0.5
-                if (
-                    x < border || y < border ||
-                    x >= sample.width - border || y >= sample.height - border
-                ) {
-                    weight *= edgeWeight
-                }
-                totalR += r * weight
-                totalG += g * weight
-                totalB += b * weight
-                totalWeight += weight
-            }
-        }
-
-        if (totalWeight <= 0.0) {
-            return RgbColor(128, 128, 128)
-        }
-        return RgbColor(
-            (totalR / totalWeight).roundToInt().coerceIn(0, 255),
-            (totalG / totalWeight).roundToInt().coerceIn(0, 255),
-            (totalB / totalWeight).roundToInt().coerceIn(0, 255),
-        )
-    }
-
-    private fun extractVibrantAccent(sample: SampledFrame): RgbColor {
-        val energies = DoubleArray(sample.pixels.size)
-        for (index in sample.pixels.indices) {
-            val pixel = sample.pixels[index]
-            val saturation = rgbSaturation(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
-            val luma = colorLuma(pixel)
-            energies[index] = saturation * 0.8 + luma * 0.2
-        }
-        val sorted = energies.sorted()
-        val thresholdIndex = max(0, (sorted.size * 0.8).toInt() - 1)
-        val threshold = sorted[thresholdIndex]
-
-        var totalR = 0.0
-        var totalG = 0.0
-        var totalB = 0.0
-        var count = 0
-        for (index in sample.pixels.indices) {
-            if (energies[index] < threshold) {
-                continue
-            }
-            val pixel = sample.pixels[index]
-            totalR += Color.red(pixel)
-            totalG += Color.green(pixel)
-            totalB += Color.blue(pixel)
-            count += 1
-        }
-
-        if (count == 0) {
-            return extractWeightedColor(sample)
-        }
-        return RgbColor(
-            (totalR / count).roundToInt().coerceIn(0, 255),
-            (totalG / count).roundToInt().coerceIn(0, 255),
-            (totalB / count).roundToInt().coerceIn(0, 255),
-        )
-    }
-
-    private fun extractPaletteAnchor(sample: SampledFrame): RgbColor {
-        val energies = DoubleArray(sample.pixels.size)
-        for (index in sample.pixels.indices) {
-            val pixel = sample.pixels[index]
-            val saturation = rgbSaturation(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
-            val luma = colorLuma(pixel)
-            energies[index] = saturation * 0.9 + max(0.0, 0.65 - abs(luma - 0.42)) * 0.1
-        }
-        val sorted = energies.sorted()
-        val thresholdIndex = max(0, (sorted.size * 0.9).toInt() - 1)
-        val threshold = sorted[thresholdIndex]
-
-        var totalR = 0.0
-        var totalG = 0.0
-        var totalB = 0.0
-        var count = 0
-        for (index in sample.pixels.indices) {
-            val pixel = sample.pixels[index]
-            if (energies[index] < threshold || colorLuma(pixel) <= 0.05) {
-                continue
-            }
-            totalR += Color.red(pixel)
-            totalG += Color.green(pixel)
-            totalB += Color.blue(pixel)
-            count += 1
-        }
-
-        if (count == 0) {
-            return extractVibrantAccent(sample)
-        }
-        return RgbColor(
-            (totalR / count).roundToInt().coerceIn(0, 255),
-            (totalG / count).roundToInt().coerceIn(0, 255),
-            (totalB / count).roundToInt().coerceIn(0, 255),
-        )
-    }
-
-    private fun averageSaturation(sample: SampledFrame): Double {
-        var total = 0.0
-        for (pixel in sample.pixels) {
-            total += rgbSaturation(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
-        }
-        return total / sample.pixels.size.toDouble()
-    }
-
-    private fun averageLuma(sample: SampledFrame): Double {
-        var total = 0.0
-        for (pixel in sample.pixels) {
-            total += colorLuma(pixel)
-        }
-        return total / sample.pixels.size.toDouble()
-    }
-
-    private fun vividRatio(
-        sample: SampledFrame,
-        saturationThreshold: Double,
-        lumaThreshold: Double,
-    ): Double {
-        var count = 0
-        for (pixel in sample.pixels) {
-            val r = Color.red(pixel)
-            val g = Color.green(pixel)
-            val b = Color.blue(pixel)
-            if (rgbSaturation(r, g, b) > saturationThreshold && rgbLuma(r, g, b) > lumaThreshold) {
-                count += 1
-            }
-        }
-        return count.toDouble() / sample.pixels.size.toDouble()
-    }
-
-    private fun buildBulbColorMap(targetColors: Map<String, RgbColor>): Map<String, RgbColor> {
-        if (bulbTargets.isEmpty() || targetColors.isEmpty()) {
-            return emptyMap()
-        }
-
-        if (effectiveMode != "zones" || targetColors.containsKey("all")) {
-            val single = targetColors["all"] ?: averageColors(targetColors.values.toList())
-            return bulbTargets.associate { it.ip to single }
-        }
-
-        val fallback = averageColors(targetColors.values.toList())
-        return bulbTargets.associate { bulb ->
-            bulb.ip to (targetColors[bulb.region] ?: fallback)
-        }
-    }
-
-    private fun blendColors(base: RgbColor, accent: RgbColor, weight: Double): RgbColor {
-        val accentWeight = weight.coerceIn(0.0, 1.0)
-        val baseWeight = 1.0 - accentWeight
-        return RgbColor(
-            (base.r * baseWeight + accent.r * accentWeight).roundToInt().coerceIn(0, 255),
-            (base.g * baseWeight + accent.g * accentWeight).roundToInt().coerceIn(0, 255),
-            (base.b * baseWeight + accent.b * accentWeight).roundToInt().coerceIn(0, 255),
-        )
-    }
-
-    private fun mapSourceColorToSrgb(color: RgbColor): RgbColor {
-        if (sourceColorSpace == "srgb" && !hdrToneMapping) {
-            return color
-        }
-
-        val linear = doubleArrayOf(
-            srgbDecode(color.r / 255.0),
-            srgbDecode(color.g / 255.0),
-            srgbDecode(color.b / 255.0),
-        )
-        val converted = when (sourceColorSpace) {
-            "display-p3" -> multiplyColorMatrix(DISPLAY_P3_TO_SRGB, linear)
-            "rec2020" -> multiplyColorMatrix(REC2020_TO_SRGB, linear)
-            else -> linear
-        }
-        val compressed = compressToSrgb(converted)
-        val mapped = if (hdrToneMapping) acesToneMap(compressed) else compressed
-        return RgbColor(
-            (srgbEncode(mapped[0]) * 255.0).roundToInt().coerceIn(0, 255),
-            (srgbEncode(mapped[1]) * 255.0).roundToInt().coerceIn(0, 255),
-            (srgbEncode(mapped[2]) * 255.0).roundToInt().coerceIn(0, 255),
-        )
-    }
-
-    private fun multiplyColorMatrix(matrix: Array<DoubleArray>, color: DoubleArray): DoubleArray {
-        return doubleArrayOf(
-            matrix[0][0] * color[0] + matrix[0][1] * color[1] + matrix[0][2] * color[2],
-            matrix[1][0] * color[0] + matrix[1][1] * color[1] + matrix[1][2] * color[2],
-            matrix[2][0] * color[0] + matrix[2][1] * color[1] + matrix[2][2] * color[2],
-        )
-    }
-
-    private fun compressToSrgb(color: DoubleArray): DoubleArray {
-        return DoubleArray(3) { index ->
-            val value = max(0.0, color[index])
-            if (value <= 0.82) {
-                value
-            } else {
-                0.82 + 0.18 * (1.0 - kotlin.math.exp(-((value - 0.82) / 0.18) * 2.5))
-            }.coerceIn(0.0, 1.0)
-        }
-    }
-
-    private fun acesToneMap(color: DoubleArray): DoubleArray {
-        return DoubleArray(3) { index ->
-            val x = max(0.0, color[index]) * 4.5
-            ((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)).coerceIn(0.0, 1.0)
-        }
-    }
-
-    private fun srgbDecode(value: Double): Double {
-        val v = value.coerceIn(0.0, 1.0)
-        return if (v <= 0.04045) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4)
-    }
-
-    private fun srgbEncode(value: Double): Double {
-        val v = value.coerceIn(0.0, 1.0)
-        return if (v <= 0.0031308) v * 12.92 else 1.055 * Math.pow(v, 1.0 / 2.4) - 0.055
-    }
-
-    private fun enhanceColor(color: RgbColor): RgbColor {
-        lastEffectiveColorBoost = colorBoost
-        val mean = (color.r + color.g + color.b) / 3.0
-        var red = mean + (color.r - mean) * colorBoost
-        var green = mean + (color.g - mean) * colorBoost
-        var blue = mean + (color.b - mean) * colorBoost
-
-        val peak = max(1.0, max(red, max(green, blue)))
-        if (peak < minBrightness) {
-            val scale = minBrightness / peak
-            red *= scale
-            green *= scale
-            blue *= scale
-        }
-
-        return RgbColor(
-            red.roundToInt().coerceIn(0, 255),
-            green.roundToInt().coerceIn(0, 255),
-            blue.roundToInt().coerceIn(0, 255),
-        )
-    }
-
-    private fun applyCinematicPaletteHold(
-        target: RgbColor,
-        previous: RgbColor?,
-        motionScore: Double,
-    ): RgbColor {
-        previous ?: return target
-
-        val targetSaturation = colorSaturation(target)
-        val previousSaturation = colorSaturation(previous)
-        val targetLuma = colorLuma(target)
-
-        if (targetLuma < 0.035) {
-            return target
-        }
-        if (motionScore > 0.045) {
-            return target
-        }
-        if (previousSaturation < 0.12) {
-            return target
-        }
-        if (targetSaturation >= previousSaturation * 0.92) {
-            return target
-        }
-
-        var holdStrength = min(0.34, max(0.0, (previousSaturation - targetSaturation) * 0.85))
-        holdStrength *= max(0.0, 1.0 - min(1.0, motionScore / 0.03))
-
-        if (targetSaturation < 0.12 && targetLuma < 0.55) {
-            holdStrength = min(0.4, holdStrength + 0.08)
-        }
-
-        if (holdStrength <= 0.01) {
-            return target
-        }
-        return blendColors(target, previous, holdStrength)
-    }
-
-    private fun smoothColor(current: RgbColor, target: RgbColor, factor: Double): RgbColor {
-        return RgbColor(
-            (current.r + (target.r - current.r) * factor).roundToInt().coerceIn(0, 255),
-            (current.g + (target.g - current.g) * factor).roundToInt().coerceIn(0, 255),
-            (current.b + (target.b - current.b) * factor).roundToInt().coerceIn(0, 255),
-        )
-    }
-
-    private fun averageColors(colors: List<RgbColor>): RgbColor {
-        if (colors.isEmpty()) {
-            return RgbColor(128, 128, 128)
-        }
-        var totalR = 0
-        var totalG = 0
-        var totalB = 0
-        for (color in colors) {
-            totalR += color.r
-            totalG += color.g
-            totalB += color.b
-        }
-        return RgbColor(
-            totalR / colors.size,
-            totalG / colors.size,
-            totalB / colors.size,
-        )
-    }
-
-    private fun colorDistance(first: RgbColor, second: RgbColor): Int {
-        return abs(first.r - second.r) + abs(first.g - second.g) + abs(first.b - second.b)
-    }
-
-    private fun colorSaturation(color: RgbColor): Double {
-        return rgbSaturation(color.r, color.g, color.b)
-    }
-
-    private fun colorLuma(color: RgbColor): Double {
-        return rgbLuma(color.r, color.g, color.b)
-    }
-
-    private fun colorLuma(pixel: Int): Double {
-        return rgbLuma(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
-    }
-
-    private fun rgbSaturation(r: Int, g: Int, b: Int): Double {
-        val maxChannel = max(r, max(g, b)) / 255.0
-        val minChannel = min(r, min(g, b)) / 255.0
-        return maxChannel - minChannel
-    }
-
-    private fun rgbLuma(r: Int, g: Int, b: Int): Double {
-        return (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255.0
-    }
-
-    private fun updateAdaptiveFps(motionScore: Double) {
-        if (!adaptiveFps) {
-            currentFps = maxFps
-            return
-        }
-        val normalized = min(1.0, motionScore / 0.05)
-        currentFps = (minFps + (maxFps - minFps) * normalized).roundToInt().coerceIn(minFps, maxFps)
-    }
-
-    private fun targetSmoothing(motionScore: Double): Double {
-        val normalized = min(1.0, motionScore / 0.03)
-        var factor = smoothing * (0.72 + normalized * 0.9)
-        if (effectiveMode == "single") {
-            factor *= 0.95 + normalized * 0.2
-        }
-        return factor.coerceIn(0.06, 0.9)
-    }
-
-    private fun sendDeltaThreshold(motionScore: Double): Int {
-        if (!adaptiveFps) {
-            return minColorDelta
-        }
-        val motionFactor = min(1.0, motionScore / 0.05)
-        val staticExtra = ((1.0 - motionFactor) * 14.0).roundToInt()
-        return max(minColorDelta, minColorDelta + staticExtra)
-    }
-
-    private fun mapToWizPilotColor(color: RgbColor): WizPilotColor {
-        var red = color.r / 255.0
-        var green = color.g / 255.0
-        var blue = color.b / 255.0
-
-        var hueX =
-            wizBasis[0][0] * red +
-                wizBasis[1][0] * green +
-                wizBasis[2][0] * blue
-        var hueY =
-            wizBasis[0][1] * red +
-                wizBasis[1][1] * green +
-                wizBasis[2][1] * blue
-
-        val epsilon = 1.0e-5
-        val hueLength = sqrt(hueX * hueX + hueY * hueY)
-        var saturation = hueLength
-        if (saturation > epsilon) {
-            hueX /= saturation
-            hueY /= saturation
-        }
-
-        val rgb = DoubleArray(3)
-        if (saturation > epsilon) {
-            val maxAngle = cos((2.0 * PI / 3.0) - epsilon)
-            val mask =
-                IntArray(3) { index ->
-                    if (hueX * wizBasis[index][0] + hueY * wizBasis[index][1] > maxAngle) 1 else 0
-                }
-            val activeCount = mask.sum()
-
-            if (activeCount <= 1) {
-                if (activeCount == 0) {
-                    val maxChannelIndex = listOf(red, green, blue).indices.maxByOrNull { index ->
-                        listOf(red, green, blue)[index]
-                    } ?: 0
-                    rgb[maxChannelIndex] = 1.0
-                } else {
-                    rgb[0] = mask[0].toDouble()
-                    rgb[1] = mask[1].toDouble()
-                    rgb[2] = mask[2].toDouble()
-                }
-            } else {
-                val active = mask.indices.filter { mask[it] == 1 }
-                val first = wizBasis[active.first()]
-                val second = wizBasis[active.last()]
-                val abX = second[1]
-                val abY = -second[0]
-                val coeff0 = (hueX * abX + hueY * abY) / (first[0] * abX + first[1] * abY)
-                val intersectionX = hueX - first[0] * coeff0
-                val intersectionY = hueY - first[1] * coeff0
-                val coeff1 = intersectionX * second[0] + intersectionY * second[1]
-                val maxCoeff = max(coeff0, coeff1).coerceAtLeast(epsilon)
-                val scaled0 = coeff0 / maxCoeff
-                val scaled1 = coeff1 / maxCoeff
-                var activeIndex = 0
-                for (index in 0..2) {
-                    if (mask[index] == 1) {
-                        rgb[index] = min(1.0, if (activeIndex == 0) scaled0 else scaled1)
-                        activeIndex += 1
-                    }
-                }
-            }
-        }
-
-        val warmWhiteFraction: Double
-        if (saturation >= 0.5) {
-            warmWhiteFraction = 1.0 - ((saturation - 0.5) * 2.0)
-        } else {
-            warmWhiteFraction = 1.0
-            val scale = saturation * 2.0
-            rgb[0] *= scale
-            rgb[1] *= scale
-            rgb[2] *= scale
-        }
-
-        return WizPilotColor(
-            rgb =
-                RgbColor(
-                    (rgb[0] * 255.0).roundToInt().coerceIn(0, 255),
-                    (rgb[1] * 255.0).roundToInt().coerceIn(0, 255),
-                    (rgb[2] * 255.0).roundToInt().coerceIn(0, 255),
-                ),
-            warmWhite = max(0, (warmWhiteFraction * 128.0).roundToInt()),
-        )
-    }
-
-    private fun sendColor(ip: String, color: RgbColor) {
-        val mapped = mapToWizPilotColor(color)
-        val isOn =
-            mapped.rgb.r > 0 ||
-                mapped.rgb.g > 0 ||
-                mapped.rgb.b > 0 ||
-                mapped.warmWhite > 0
-
-        val cacheKey =
-            "${if (isOn) 1 else 0}:${mapped.rgb.r}:${mapped.rgb.g}:${mapped.rgb.b}:${mapped.warmWhite}"
-        val payload = packetCache.getOrPut(cacheKey) {
-            (
-                """{"method":"setPilot","params":{"state":$isOn,""" +
-                    """"r":${mapped.rgb.r},"g":${mapped.rgb.g},"b":${mapped.rgb.b},""" +
-                    """"c":0,"w":${mapped.warmWhite}}}"""
-                ).toByteArray(StandardCharsets.UTF_8)
-        }
-
-        val address = addressCache.getOrPut(ip) { InetAddress.getByName(ip) }
-        val packet = DatagramPacket(payload, payload.size, address, WIZ_PORT)
-        udpSocket?.send(packet)
-    }
-
-    private fun maybePostStatus(
-        outputColors: Map<String, RgbColor>,
-        smoothingFactor: Double,
-    ) {
+    private fun maybePostStatus() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastStatusUpdateAt < 350L) {
             return
         }
         lastStatusUpdateAt = now
 
-        val intervalAverage = if (sendIntervalsMs.isEmpty()) 0.0 else sendIntervalsMs.average()
-        val sendRateHz = if (intervalAverage > 0.0) 1000.0 / intervalAverage else 0.0
         val frameTimeMs = if (frameTimesMs.isEmpty()) 0.0 else frameTimesMs.average()
+        val payload = HashMap<String, Any?>(engine.statusExtras())
+        payload["frameTimeMs"] = frameTimeMs
+        payload["captureBackend"] = "mediaprojection"
+        payload["hdrCaptureActive"] = hdrCaptureActive
+        payload["captureBufferFormat"] = captureBufferFormat
+        payload["lastError"] = lastError
 
-        val payload = mapOf(
-            "mode" to effectiveMode,
-            "requestedFps" to maxFps,
-            "currentFps" to currentFps,
-            "frameTimeMs" to frameTimeMs,
-            "sendRateHz" to sendRateHz,
-            "motionScore" to lastMotionScore,
-            "smoothing" to smoothingFactor,
-            "smoothingFactor" to smoothingFactor,
-            "effectiveColorBoost" to lastEffectiveColorBoost,
-            "minBrightness" to minBrightness,
-            "deltaThreshold" to lastDeltaThreshold,
-            "captureBackend" to "mediaprojection",
-            "colorAlgorithm" to colorAlgorithm,
-            "sourceColorSpace" to sourceColorSpace,
-            "hdrToneMapping" to hdrToneMapping,
-            "predictiveSmoothing" to predictiveSmoothing,
-            "updatesSent" to updatesSent,
-            "targetColors" to lastTargetColors.mapValues { listOf(it.value.r, it.value.g, it.value.b) },
-            "outputColors" to outputColors.mapValues { listOf(it.value.r, it.value.g, it.value.b) },
-            "lastError" to lastError,
-        )
-
-        mainHandler.post {
-            methodChannel?.invokeMethod("onSyncUpdate", payload)
-        }
+        SyncBridge.post("onSyncUpdate", payload)
     }
 
     private fun stopCapture(stopProjection: Boolean = true) {
@@ -1367,8 +500,7 @@ class ScreenCaptureService : Service() {
             projection.stop()
         }
 
-        udpSocket?.close()
-        udpSocket = null
+        engine.close()
     }
 
     private fun createNotificationChannel() {

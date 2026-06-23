@@ -79,6 +79,8 @@ class BulbController:
         self._calibration_tables: dict[str, BulbCalibrationTable] = {}
         self._tone_tables: dict[str, BulbCalibrationTable] = {}
         self._screen_sync_source_color_space = "srgb"
+        self._screen_sync_device_profile = "generic"
+        self._screen_sync_cool_mix_bias = 0.0
     
     async def discover(self, broadcast_space: str = "192.168.1.255") -> list[dict]:
         """
@@ -158,6 +160,8 @@ class BulbController:
             fade_in_ms=int(user_result.get("fadeIn", 0)),
             fade_out_ms=int(user_result.get("fadeOut", 0)),
             source_color_space=self._screen_sync_source_color_space,
+            device_profile=self._screen_sync_device_profile,
+            cool_mix_bias=self._screen_sync_cool_mix_bias,
         )
         calibration = self._load_calibration(profile.mac, ip)
         tone_lut = self._load_tone_lut(profile.mac, ip)
@@ -172,6 +176,8 @@ class BulbController:
                 fade_in_ms=profile.fade_in_ms,
                 fade_out_ms=profile.fade_out_ms,
                 source_color_space=profile.source_color_space,
+                device_profile=profile.device_profile,
+                cool_mix_bias=profile.cool_mix_bias,
             )
         self._color_profiles[ip] = profile
         self._gamut_mappers[ip] = BulbGamutMapper(
@@ -278,12 +284,26 @@ class BulbController:
         self,
         ips: list[str],
         source_color_space: str = "srgb",
+        device_profile: str = "generic",
+        cool_mix_bias: float = 0.0,
     ) -> None:
         """Preload per-bulb screen-sync mappers for synchronous real-time sends."""
 
         normalized_space = self._normalize_source_color_space(source_color_space)
-        if normalized_space != self._screen_sync_source_color_space:
+        normalized_profile = str(device_profile).lower().replace("-", "_")
+        if normalized_profile not in {"generic", "mac", "bravia", "wide_gamut_hdr"}:
+            normalized_profile = "generic"
+        bias = float(cool_mix_bias)
+
+        rebuild = (
+            normalized_space != self._screen_sync_source_color_space
+            or normalized_profile != self._screen_sync_device_profile
+            or abs(bias - self._screen_sync_cool_mix_bias) > 1e-6
+        )
+        if rebuild:
             self._screen_sync_source_color_space = normalized_space
+            self._screen_sync_device_profile = normalized_profile
+            self._screen_sync_cool_mix_bias = bias
             self.invalidate_screen_sync_mapping(ips)
 
         await asyncio.gather(

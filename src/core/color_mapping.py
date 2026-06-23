@@ -86,6 +86,10 @@ class BulbColorProfile:
     fade_in_ms: int = 0
     fade_out_ms: int = 0
     source_color_space: str = "srgb"                   # NEW: gamut of input colours
+    device_profile: str = "generic"                    # "generic" | "bravia" | "wide_gamut_hdr" | "mac"
+    cct_warm_kelvin: float = 2700.0
+    cct_cool_kelvin: float = 6500.0
+    cool_mix_bias: float = 0.0                         # added to coolMix per profile (Bravia: +0.10)
 
     @property
     def white_ratio(self) -> float:
@@ -263,11 +267,27 @@ class BulbGamutMapper:
         if not self._dual_white:
             return np.concatenate((rgb_enc, w_enc[..., None]), axis=-1)
 
-        # Derive cold/warm fraction from the input's blue/red energy.
-        # Use the original linearised source (not balanced) for colour-temperature cue.
-        blue_e  = np.clip(linear[..., 2], 0.0, 1.0)
-        red_e   = np.clip(linear[..., 0], 0.0, 1.0)
-        cool_raw = blue_e / np.maximum(blue_e + red_e, _EPSILON)
+        # CCT-based cold/warm split (McCamy approximation, vectorised).
+        # We use the linearised source (pre-balance) so the colour-temperature
+        # cue reflects the original scene, not the channel-current correction.
+        rl = np.clip(linear[..., 0], 0.0, 1.0)
+        gl = np.clip(linear[..., 1], 0.0, 1.0)
+        bl = np.clip(linear[..., 2], 0.0, 1.0)
+        X = 0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl
+        Y = 0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl
+        Z = 0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl
+        s = np.maximum(X + Y + Z, _EPSILON)
+        x = X / s
+        y = Y / s
+        denom = 0.1858 - y
+        # When denom is ~0 (achromatic), fall back to mid CCT (5500K)
+        n = np.where(np.abs(denom) > 1e-4, (x - 0.3320) / np.where(np.abs(denom) > 1e-4, denom, 1.0), 0.0)
+        cct = 437.0 * n * n * n + 3601.0 * n * n + 6861.0 * n + 5517.0
+        cct = np.clip(cct, 1500.0, 15000.0)
+        warm_k = float(self.profile.cct_warm_kelvin)
+        cool_k = float(self.profile.cct_cool_kelvin)
+        cool_raw = np.clip((cct - warm_k) / max(cool_k - warm_k, 1.0), 0.0, 1.0)
+        cool_raw = np.clip(cool_raw + float(self.profile.cool_mix_bias), 0.0, 1.0)
 
         # Suppress cold split for saturated colours (avoid blue tint)
         sat_sup   = _smoothstep01(np.clip((0.16 - sat) / 0.16, 0.0, 1.0))

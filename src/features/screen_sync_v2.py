@@ -505,6 +505,41 @@ def apply_cinematic_palette_hold(
     return blend_colors(target, previous, hold_strength)
 
 
+def resolve_auto_display_profile(settings) -> dict:
+    """Resolve auto-detected display gamut/HDR/profile when settings request 'auto'.
+
+    Returns a dict with keys ``source_color_space``, ``hdr_tone_mapping``,
+    ``device_profile``, ``supported_hdr_types``, ``primary_hdr_type``,
+    ``detected_display_gamut``, ``detected_hdr_support``. Safe to call from
+    any thread; falls back silently to current settings if detection fails.
+    """
+    try:
+        from src.core.display_detection import detect_display_profile, cool_mix_bias_for_profile
+    except Exception:
+        return {}
+
+    requested_space = str(getattr(settings, "source_color_space", "auto")).lower()
+    requested_profile = str(getattr(settings, "device_profile", "auto")).lower()
+    requested_hdr_tm = bool(getattr(settings, "hdr_tone_mapping", False))
+
+    detected = detect_display_profile()
+    final_space = detected.source_color_space if requested_space == "auto" else requested_space
+    final_profile = detected.device_profile if requested_profile == "auto" else requested_profile
+    final_hdr_tm = requested_hdr_tm or (
+        requested_space == "auto" and detected.hdr_supported
+    )
+    return {
+        "source_color_space": final_space,
+        "hdr_tone_mapping": final_hdr_tm,
+        "device_profile": final_profile,
+        "supported_hdr_types": detected.supported_hdr_types,
+        "primary_hdr_type": detected.primary_hdr_type,
+        "detected_display_gamut": detected.source_color_space,
+        "detected_hdr_support": detected.hdr_supported,
+        "cool_mix_bias": cool_mix_bias_for_profile(final_profile),
+    }
+
+
 def build_optimized_capture_config(
     settings,
     active_regions: Sequence[str],

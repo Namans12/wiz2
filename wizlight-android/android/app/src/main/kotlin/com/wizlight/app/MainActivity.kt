@@ -11,38 +11,28 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val channelName = "com.wizlight.app/screen_capture"
     private val requestMediaProjection = 1001
+    private val requestPickMedia = 1002
 
     private var methodChannel: MethodChannel? = null
     private var pendingResult: MethodChannel.Result? = null
+    private var pendingPickResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
+        SyncBridge.channel = methodChannel
         methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "requestPermission" -> requestScreenCapturePermission(result)
-                "startCapture" -> startScreenCapture(
-                    bulbsJson = call.argument<String>("bulbsJson") ?: "[]",
-                    mode = call.argument<String>("mode") ?: "single",
-                    minFps = call.argument<Int>("minFps") ?: 10,
-                    maxFps = call.argument<Int>("maxFps") ?: 24,
-                    smoothing = call.argument<Double>("smoothing") ?: 0.2,
-                    sampleSize = call.argument<Int>("sampleSize") ?: 56,
-                    colorBoost = call.argument<Double>("colorBoost") ?: 1.18,
-                    edgeWeight = call.argument<Double>("edgeWeight") ?: 1.5,
-                    colorAlgorithm = call.argument<String>("colorAlgorithm") ?: "auto",
-                    minBrightness = call.argument<Int>("minBrightness") ?: 20,
-                    minColorDelta = call.argument<Int>("minColorDelta") ?: 8,
-                    adaptiveFps = call.argument<Boolean>("adaptiveFps") ?: true,
-                    predictiveSmoothing = call.argument<Boolean>("predictiveSmoothing") ?: true,
-                    ignoreLetterbox = call.argument<Boolean>("ignoreLetterbox") ?: true,
-                    sourceColorSpace = call.argument<String>("sourceColorSpace") ?: "srgb",
-                    hdrToneMapping = call.argument<Boolean>("hdrToneMapping") ?: false,
-                    result = result,
-                )
-
+                "startCapture" -> startScreenCapture(call, result)
                 "stopCapture" -> stopScreenCapture(result)
+                "pickMedia" -> pickMedia(result)
+                "playMedia" -> playMedia(call, result)
+                "stopMedia" -> {
+                    PlayerActivity.stopExternally()
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -52,57 +42,18 @@ class MainActivity : FlutterActivity() {
         pendingResult = result
         val projectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        startActivityForResult(
-            projectionManager.createScreenCaptureIntent(),
-            requestMediaProjection,
-        )
+        startActivityForResult(projectionManager.createScreenCaptureIntent(), requestMediaProjection)
     }
 
-    private fun startScreenCapture(
-        bulbsJson: String,
-        mode: String,
-        minFps: Int,
-        maxFps: Int,
-        smoothing: Double,
-        sampleSize: Int,
-        colorBoost: Double,
-        edgeWeight: Double,
-        colorAlgorithm: String,
-        minBrightness: Int,
-        minColorDelta: Int,
-        adaptiveFps: Boolean,
-        predictiveSmoothing: Boolean,
-        ignoreLetterbox: Boolean,
-        sourceColorSpace: String,
-        hdrToneMapping: Boolean,
-        result: MethodChannel.Result,
-    ) {
+    private fun startScreenCapture(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
         if (ScreenCaptureService.hasProjectionPermission().not()) {
             result.success(false)
             return
         }
-
         val intent = Intent(this, ScreenCaptureService::class.java).apply {
             action = ScreenCaptureService.ACTION_START
-            putExtra(ScreenCaptureService.EXTRA_BULBS_JSON, bulbsJson)
-            putExtra(ScreenCaptureService.EXTRA_MODE, mode)
-            putExtra(ScreenCaptureService.EXTRA_MIN_FPS, minFps)
-            putExtra(ScreenCaptureService.EXTRA_MAX_FPS, maxFps)
-            putExtra(ScreenCaptureService.EXTRA_SMOOTHING, smoothing)
-            putExtra(ScreenCaptureService.EXTRA_SAMPLE_SIZE, sampleSize)
-            putExtra(ScreenCaptureService.EXTRA_COLOR_BOOST, colorBoost)
-            putExtra(ScreenCaptureService.EXTRA_EDGE_WEIGHT, edgeWeight)
-            putExtra(ScreenCaptureService.EXTRA_COLOR_ALGORITHM, colorAlgorithm)
-            putExtra(ScreenCaptureService.EXTRA_MIN_BRIGHTNESS, minBrightness)
-            putExtra(ScreenCaptureService.EXTRA_MIN_COLOR_DELTA, minColorDelta)
-            putExtra(ScreenCaptureService.EXTRA_ADAPTIVE_FPS, adaptiveFps)
-            putExtra(ScreenCaptureService.EXTRA_PREDICTIVE_SMOOTHING, predictiveSmoothing)
-            putExtra(ScreenCaptureService.EXTRA_IGNORE_LETTERBOX, ignoreLetterbox)
-            putExtra(ScreenCaptureService.EXTRA_SOURCE_COLOR_SPACE, sourceColorSpace)
-            putExtra(ScreenCaptureService.EXTRA_HDR_TONE_MAPPING, hdrToneMapping)
+            putCommonSyncExtras(call)
         }
-
-        ScreenCaptureService.setMethodChannel(methodChannel)
         startForegroundService(intent)
         result.success(true)
     }
@@ -115,18 +66,83 @@ class MainActivity : FlutterActivity() {
         result.success(true)
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != requestMediaProjection) {
+    private fun pickMedia(result: MethodChannel.Result) {
+        pendingPickResult = result
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "video/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            startActivityForResult(intent, requestPickMedia)
+        } catch (error: Exception) {
+            pendingPickResult = null
+            result.success(null)
+        }
+    }
+
+    private fun playMedia(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
+        val uri = call.argument<String>("mediaUri")
+        if (uri.isNullOrBlank()) {
+            result.success(false)
             return
         }
-
-        if (resultCode == Activity.RESULT_OK && data != null) {
-            ScreenCaptureService.setMediaProjectionIntent(resultCode, data)
-            pendingResult?.success(true)
-        } else {
-            pendingResult?.success(false)
+        val intent = Intent(this, PlayerActivity::class.java).apply {
+            putExtra(PlayerActivity.EXTRA_MEDIA_URI, uri)
+            putCommonSyncExtras(call)
         }
-        pendingResult = null
+        startActivity(intent)
+        result.success(true)
+    }
+
+    private fun Intent.putCommonSyncExtras(call: io.flutter.plugin.common.MethodCall) {
+        putExtra(ScreenCaptureService.EXTRA_BULBS_JSON, call.argument<String>("bulbsJson") ?: "[]")
+        putExtra(ScreenCaptureService.EXTRA_MODE, call.argument<String>("mode") ?: "single")
+        putExtra(ScreenCaptureService.EXTRA_MIN_FPS, call.argument<Int>("minFps") ?: 10)
+        putExtra(ScreenCaptureService.EXTRA_MAX_FPS, call.argument<Int>("maxFps") ?: 24)
+        putExtra(ScreenCaptureService.EXTRA_SMOOTHING, call.argument<Double>("smoothing") ?: 0.2)
+        putExtra(ScreenCaptureService.EXTRA_SAMPLE_SIZE, call.argument<Int>("sampleSize") ?: 56)
+        putExtra(ScreenCaptureService.EXTRA_COLOR_BOOST, call.argument<Double>("colorBoost") ?: 1.18)
+        putExtra(ScreenCaptureService.EXTRA_EDGE_WEIGHT, call.argument<Double>("edgeWeight") ?: 1.5)
+        putExtra(ScreenCaptureService.EXTRA_COLOR_ALGORITHM, call.argument<String>("colorAlgorithm") ?: "auto")
+        putExtra(ScreenCaptureService.EXTRA_MIN_BRIGHTNESS, call.argument<Int>("minBrightness") ?: 20)
+        putExtra(ScreenCaptureService.EXTRA_MIN_COLOR_DELTA, call.argument<Int>("minColorDelta") ?: 8)
+        putExtra(ScreenCaptureService.EXTRA_ADAPTIVE_FPS, call.argument<Boolean>("adaptiveFps") ?: true)
+        putExtra(ScreenCaptureService.EXTRA_PREDICTIVE_SMOOTHING, call.argument<Boolean>("predictiveSmoothing") ?: true)
+        putExtra(ScreenCaptureService.EXTRA_IGNORE_LETTERBOX, call.argument<Boolean>("ignoreLetterbox") ?: true)
+        putExtra(ScreenCaptureService.EXTRA_SOURCE_COLOR_SPACE, call.argument<String>("sourceColorSpace") ?: "auto")
+        putExtra(ScreenCaptureService.EXTRA_HDR_TONE_MAPPING, call.argument<Boolean>("hdrToneMapping") ?: false)
+        putExtra(ScreenCaptureService.EXTRA_HDR_CAPTURE, call.argument<Boolean>("hdrCapture") ?: false)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        when (requestCode) {
+            requestMediaProjection -> {
+                if (resultCode == Activity.RESULT_OK && data != null) {
+                    ScreenCaptureService.setMediaProjectionIntent(resultCode, data)
+                    pendingResult?.success(true)
+                } else {
+                    pendingResult?.success(false)
+                }
+                pendingResult = null
+            }
+            requestPickMedia -> {
+                val uri = data?.data
+                if (resultCode == Activity.RESULT_OK && uri != null) {
+                    try {
+                        contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    } catch (_: Exception) {
+                    }
+                    pendingPickResult?.success(uri.toString())
+                } else {
+                    pendingPickResult?.success(null)
+                }
+                pendingPickResult = null
+            }
+        }
     }
 }

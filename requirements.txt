@@ -5,7 +5,12 @@ click>=8.0            # CLI framework
 # Screen sync
 mss>=9.0              # Fast screen capture
 Pillow>=10.0          # Image processing
-dxcam>=0.0.5          # GPU screen capture (Windows, optional)
+dxcam>=0.0.5; sys_platform == "win32"          # GPU screen capture (Windows only)
+
+# macOS display gamut detection (Quartz / Core Graphics)
+pyobjc-core>=10.0; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
 
 # Clap detection
 sounddevice>=0.4      # Audio capture

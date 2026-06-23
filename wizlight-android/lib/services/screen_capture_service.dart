@@ -32,6 +32,28 @@ class ScreenCaptureService {
     await _channel.invokeMethod<bool>('stopCapture');
   }
 
+  /// Opens the system document picker for a video file (USB drives appear here
+  /// on Google TV). Returns the picked content URI, or null if cancelled.
+  Future<String?> pickMedia() async {
+    return await _channel.invokeMethod<String>('pickMedia');
+  }
+
+  /// Launches the on-device USB media player and starts driving bulbs from its
+  /// decoded frames (no MediaProjection). [mediaUri] is from [pickMedia].
+  Future<bool> playMedia({
+    required String mediaUri,
+    required List<WizBulb> bulbs,
+    required SyncSettings settings,
+  }) async {
+    final args = Map<String, Object>.from(settings.toMethodArgs(bulbs));
+    args['mediaUri'] = mediaUri;
+    return await _channel.invokeMethod<bool>('playMedia', args) ?? false;
+  }
+
+  Future<void> stopMedia() async {
+    await _channel.invokeMethod<bool>('stopMedia');
+  }
+
   Future<void> _handleMethodCall(MethodCall call) async {
     if (call.method != 'onSyncUpdate') {
       return;
