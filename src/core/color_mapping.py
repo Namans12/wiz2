@@ -141,6 +141,7 @@ class BulbGamutMapper:
         self._dual_white = self.profile.white_channels >= 2
         self._gamut_matrix = self._choose_gamut_matrix()
         self._lookup     = self._build_lookup()
+        self._gray_lookup = self._build_gray_lookup()
 
     # ── Private ────────────────────────────────────────────────────────────────
 
@@ -168,6 +169,24 @@ class BulbGamutMapper:
         grid = np.linspace(0.0, 1.0, _GRID_SIZE, dtype=np.float32)
         r_g, g_g, b_g = np.meshgrid(grid, grid, grid, indexing="ij")
         rgb = np.stack((r_g, g_g, b_g), axis=-1)       # (33,33,33,3)
+        return self._build_payload_volume(rgb)
+
+    def _build_gray_lookup(self) -> np.ndarray:
+        """Dense 256-entry payload ramp for exact neutrals.
+
+        Trilinear interpolation over the 33³ lattice smears the neutral
+        diagonal: a gray input blends 8 corners of which 6 are off-diagonal
+        and still carry RGB energy, so whites/B&W came out part-RGB instead of
+        riding the white LEDs. ``map_rgb`` blends toward this exact-gray ramp
+        for near-neutral inputs.
+        """
+
+        values = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+        diagonal = np.stack((values, values, values), axis=-1).reshape(256, 1, 1, 3)
+        return self._build_payload_volume(diagonal).reshape(256, -1)
+
+    def _build_payload_volume(self, rgb: np.ndarray) -> np.ndarray:
+        """Run the full color pipeline over any (..., 3) grid of source colors."""
 
         # ── 2. Optional tone/calibration correction ────────────────────────────
         if self.tone_lut is not None:
@@ -197,17 +216,24 @@ class BulbGamutMapper:
         balanced = balanced / peak
 
         # ── 5. Per-pixel saturation and luminance ──────────────────────────────
-        max_ch = balanced.max(axis=-1)
-        min_ch = balanced.min(axis=-1)
-        sat    = np.where(
-            max_ch > _EPSILON,
-            (max_ch - min_ch) / np.maximum(max_ch, _EPSILON),
+        #
+        # IMPORTANT: neutrality must be judged on the ORIGINAL linear color,
+        # not the channel-gain-balanced one. The R/G/B drive-current gains
+        # (0.83/0.88/1.0) turn a perfect gray into sat≈0.17 after balancing,
+        # which used to leak most white-content energy into the RGB LEDs —
+        # whites/B&W came out tinted and under-white on the bulb.
+        min_ch = balanced.min(axis=-1)          # white carrier follows drive levels
+        lin_max = linear.max(axis=-1)
+        lin_min = linear.min(axis=-1)
+        sat = np.where(
+            lin_max > _EPSILON,
+            (lin_max - lin_min) / np.maximum(lin_max, _EPSILON),
             0.0,
         )
         luma = (
-            balanced[..., 0] * 0.2126 +
-            balanced[..., 1] * 0.7152 +
-            balanced[..., 2] * 0.0722
+            linear[..., 0] * 0.2126 +
+            linear[..., 1] * 0.7152 +
+            linear[..., 2] * 0.0722
         )
 
         # ── 6. White-channel gating ────────────────────────────────────────────
@@ -248,7 +274,7 @@ class BulbGamutMapper:
         neutral_mask = sat < 0.04
         white_linear = np.where(
             neutral_mask,
-            np.maximum(white_linear, max_ch * min(1.0, 0.88 + white_ratio * 0.25)),
+            np.maximum(white_linear, balanced.max(axis=-1) * min(1.0, 0.88 + white_ratio * 0.25)),
             white_linear,
         )
 
@@ -308,9 +334,54 @@ class BulbGamutMapper:
 
         The input is assumed to be in the color space declared in
         ``profile.source_color_space`` (default: sRGB).
+
+        Uses trilinear interpolation over the 33³ lattice: nearest-lattice
+        lookup quantized inputs by ±4/channel, which is relatively large in
+        dark scenes and caused visible stepping on slow ambient fades. Exact
+        at lattice points; ~8 fetches + lerps per call (micro-fast).
         """
         r, g, b = (max(0, min(255, int(ch))) for ch in color)
-        ri = min(_GRID_MAX_INDEX, int(round(r / 255.0 * _GRID_MAX_INDEX)))
-        gi = min(_GRID_MAX_INDEX, int(round(g / 255.0 * _GRID_MAX_INDEX)))
-        bi = min(_GRID_MAX_INDEX, int(round(b / 255.0 * _GRID_MAX_INDEX)))
-        return tuple(int(v) for v in self._lookup[ri, gi, bi].tolist())
+
+        fr = r / 255.0 * _GRID_MAX_INDEX
+        fg = g / 255.0 * _GRID_MAX_INDEX
+        fb = b / 255.0 * _GRID_MAX_INDEX
+        ri0, gi0, bi0 = int(fr), int(fg), int(fb)
+        ri1 = min(ri0 + 1, _GRID_MAX_INDEX)
+        gi1 = min(gi0 + 1, _GRID_MAX_INDEX)
+        bi1 = min(bi0 + 1, _GRID_MAX_INDEX)
+        tr, tg, tb = fr - ri0, fg - gi0, fb - bi0
+
+        lut = self._lookup
+        c000 = lut[ri0, gi0, bi0].astype(np.float64)
+        c001 = lut[ri0, gi0, bi1].astype(np.float64)
+        c010 = lut[ri0, gi1, bi0].astype(np.float64)
+        c011 = lut[ri0, gi1, bi1].astype(np.float64)
+        c100 = lut[ri1, gi0, bi0].astype(np.float64)
+        c101 = lut[ri1, gi0, bi1].astype(np.float64)
+        c110 = lut[ri1, gi1, bi0].astype(np.float64)
+        c111 = lut[ri1, gi1, bi1].astype(np.float64)
+
+        c00 = c000 + (c001 - c000) * tb
+        c01 = c010 + (c011 - c010) * tb
+        c10 = c100 + (c101 - c100) * tb
+        c11 = c110 + (c111 - c110) * tb
+        c0 = c00 + (c01 - c00) * tg
+        c1 = c10 + (c11 - c10) * tg
+        payload = c0 + (c1 - c0) * tr
+
+        # Near-neutral inputs blend toward the exact-gray ramp so whites and
+        # B&W content ride the white LEDs instead of the interpolation-smeared
+        # RGB mix (see _build_gray_lookup). Full ramp below sat 0.04 (grays,
+        # photographic whites, B&W grain), fading out by 0.12 (pastels keep a
+        # gentle white assist; real colors are untouched).
+        max_ch = max(r, g, b)
+        if max_ch > 0:
+            sat = (max_ch - min(r, g, b)) / max_ch
+            if sat < 0.12:
+                t = min(1.0, (0.12 - sat) / 0.08)
+                blend = t * t * (3.0 - 2.0 * t)
+                luma_index = int(round(r * 0.2126 + g * 0.7152 + b * 0.0722))
+                gray = self._gray_lookup[max(0, min(255, luma_index))].astype(np.float64)
+                payload = payload + (gray - payload) * blend
+
+        return tuple(int(v) for v in np.clip(np.round(payload), 0, 255))

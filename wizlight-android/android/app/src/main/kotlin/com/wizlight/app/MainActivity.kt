@@ -113,6 +113,8 @@ class MainActivity : FlutterActivity() {
         putExtra(ScreenCaptureService.EXTRA_SOURCE_COLOR_SPACE, call.argument<String>("sourceColorSpace") ?: "auto")
         putExtra(ScreenCaptureService.EXTRA_HDR_TONE_MAPPING, call.argument<Boolean>("hdrToneMapping") ?: false)
         putExtra(ScreenCaptureService.EXTRA_HDR_CAPTURE, call.argument<Boolean>("hdrCapture") ?: false)
+        putExtra(ScreenCaptureService.EXTRA_SYNC_PROFILE, call.argument<String>("syncProfile") ?: "auto")
+        putExtra(ScreenCaptureService.EXTRA_BRIGHTNESS_FOLLOW, call.argument<Boolean>("brightnessFollow") ?: true)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

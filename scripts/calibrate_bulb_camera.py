@@ -37,6 +37,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ip", help="Bulb IP. Defaults to the first reachable configured bulb.")
     parser.add_argument("--camera", type=int, default=0, help="OpenCV camera index.")
     parser.add_argument(
+        "--exposure",
+        type=float,
+        default=None,
+        help="Lock manual exposure to this value (UVC log2 scale, e.g. -2). "
+        "Omit to leave exposure on auto. Locking is strongly recommended so "
+        "auto-exposure/white-balance don't re-tint measurements.",
+    )
+    parser.add_argument(
+        "--no-lock-wb",
+        action="store_true",
+        help="Leave white balance on auto (default: lock it, which needs a UVC webcam).",
+    )
+    parser.add_argument(
         "--levels",
         default="0,96,176,255",
         help="Comma-separated RGB levels for the calibration lattice.",
@@ -118,11 +131,26 @@ def parse_roi(raw: Optional[str]) -> Optional[tuple[int, int, int, int]]:
     return (x, y, width, height)
 
 
-def open_camera(camera_index: int) -> cv2.VideoCapture:
+def open_camera(
+    camera_index: int,
+    lock_wb: bool = True,
+    exposure: Optional[float] = None,
+) -> cv2.VideoCapture:
     camera = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     if not camera.isOpened():
         camera.release()
         raise RuntimeError(f"Could not open camera index {camera_index}")
+    # Locking WB + exposure is essential: with auto on, the camera re-tints
+    # and re-brightens the whole frame per color, corrupting every reading.
+    if lock_wb:
+        ok = camera.set(cv2.CAP_PROP_AUTO_WB, 0)
+        if not ok:
+            print("WARNING: camera refused to lock white balance (auto-WB still "
+                  "on). Calibration accuracy will suffer — use a UVC webcam.")
+    if exposure is not None:
+        camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # manual mode (DSHOW)
+        if not camera.set(cv2.CAP_PROP_EXPOSURE, float(exposure)):
+            print(f"WARNING: camera refused manual exposure {exposure}.")
     return camera
 
 
@@ -495,7 +523,7 @@ def main() -> int:
             print(f"Warning: could not read the current bulb state ({exc}); skipping state restore.")
         mapper = BulbGamutMapper(profile)
 
-        camera = open_camera(args.camera)
+        camera = open_camera(args.camera, lock_wb=not args.no_lock_wb, exposure=args.exposure)
 
         print(f"Calibrating bulb {target_ip} ({profile.model_name or 'unknown model'})")
         print(f"Calibration key: {profile.mac or target_ip}")

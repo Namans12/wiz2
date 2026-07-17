@@ -354,6 +354,31 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
+            if (stats?.captureLooksBlack == true) ...<Widget>[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange),
+                ),
+                child: const Row(
+                  children: <Widget>[
+                    Icon(Icons.visibility_off, color: Colors.orange),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Capture is black: this content (Netflix/DRM apps, '
+                        'HDMI inputs) cannot be screen-captured by Android. '
+                        'For local files, use USB Media mode instead.',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 14),
             SegmentedButton<String>(
               segments: const <ButtonSegment<String>>[
@@ -512,6 +537,49 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             ),
             const SizedBox(height: 12),
+            Text('Sync feel', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 6),
+            SegmentedButton<String>(
+              segments: const <ButtonSegment<String>>[
+                ButtonSegment(
+                  value: 'auto',
+                  label: Text('Auto'),
+                  icon: Icon(Icons.auto_awesome),
+                ),
+                ButtonSegment(
+                  value: 'cinema',
+                  label: Text('Cinema'),
+                  icon: Icon(Icons.theaters),
+                ),
+                ButtonSegment(
+                  value: 'action',
+                  label: Text('Action'),
+                  icon: Icon(Icons.sports_esports),
+                ),
+              ],
+              selected: <String>{_settings.syncProfile},
+              onSelectionChanged: (selection) => _saveSettings(
+                _settings.copyWith(syncProfile: selection.first),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _settings.syncProfile == 'cinema'
+                  ? 'Long, calm transitions for slow movies and dramas.'
+                  : _settings.syncProfile == 'action'
+                      ? 'Near-instant response for games and fast content.'
+                      : 'Adapts between calm and fast based on on-screen motion.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            SwitchListTile(
+              value: _settings.brightnessFollow,
+              onChanged: (value) =>
+                  _saveSettings(_settings.copyWith(brightnessFollow: value)),
+              title: const Text('Follow scene brightness'),
+              subtitle: const Text(
+                  'Dim scenes dim the bulb; black turns it off; B&W maps to true white.'),
+            ),
+            const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               initialValue: _settings.sourceColorSpace,
               decoration: const InputDecoration(labelText: 'Color Source'),
@@ -655,6 +723,11 @@ class _HomeScreenState extends State<HomeScreen> {
             Text(
                 'Capture buffer: ${stats?.captureBufferFormat ?? '-'}${(stats?.hdrCaptureActive ?? false) ? ' (HDR active)' : ''}'),
             Text('Updates: ${stats?.updatesSent ?? 0}'),
+            Text('Scene cuts: ${stats?.cutsDetected ?? 0}'),
+            Text('Profile: ${stats?.syncProfile ?? _settings.syncProfile}'),
+            Text(
+                'Scene: ${((stats?.sceneNeutral ?? 0) * 100).toStringAsFixed(0)}% neutral, luma ${(stats?.sceneLuma ?? 0).toStringAsFixed(2)}'),
+            Text('Frames: ${stats?.framesProcessed ?? 0}'),
             if (color != null) ...<Widget>[
               const SizedBox(height: 12),
               Row(

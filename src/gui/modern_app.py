@@ -389,6 +389,7 @@ class WizLightModernGUI(AnimationMixin):
         self.adaptive_fps_var = ctk.BooleanVar(value=self.config.screen_sync.adaptive_fps)
         self.predictive_smoothing_var = ctk.BooleanVar(value=self.config.screen_sync.predictive_smoothing)
         self.color_source_labels = {
+            "Auto (detect)": "auto",
             "Standard / sRGB": "srgb",
             "Display P3 OLED": "display-p3",
             "Rec.2020 HDR": "rec2020",
@@ -400,8 +401,26 @@ class WizLightModernGUI(AnimationMixin):
                     for label, key in self.color_source_labels.items()
                     if key == self.config.screen_sync.source_color_space
                 ),
-                "Standard / sRGB",
+                "Auto (detect)",
             )
+        )
+        self.sync_profile_labels = {
+            "Auto": "auto",
+            "Cinema (calm)": "cinema",
+            "Action (fast)": "action",
+        }
+        self.sync_profile_value = ctk.StringVar(
+            value=next(
+                (
+                    label
+                    for label, key in self.sync_profile_labels.items()
+                    if key == self.config.screen_sync.sync_profile
+                ),
+                "Auto",
+            )
+        )
+        self.brightness_follow_var = ctk.BooleanVar(
+            value=self.config.screen_sync.brightness_follow
         )
 
         self.fps_label, self.fps_slider = self._slider_control(
@@ -453,6 +472,24 @@ class WizLightModernGUI(AnimationMixin):
             command=self._queue_screen_sync_settings_save,
         )
         self.color_source_menu.pack(fill="x", padx=14, pady=(0, 10))
+
+        ctk.CTkLabel(settings, text="Sync Feel", anchor="w").pack(
+            fill="x", padx=14, pady=(2, 4)
+        )
+        self.sync_profile_menu = ctk.CTkSegmentedButton(
+            settings,
+            values=list(self.sync_profile_labels.keys()),
+            variable=self.sync_profile_value,
+            command=self._queue_screen_sync_settings_save,
+        )
+        self.sync_profile_menu.pack(fill="x", padx=14, pady=(0, 10))
+
+        ctk.CTkCheckBox(
+            settings,
+            text="Follow scene brightness (dim scenes dim the bulb, black turns it off)",
+            variable=self.brightness_follow_var,
+            command=self._queue_screen_sync_settings_save,
+        ).pack(fill="x", padx=14, pady=(0, 10))
 
         flags = ctk.CTkFrame(settings, fg_color=self._surface_color(settings))
         flags.pack(fill="x", padx=14, pady=(0, 10))
@@ -704,8 +741,13 @@ class WizLightModernGUI(AnimationMixin):
         settings.color_algorithm = "auto"
         settings.source_color_space = self.color_source_labels.get(
             self.color_source_value.get(),
-            "srgb",
+            "auto",
         )
+        settings.sync_profile = self.sync_profile_labels.get(
+            self.sync_profile_value.get(),
+            "auto",
+        )
+        settings.brightness_follow = bool(self.brightness_follow_var.get())
         settings.use_gpu = bool(self.use_gpu_var.get())
         settings.adaptive_fps = True
         settings.predictive_smoothing = True

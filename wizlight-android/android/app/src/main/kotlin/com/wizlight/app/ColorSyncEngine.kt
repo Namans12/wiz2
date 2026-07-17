@@ -61,6 +61,8 @@ class ColorSyncEngine {
     var hdrToneMapping = false
     var deviceProfile = DeviceProfile.GENERIC
     var bulbTargets: List<BulbTarget> = emptyList()
+    var syncProfile = "auto"        // "auto" | "cinema" | "action"
+    var brightnessFollow = true     // bulb brightness tracks scene luma
 
     // ── Detection results (populated by configureAutoFromDisplay) ─────────────
     var requestedColorSpace = "auto"
@@ -73,7 +75,21 @@ class ColorSyncEngine {
     // ── Runtime state ─────────────────────────────────────────────────────────
     private var previousMotionSample: FloatArray? = null
     private var previousSingleColor: RgbColor? = null
-    private var paletteHoldFramesCount = 0
+    private var prevLumaHist: DoubleArray? = null
+    private val motionHistory = ArrayDeque<Double>()  // 5-frame moving average (desktop parity)
+    private var lastSubmitAtMs = 0L
+    var lastSceneCut = false
+        private set
+    var cutsDetected = 0
+        private set
+    var sceneNeutral = 0.0
+        private set
+    var sceneLuma = 0.0
+        private set
+    var captureLooksBlack = false
+        private set
+    private var blackSinceMs = 0L
+    private var currentBrightnessFactor = 1.0
     var lastMotionScore = 0.0
         private set
     var lastSmoothingFactor = 0.2
@@ -100,6 +116,15 @@ class ColorSyncEngine {
     }
     private var udpSocket: DatagramSocket? = null
 
+    // Shared 33^3 RGBCW LUT baked from the desktop mapper (assets/wiz_rgbcw_lut_v1.bin).
+    // When loaded, mapViaLut() interpolates it identically to desktop map_rgb so a
+    // color produces the SAME bulb payload on TV and desktop. Falls back to the
+    // hue-basis projection if the asset is missing.
+    private var lut: IntArray? = null
+    private var lutGray: IntArray? = null
+    private var lutGrid = 33
+    private var lutChannels = 5
+
     private val wizBasis = arrayOf(
         doubleArrayOf(cos(0.0), sin(0.0)),
         doubleArrayOf(cos((2.0 * PI) / 3.0), sin((2.0 * PI) / 3.0)),
@@ -118,6 +143,32 @@ class ColorSyncEngine {
 
     companion object {
         private const val WIZ_PORT = 38899
+        // Duplicate a changed color this many times (UDP has no retransmit).
+        private const val BURST_REPEATS = 3
+        private const val BURST_GAP_MS = 3L
+    }
+
+    private val lastSentPacketKey = mutableMapOf<String, String>()
+
+    // 8-bit sRGB -> linear-light decode table. Extractor means accumulate in
+    // linear light (light adds linearly; gamma-space means darken mixes) while
+    // the scene-analysis weights stay in gamma space where they were tuned.
+    private val srgb8ToLinear = DoubleArray(256) { srgbDecode(it / 255.0) }
+
+    private fun linearMeanToSrgb(
+        sumR: Double,
+        sumG: Double,
+        sumB: Double,
+        totalWeight: Double,
+    ): RgbColor {
+        if (totalWeight <= 0.0) {
+            return RgbColor(128, 128, 128)
+        }
+        return RgbColor(
+            (srgbEncode((sumR / totalWeight).coerceIn(0.0, 1.0)) * 255.0).roundToInt().coerceIn(0, 255),
+            (srgbEncode((sumG / totalWeight).coerceIn(0.0, 1.0)) * 255.0).roundToInt().coerceIn(0, 255),
+            (srgbEncode((sumB / totalWeight).coerceIn(0.0, 1.0)) * 255.0).roundToInt().coerceIn(0, 255),
+        )
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -129,7 +180,16 @@ class ColorSyncEngine {
     fun reset() {
         previousMotionSample = null
         previousSingleColor = null
-        paletteHoldFramesCount = 0
+        prevLumaHist = null
+        motionHistory.clear()
+        lastSubmitAtMs = 0L
+        lastSceneCut = false
+        cutsDetected = 0
+        sceneNeutral = 0.0
+        sceneLuma = 0.0
+        captureLooksBlack = false
+        blackSinceMs = 0L
+        currentBrightnessFactor = 1.0
         lastMotionScore = 0.0
         lastForcedSendAt = 0L
         lastSendAt = null
@@ -144,6 +204,7 @@ class ColorSyncEngine {
         predictionTargets.clear()
         addressCache.clear()
         packetCache.clear()
+        lastSentPacketKey.clear()
     }
 
     fun close() {
@@ -181,6 +242,7 @@ class ColorSyncEngine {
         requestedColorSpace = normalizeColorSpace(requestedColorSpaceRaw)
         requestedHdrToneMapping = requestedHdrTone
         detectDeviceProfileFromBuild()
+        loadLut(context)
 
         detectedDisplayGamut = "srgb"
         detectedHdrSupport = false
@@ -239,10 +301,25 @@ class ColorSyncEngine {
             deviceProfile = DeviceProfile.WIDE_GAMUT_HDR
         }
 
-        sourceColorSpace = if (requestedColorSpace == "auto") detectedDisplayGamut else requestedColorSpace
-        hdrToneMapping = requestedHdrToneMapping || (requestedColorSpace == "auto" && detectedHdrSupport)
-        if (deviceProfile == DeviceProfile.BRAVIA && requestedColorSpace == "auto") {
-            hdrToneMapping = true
+        // CAPTURE-SPACE BINDING (fixes DV/HDR "too bright / too dim / wrong hue"):
+        // every pixel grid this engine receives is ALREADY sRGB —
+        //  * MediaProjection RGBA_8888 virtual displays are composited to sRGB
+        //    by SurfaceFlinger regardless of how wide the panel is, and the OS
+        //    has already tone-mapped HDR content into that buffer;
+        //  * the FP16 BT.2020-PQ path converts PQ→sRGB inside pixelAtFp16Pq
+        //    (per-HDR-type curve applied there, where the real HDR pixels are);
+        //  * the USB player's TextureView bitmaps are SDR sRGB.
+        // Applying the panel's rec2020 matrix + a tone curve on top of that was
+        // double-processing. Auto therefore binds to the buffer (sRGB, no tone
+        // map); an explicit user selection is still honored for exotic setups.
+        // Panel detection results stay in the stats and still drive the device
+        // profile (Bravia cool bias, OLED true-black, FP16 curve choice).
+        if (requestedColorSpace == "auto") {
+            sourceColorSpace = "srgb"
+            hdrToneMapping = false
+        } else {
+            sourceColorSpace = requestedColorSpace
+            hdrToneMapping = requestedHdrToneMapping
         }
     }
 
@@ -263,6 +340,13 @@ class ColorSyncEngine {
         }
     }
 
+    fun normalizeSyncProfile(raw: String?): String {
+        return when (raw?.lowercase()) {
+            "auto", "cinema", "action" -> raw.lowercase()
+            else -> "auto"
+        }
+    }
+
     // ── Main per-frame entry ─────────────────────────────────────────────────────
     /**
      * @param grids region -> NxN ARGB grid. Single mode uses key "all"; zones uses
@@ -270,28 +354,98 @@ class ColorSyncEngine {
      */
     fun submitFrame(grids: Map<String, IntArray>, size: Int): Boolean {
         if (grids.isEmpty()) return false
+        val nowMs = SystemClock.elapsedRealtime()
+        val dtSeconds = if (lastSubmitAtMs == 0L) {
+            1.0 / max(1, currentFps)
+        } else {
+            (nowMs - lastSubmitAtMs).coerceIn(5L, 500L) / 1000.0
+        }
+        lastSubmitAtMs = nowMs
+
         val primary = grids["all"] ?: grids["left"] ?: grids.values.first()
         val motionScore = computeMotionScore(primary)
+        val sceneCut = lastSceneCut
         lastMotionScore = motionScore
         updateAdaptiveFps(motionScore)
+        if (sceneCut) {
+            // A cut invalidates palette memory and velocity history: snap.
+            previousSingleColor = null
+            predictionTargets.clear()
+        }
 
-        val targetColors = extractTargetColors(grids, size, motionScore)
+        // Scene-level content adaptation (B&W / dim-scene handling): average
+        // saturation drives neutral detection, average luma drives brightness
+        // follow. Neutral scenes are pulled to true white (the WiZ mapper
+        // routes low-saturation colors to the white LEDs); black turns off.
+        // Scene stats must reflect the WHOLE frame, not just one region: in zone
+        // mode grids = {left,right}, so averaging only the primary (left) region
+        // would drive neutral / brightness-follow / black-off off half the screen.
+        val statGrids = grids["all"]?.let { listOf(it) } ?: grids.values.toList()
+        var satSum = 0.0
+        var lumaSum = 0.0
+        var valueSum = 0.0
+        var pixelCount = 0
+        for (grid in statGrids) {
+            for (pixel in grid) {
+                val r = Color.red(pixel)
+                val g = Color.green(pixel)
+                val b = Color.blue(pixel)
+                satSum += rgbSaturation(r, g, b)
+                lumaSum += rgbLuma(r, g, b)
+                valueSum += max(r, max(g, b)) / 255.0
+                pixelCount += 1
+            }
+        }
+        val n = max(1, pixelCount).toDouble()
+        val avgSat = satSum / n
+        val avgLuma = lumaSum / n
+        val avgValue = valueSum / n
+        val tNeutral = ((0.06 - avgSat) / 0.06).coerceIn(0.0, 1.0)
+        sceneNeutral = tNeutral * tNeutral * (3.0 - 2.0 * tNeutral)
+        sceneLuma = avgLuma
+        // Brightness-follow uses VALUE (avg max-channel), not luma: luma's low
+        // blue/red weights wrongly dim full-intensity saturated colors.
+        currentBrightnessFactor = Math.pow((avgValue / 0.32).coerceIn(0.0, 1.0), 0.8)
+
+        // Black handling: turning the bulb off requires the black to PERSIST
+        // (~0.7s) so brief fades don't flicker the power state — and because
+        // DRM apps / HDMI inputs capture as permanent black, we surface a
+        // "capture looks black" flag after 3s so the UI can explain that the
+        // content is not capturable instead of silently going dark.
+        val isBlackFrame = avgLuma < 0.015 && sceneNeutral > 0.7
+        if (isBlackFrame) {
+            if (blackSinceMs == 0L) blackSinceMs = nowMs
+        } else {
+            blackSinceMs = 0L
+        }
+        captureLooksBlack = isBlackFrame && (nowMs - blackSinceMs) > 3000L
+        val targetColors: Map<String, RgbColor> =
+            if (brightnessFollow && isBlackFrame && (nowMs - blackSinceMs) >= 700L) {
+                // Sustained true black: payload of zeros -> state:false (off).
+                grids.keys.associateWith { RgbColor(0, 0, 0) }
+            } else {
+                extractTargetColors(grids, size, motionScore)
+            }
         lastTargetColors.clear()
         lastTargetColors.putAll(targetColors)
 
-        val smoothingFactor = targetSmoothing(motionScore)
+        val smoothingFactor = if (sceneCut) 1.0 else targetSmoothing(motionScore, dtSeconds)
         lastSmoothingFactor = smoothingFactor
         val sendThreshold = sendDeltaThreshold(motionScore)
         lastDeltaThreshold = sendThreshold
         val mappedBulbColors = buildBulbColorMap(targetColors)
         var sentAnyUpdate = false
 
-        val nowMs = SystemClock.elapsedRealtime()
         val forceRefreshDue = nowMs - lastForcedSendAt >= 1500L
         for ((ip, targetColor) in mappedBulbColors) {
             val current = currentOutputColors[ip]
-            val predictedTarget = applyPredictiveTarget(ip, targetColor, motionScore)
-            val smoothed = if (current == null) {
+            val predictedTarget = if (sceneCut) {
+                predictionTargets[ip] = targetColor
+                targetColor
+            } else {
+                applyPredictiveTarget(ip, targetColor, motionScore)
+            }
+            val smoothed = if (current == null || smoothingFactor >= 1.0) {
                 predictedTarget
             } else {
                 smoothColor(current, predictedTarget, smoothingFactor)
@@ -301,10 +455,11 @@ class ColorSyncEngine {
             val lastSent = lastSentColors[ip]
             val needsForcedRefresh = lastSent != null &&
                 forceRefreshDue &&
-                colorDistance(smoothed, lastSent) >= max(2, minColorDelta / 2)
+                perceptualDelta(smoothed, lastSent) >= max(2, minColorDelta / 2).toDouble()
             if (
                 lastSent == null ||
-                colorDistance(smoothed, lastSent) >= sendThreshold ||
+                sceneCut ||
+                perceptualDelta(smoothed, lastSent) >= sendThreshold.toDouble() ||
                 needsForcedRefresh
             ) {
                 sendColor(ip, smoothed)
@@ -365,27 +520,62 @@ class ColorSyncEngine {
             "deviceProfile" to deviceProfile.name.lowercase(),
             "predictiveSmoothing" to predictiveSmoothing,
             "updatesSent" to updatesSent,
+            "sceneCut" to lastSceneCut,
+            "cutsDetected" to cutsDetected,
+            "sceneNeutral" to sceneNeutral,
+            "sceneLuma" to sceneLuma,
+            "syncProfile" to syncProfile,
+            "brightnessFollow" to brightnessFollow,
+            "captureLooksBlack" to captureLooksBlack,
             "targetColors" to lastTargetColors.mapValues { listOf(it.value.r, it.value.g, it.value.b) },
             "outputColors" to currentOutputColors.mapValues { listOf(it.value.r, it.value.g, it.value.b) },
         )
     }
 
-    // ── Motion ───────────────────────────────────────────────────────────────────
+    // ── Motion + scene-cut detection ─────────────────────────────────────────────
     private fun computeMotionScore(pixels: IntArray): Double {
         val current = FloatArray(pixels.size)
         for (index in pixels.indices) {
             current[index] = colorLuma(pixels[index]).toFloat()
         }
+
+        // Luma histogram for cut detection. A cut must move BOTH the histogram
+        // (panning barely does) AND the instantaneous diff (near-solid fades
+        // hop bins but diff stays tiny). Hard cuts move both by 10x.
+        val hist = DoubleArray(32)
+        for (v in current) {
+            hist[(v * 31.999f).toInt().coerceIn(0, 31)] += 1.0
+        }
+        val n = max(1, current.size).toDouble()
+        for (i in hist.indices) hist[i] /= n
+        val prevHist = prevLumaHist
+        var histTv = 0.0
+        if (prevHist != null) {
+            var s = 0.0
+            for (i in hist.indices) s += abs(hist[i] - prevHist[i])
+            histTv = 0.5 * s
+        }
+        prevLumaHist = hist
+
         val previous = previousMotionSample
         previousMotionSample = current
         if (previous == null || previous.size != current.size) {
+            lastSceneCut = false
             return 0.0
         }
         var total = 0.0
         for (index in current.indices) {
             total += abs(current[index] - previous[index])
         }
-        return min(1.0, total / current.size.toDouble())
+        val diff = min(1.0, total / current.size.toDouble())
+        // Scene cut uses the INSTANTANEOUS diff (a cut is a one-frame spike);
+        // the returned motion score is a 5-frame moving average so adaptive
+        // FPS / smoothing / delta don't oscillate every frame (desktop parity).
+        lastSceneCut = histTv > 0.30 && diff > 0.10
+        if (lastSceneCut) cutsDetected += 1
+        motionHistory.addLast(diff)
+        while (motionHistory.size > 5) motionHistory.removeFirst()
+        return motionHistory.average()
     }
 
     // ── Extraction ─────────────────────────────────────────────────────────────
@@ -402,7 +592,14 @@ class ColorSyncEngine {
                 extractColor(sampled)
             }
             val enhanced = enhanceColor(mapSourceColorToSrgb(extracted))
-            val held = applyCinematicPaletteHold(enhanced, previousSingleColor, motionScore)
+            // No hold in action profile (kills responsiveness) or on neutral
+            // scenes (holding tints B&W content with the previous color).
+            val skipHold = syncProfile == "action" || sceneNeutral > 0.5
+            val held = applyCinematicPaletteHold(
+                enhanced,
+                if (skipHold) null else previousSingleColor,
+                motionScore,
+            )
             previousSingleColor = held
             mapOf("all" to held)
         } else {
@@ -522,32 +719,74 @@ class ColorSyncEngine {
         val saturationMean = averageSaturation(sample)
         val vividRatio = vividRatio(sample, saturationThreshold = 0.35, lumaThreshold = 0.08)
         val sceneEnergy = min(1.0, vividRatio * 2.2 + saturationMean * 1.8)
-        var accentWeight = 0.10 + sceneEnergy * 0.25
+        var accentWeight = 0.10 + sceneEnergy * 0.22
         if (sceneEnergy < 0.35) {
-            accentWeight *= 0.5
+            accentWeight *= 0.55
         }
-        return blendColors(weighted, accent, accentWeight)
+        var reference = blendColors(weighted, accent, accentWeight)
+
+        // Perceptual palette match (desktop extract_dominant_auto parity).
+        val candidates = paletteCandidates(sample, topK = 6) { amb, sat, _ ->
+            amb * (0.65 + sat * 1.35)
+        }
+        val balanceScore = paletteBalanceScore(candidates)
+        val weightedSaturation = colorSaturation(weighted)
+        if (balanceScore > 0.32 && weightedSaturation < 0.22) {
+            val neutralPull = min(0.88, balanceScore * (0.55 + max(0.0, 0.22 - weightedSaturation) * 2.4))
+            reference = blendColors(reference, weighted, neutralPull)
+        }
+        val matched = selectPaletteMatch(reference, candidates, preferVivid = sceneEnergy > 0.3)
+
+        var paletteWeight = 0.12 + sceneEnergy * 0.28
+        if (sceneEnergy < 0.2) {
+            paletteWeight *= 0.45
+        }
+        if (balanceScore > 0.32 && weightedSaturation < 0.22) {
+            paletteWeight *= max(0.15, 1.0 - balanceScore * 1.25)
+        }
+        return blendColors(reference, matched, paletteWeight)
     }
 
     private fun extractCinematicSingleColor(sample: SampledFrame): RgbColor {
         val weighted = extractWeightedColor(sample)
-        val accent = extractVibrantAccent(sample)
-        val palette = extractPaletteAnchor(sample)
         val saturationMean = averageSaturation(sample)
         val vividRatio = vividRatio(sample, saturationThreshold = 0.32, lumaThreshold = 0.08)
-        val averageLuma = averageLuma(sample)
-        if (averageLuma < 0.03 && saturationMean < 0.04) {
+        val darkness = averageLuma(sample)
+        if (darkness < 0.03 && saturationMean < 0.04) {
             return weighted
         }
-        var accentWeight = 0.18 + min(0.34, saturationMean * 0.55 + vividRatio * 0.22)
-        var paletteWeight = 0.10 + min(0.26, vividRatio * 0.35 + max(0.0, saturationMean - 0.12) * 0.5)
+        val accent = extractVibrantAccent(sample)
+        val paletteAnchor = extractPaletteAnchor(sample)
+
+        var accentWeight = 0.18 + min(0.30, saturationMean * 0.5 + vividRatio * 0.22)
+        if (saturationMean < 0.08 && darkness > 0.18) {
+            accentWeight *= 0.8
+        }
+        var reference = blendColors(weighted, accent, accentWeight)
+        reference = blendColors(reference, paletteAnchor, 0.08 + min(0.18, vividRatio * 0.24))
+
+        // Perceptual palette match: quantize the sample into a small weighted
+        // palette, then pull the ambient reference toward the closest prominent,
+        // vivid palette entry (desktop extract_cinematic_single_color parity).
+        val candidates = paletteCandidates(sample, topK = 7) { amb, sat, luma ->
+            amb * (0.7 + sat * 1.8 + (0.6 - abs(luma - 0.42)).coerceIn(0.0, 0.6) * 0.3)
+        }
+        val balanceScore = paletteBalanceScore(candidates)
+        val weightedSaturation = colorSaturation(weighted)
+        if (balanceScore > 0.3 && weightedSaturation < 0.22) {
+            val neutralPull = min(0.9, balanceScore * (0.6 + max(0.0, 0.22 - weightedSaturation) * 2.6))
+            reference = blendColors(reference, weighted, neutralPull)
+        }
+        val matched = selectPaletteMatch(reference, candidates, preferVivid = true)
+
+        var paletteWeight = 0.20 + min(0.34, saturationMean * 0.6 + vividRatio * 0.3)
         if (saturationMean < 0.12) {
-            paletteWeight *= 0.5
+            paletteWeight *= 0.55
         }
-        if (saturationMean < 0.08 && averageLuma > 0.18) {
-            accentWeight *= 0.75
+        if (balanceScore > 0.3 && weightedSaturation < 0.22) {
+            paletteWeight *= max(0.12, 1.0 - balanceScore * 1.35)
         }
-        return blendColors(blendColors(weighted, accent, accentWeight), palette, paletteWeight)
+        return blendColors(reference, matched, paletteWeight)
     }
 
     private fun extractWeightedColor(sample: SampledFrame): RgbColor {
@@ -568,20 +807,13 @@ class ColorSyncEngine {
                 if (x < border || y < border || x >= sample.width - border || y >= sample.height - border) {
                     weight *= edgeWeight
                 }
-                totalR += r * weight
-                totalG += g * weight
-                totalB += b * weight
+                totalR += srgb8ToLinear[r] * weight
+                totalG += srgb8ToLinear[g] * weight
+                totalB += srgb8ToLinear[b] * weight
                 totalWeight += weight
             }
         }
-        if (totalWeight <= 0.0) {
-            return RgbColor(128, 128, 128)
-        }
-        return RgbColor(
-            (totalR / totalWeight).roundToInt().coerceIn(0, 255),
-            (totalG / totalWeight).roundToInt().coerceIn(0, 255),
-            (totalB / totalWeight).roundToInt().coerceIn(0, 255),
-        )
+        return linearMeanToSrgb(totalR, totalG, totalB, totalWeight)
     }
 
     private fun extractVibrantAccent(sample: SampledFrame): RgbColor {
@@ -602,19 +834,15 @@ class ColorSyncEngine {
         for (index in sample.pixels.indices) {
             if (energies[index] < threshold) continue
             val pixel = sample.pixels[index]
-            totalR += Color.red(pixel)
-            totalG += Color.green(pixel)
-            totalB += Color.blue(pixel)
+            totalR += srgb8ToLinear[Color.red(pixel)]
+            totalG += srgb8ToLinear[Color.green(pixel)]
+            totalB += srgb8ToLinear[Color.blue(pixel)]
             count += 1
         }
         if (count == 0) {
             return extractWeightedColor(sample)
         }
-        return RgbColor(
-            (totalR / count).roundToInt().coerceIn(0, 255),
-            (totalG / count).roundToInt().coerceIn(0, 255),
-            (totalB / count).roundToInt().coerceIn(0, 255),
-        )
+        return linearMeanToSrgb(totalR, totalG, totalB, count.toDouble())
     }
 
     private fun extractPaletteAnchor(sample: SampledFrame): RgbColor {
@@ -635,18 +863,139 @@ class ColorSyncEngine {
         for (index in sample.pixels.indices) {
             val pixel = sample.pixels[index]
             if (energies[index] < threshold || colorLuma(pixel) <= 0.05) continue
-            totalR += Color.red(pixel)
-            totalG += Color.green(pixel)
-            totalB += Color.blue(pixel)
+            totalR += srgb8ToLinear[Color.red(pixel)]
+            totalG += srgb8ToLinear[Color.green(pixel)]
+            totalB += srgb8ToLinear[Color.blue(pixel)]
             count += 1
         }
         if (count == 0) {
             return extractVibrantAccent(sample)
         }
-        return RgbColor(
-            (totalR / count).roundToInt().coerceIn(0, 255),
-            (totalG / count).roundToInt().coerceIn(0, 255),
-            (totalB / count).roundToInt().coerceIn(0, 255),
+        return linearMeanToSrgb(totalR, totalG, totalB, count.toDouble())
+    }
+
+    private data class PaletteEntry(val color: RgbColor, val weight: Double)
+
+    /**
+     * Build a small weighted palette from quantized sampled pixels, ranked by
+     * weight (desktop _palette_candidates parity). [paletteWeight] maps
+     * (ambientWeight, saturation, luma) -> the per-pixel contribution so each
+     * extractor can bias the palette differently. Bins are 32-wide (8 levels /
+     * channel), matching the desktop bin_size=32 / levels=8 quantization.
+     */
+    private fun paletteCandidates(
+        sample: SampledFrame,
+        topK: Int,
+        paletteWeight: (ambient: Double, saturation: Double, luma: Double) -> Double,
+    ): List<PaletteEntry> {
+        val binSize = 32
+        val border = max(1, min(sample.width, sample.height) / 6)
+        val counts = HashMap<Int, Double>()
+        val sumR = HashMap<Int, Double>()
+        val sumG = HashMap<Int, Double>()
+        val sumB = HashMap<Int, Double>()
+        for (y in 0 until sample.height) {
+            for (x in 0 until sample.width) {
+                val pixel = sample.pixels[y * sample.width + x]
+                val r = Color.red(pixel)
+                val g = Color.green(pixel)
+                val b = Color.blue(pixel)
+                val sat = rgbSaturation(r, g, b)
+                val luma = rgbLuma(r, g, b)
+                var ambient = 0.15 + sat * 2.2 + luma * 0.5
+                if (x < border || y < border || x >= sample.width - border || y >= sample.height - border) {
+                    ambient *= edgeWeight
+                }
+                val w = paletteWeight(ambient, sat, luma)
+                if (w <= 0.0) continue
+                val qr = (r / binSize).coerceIn(0, 7)
+                val qg = (g / binSize).coerceIn(0, 7)
+                val qb = (b / binSize).coerceIn(0, 7)
+                val key = (qr shl 6) or (qg shl 3) or qb
+                counts[key] = (counts[key] ?: 0.0) + w
+                sumR[key] = (sumR[key] ?: 0.0) + r * w
+                sumG[key] = (sumG[key] ?: 0.0) + g * w
+                sumB[key] = (sumB[key] ?: 0.0) + b * w
+            }
+        }
+        return counts.entries
+            .sortedByDescending { it.value }
+            .take(topK)
+            .mapNotNull { entry ->
+                val w = entry.value
+                if (w <= 0.0) return@mapNotNull null
+                // Truncate (toInt), NOT round — desktop uses int(np.clip(...)); a
+                // 1-LSB difference here would shift the downstream match/balance scores.
+                PaletteEntry(
+                    RgbColor(
+                        (sumR[entry.key]!! / w).toInt().coerceIn(0, 255),
+                        (sumG[entry.key]!! / w).toInt().coerceIn(0, 255),
+                        (sumB[entry.key]!! / w).toInt().coerceIn(0, 255),
+                    ),
+                    w,
+                )
+            }
+    }
+
+    /** Choose the closest palette entry by perceptual distance + prominence + vividness. */
+    private fun selectPaletteMatch(
+        reference: RgbColor,
+        candidates: List<PaletteEntry>,
+        preferVivid: Boolean,
+    ): RgbColor {
+        if (candidates.isEmpty()) return reference
+        val maxWeight = candidates.maxOf { it.weight }.let { if (it <= 0.0) 1.0 else it }
+        val referenceLuma = colorLuma(reference)
+        var bestColor = reference
+        var bestScore: Double? = null
+        for (candidate in candidates) {
+            val prominence = candidate.weight / maxWeight
+            val saturation = colorSaturation(candidate.color)
+            val luma = colorLuma(candidate.color)
+            var score = perceptualColorDistance(candidate.color, reference)
+            score -= prominence * 52.0
+            score -= saturation * (if (preferVivid) 78.0 else 42.0)
+            score += abs(luma - referenceLuma) * 24.0
+            if (referenceLuma > 0.08 && luma < 0.02) {
+                score += 18.0
+            }
+            if (bestScore == null || score < bestScore!!) {
+                bestScore = score
+                bestColor = candidate.color
+            }
+        }
+        return bestColor
+    }
+
+    /** Estimate whether a frame holds several equally strong, distinct colors (0..1). */
+    private fun paletteBalanceScore(candidates: List<PaletteEntry>): Double {
+        if (candidates.size < 3) return 0.0
+        val top = candidates.take(3)
+        val w0 = top[0].weight
+        if (w0 <= 0.0) return 0.0
+        val prominence = (top[1].weight / w0 + top[2].weight / w0) / 2.0
+        var separationSum = 0.0
+        var pairs = 0
+        for (i in 0 until 3) {
+            for (j in i + 1 until 3) {
+                separationSum += perceptualColorDistance(top[i].color, top[j].color)
+                pairs += 1
+            }
+        }
+        val separation = separationSum / pairs
+        return min(1.0, prominence * min(1.0, separation / 170.0))
+    }
+
+    /** Redmean perceptual distance (desktop perceptual_color_distance parity). */
+    private fun perceptualColorDistance(a: RgbColor, b: RgbColor): Double {
+        val rMean = (a.r + b.r) / 2.0
+        val dr = (a.r - b.r).toDouble()
+        val dg = (a.g - b.g).toDouble()
+        val db = (a.b - b.b).toDouble()
+        return sqrt(
+            (2.0 + rMean / 256.0) * dr * dr +
+                4.0 * dg * dg +
+                (2.0 + (255.0 - rMean) / 256.0) * db * db,
         )
     }
 
@@ -796,22 +1145,52 @@ class ColorSyncEngine {
     }
 
     private fun enhanceColor(color: RgbColor): RgbColor {
-        lastEffectiveColorBoost = colorBoost
+        // Neutral scenes suppress the color boost (boost amplifies faint tints
+        // in B&W film) and are desaturated toward true gray so the WiZ mapper
+        // routes them to the white LEDs. Brightness-follow scales dim scenes
+        // down instead of pinning them at the minimum-brightness floor.
+        val neutral = sceneNeutral
+        val brightness = currentBrightnessFactor
+        // Saturation-aware boost (desktop adaptive_color_boost parity): damp the
+        // boost on low-saturation colors so already-vivid frames aren't
+        // over-saturated, THEN suppress further on neutral/B&W scenes.
+        val chromaPeak = max(color.r, max(color.g, color.b))
+        val sat = if (chromaPeak <= 0) 0.0 else (chromaPeak - min(color.r, min(color.g, color.b))).toDouble() / chromaPeak
+        val strength = min(0.45, sat * 0.7)
+        val adaptiveBoost = 1.0 + (colorBoost - 1.0) * strength
+        val boostEff = 1.0 + (adaptiveBoost - 1.0) * (1.0 - neutral)
+        lastEffectiveColorBoost = boostEff
         val mean = (color.r + color.g + color.b) / 3.0
-        var red = mean + (color.r - mean) * colorBoost
-        var green = mean + (color.g - mean) * colorBoost
-        var blue = mean + (color.b - mean) * colorBoost
+        var red = mean + (color.r - mean) * boostEff
+        var green = mean + (color.g - mean) * boostEff
+        var blue = mean + (color.b - mean) * boostEff
 
         val trueBlack = color.r <= 2 && color.g <= 2 && color.b <= 2
         val oledLike = deviceProfile == DeviceProfile.BRAVIA || deviceProfile == DeviceProfile.WIDE_GAMUT_HDR
-        val effectiveFloor = when {
+        var effectiveFloor = when {
             trueBlack -> 0.0
             oledLike -> minBrightness * 0.35
             else -> minBrightness.toDouble()
         }
+        if (brightnessFollow) {
+            effectiveFloor *= brightness
+        }
         val peak = max(1.0, max(red, max(green, blue)))
         if (peak < effectiveFloor) {
             val scale = effectiveFloor / peak
+            red *= scale
+            green *= scale
+            blue *= scale
+        }
+
+        if (neutral > 0.0) {
+            val gray = red * 0.2126 + green * 0.7152 + blue * 0.0722
+            red += (gray - red) * neutral
+            green += (gray - green) * neutral
+            blue += (gray - blue) * neutral
+        }
+        if (brightnessFollow) {
+            val scale = 0.35 + 0.65 * brightness
             red *= scale
             green *= scale
             blue *= scale
@@ -823,49 +1202,29 @@ class ColorSyncEngine {
         )
     }
 
+    /**
+     * Keep some prior hue in calm, low-saturation scenes without lagging on cuts.
+     * Mirrors desktop apply_cinematic_palette_hold EXACTLY — no frame cap. The
+     * hold is a bounded feedback blend (strength <= 0.4) against the previous
+     * output, so it converges/releases smoothly on its own as the scene changes.
+     * The old device-specific frame cap force-released after N frames, producing
+     * a visible hue "pop" on long calm scenes that desktop never had.
+     */
     private fun applyCinematicPaletteHold(target: RgbColor, previous: RgbColor?, motionScore: Double): RgbColor {
-        previous ?: run {
-            paletteHoldFramesCount = 0
-            return target
-        }
+        previous ?: return target
         val targetSaturation = colorSaturation(target)
         val previousSaturation = colorSaturation(previous)
         val targetLuma = colorLuma(target)
-        val maxHoldFrames = when (deviceProfile) {
-            DeviceProfile.BRAVIA -> 18
-            DeviceProfile.WIDE_GAMUT_HDR -> 24
-            DeviceProfile.GENERIC -> 36
-        }
-        if (paletteHoldFramesCount >= maxHoldFrames) {
-            paletteHoldFramesCount = 0
-            return target
-        }
-        if (targetLuma < 0.035) {
-            paletteHoldFramesCount = 0
-            return target
-        }
-        if (motionScore > 0.045) {
-            paletteHoldFramesCount = 0
-            return target
-        }
-        if (previousSaturation < 0.12) {
-            paletteHoldFramesCount = 0
-            return target
-        }
-        if (targetSaturation >= previousSaturation * 0.92) {
-            paletteHoldFramesCount = 0
-            return target
-        }
+        if (targetLuma < 0.035) return target
+        if (motionScore > 0.045) return target
+        if (previousSaturation < 0.12) return target
+        if (targetSaturation >= previousSaturation * 0.92) return target
         var holdStrength = min(0.34, max(0.0, (previousSaturation - targetSaturation) * 0.85))
         holdStrength *= max(0.0, 1.0 - min(1.0, motionScore / 0.03))
         if (targetSaturation < 0.12 && targetLuma < 0.55) {
             holdStrength = min(0.4, holdStrength + 0.08)
         }
-        if (holdStrength <= 0.01) {
-            paletteHoldFramesCount = 0
-            return target
-        }
-        paletteHoldFramesCount += 1
+        if (holdStrength <= 0.01) return target
         return blendColors(target, previous, holdStrength)
     }
 
@@ -879,7 +1238,7 @@ class ColorSyncEngine {
         if (previous == null) {
             return target
         }
-        val normalizedMotion = min(1.0, motionScore / 0.05)
+        val normalizedMotion = min(1.0, motionScore / 0.06)  // desktop: mt*4 = 0.06
         val weight = predictionWeight * (1.0 - normalizedMotion)
         if (weight <= 0.0) {
             return target
@@ -893,11 +1252,69 @@ class ColorSyncEngine {
     }
 
     private fun smoothColor(current: RgbColor, target: RgbColor, factor: Double): RgbColor {
-        return RgbColor(
-            (current.r + (target.r - current.r) * factor).roundToInt().coerceIn(0, 255),
-            (current.g + (target.g - current.g) * factor).roundToInt().coerceIn(0, 255),
-            (current.b + (target.b - current.b) * factor).roundToInt().coerceIn(0, 255),
+        // Perceptually-uniform Oklab lerp (gamma-RGB lerp grays out between
+        // hues) with a hard snap once within ~0.4 JND so transitions actually
+        // finish instead of trailing an asymptotic EMA tail.
+        if (factor >= 1.0) return target
+        val out = lerpOklab(current, target, factor)
+        return if (perceptualDelta(out, target) < 1.6) target else out
+    }
+
+    // ── Oklab perceptual space (Björn Ottosson; parity with desktop color_science) ──
+    private fun srgbToOklab(color: RgbColor): DoubleArray {
+        val r = srgbDecode(color.r / 255.0)
+        val g = srgbDecode(color.g / 255.0)
+        val b = srgbDecode(color.b / 255.0)
+        val l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+        val m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+        val s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+        return doubleArrayOf(
+            0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
         )
+    }
+
+    private fun oklabToSrgb(lab: DoubleArray): RgbColor {
+        val lc = lab[0] + 0.3963377774 * lab[1] + 0.2158037573 * lab[2]
+        val mc = lab[0] - 0.1055613458 * lab[1] - 0.0638541728 * lab[2]
+        val sc = lab[0] - 0.0894841775 * lab[1] - 1.2914855480 * lab[2]
+        val l = lc * lc * lc
+        val m = mc * mc * mc
+        val s = sc * sc * sc
+        val r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s
+        val g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s
+        val b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+        return RgbColor(
+            (srgbEncode(r.coerceIn(0.0, 1.0)) * 255.0).roundToInt().coerceIn(0, 255),
+            (srgbEncode(g.coerceIn(0.0, 1.0)) * 255.0).roundToInt().coerceIn(0, 255),
+            (srgbEncode(b.coerceIn(0.0, 1.0)) * 255.0).roundToInt().coerceIn(0, 255),
+        )
+    }
+
+    private fun lerpOklab(current: RgbColor, target: RgbColor, t: Double): RgbColor {
+        val tt = t.coerceIn(0.0, 1.0)
+        if (tt >= 1.0) return target
+        if (tt <= 0.0) return current
+        val a = srgbToOklab(current)
+        val b = srgbToOklab(target)
+        return oklabToSrgb(
+            doubleArrayOf(
+                a[0] + (b[0] - a[0]) * tt,
+                a[1] + (b[1] - a[1]) * tt,
+                a[2] + (b[2] - a[2]) * tt,
+            ),
+        )
+    }
+
+    /** Oklab distance on the legacy delta scale (black->white = 400, JND ~8). */
+    private fun perceptualDelta(a: RgbColor, b: RgbColor): Double {
+        val la = srgbToOklab(a)
+        val lb = srgbToOklab(b)
+        val d0 = la[0] - lb[0]
+        val d1 = la[1] - lb[1]
+        val d2 = la[2] - lb[2]
+        return sqrt(d0 * d0 + d1 * d1 + d2 * d2) * 400.0
     }
 
     private fun averageColors(colors: List<RgbColor>): RgbColor {
@@ -913,10 +1330,6 @@ class ColorSyncEngine {
             totalB += color.b
         }
         return RgbColor(totalR / colors.size, totalG / colors.size, totalB / colors.size)
-    }
-
-    private fun colorDistance(first: RgbColor, second: RgbColor): Int {
-        return abs(first.r - second.r) + abs(first.g - second.g) + abs(first.b - second.b)
     }
 
     private fun colorSaturation(color: RgbColor): Double = rgbSaturation(color.r, color.g, color.b)
@@ -945,24 +1358,38 @@ class ColorSyncEngine {
         currentFps = (minFps + (maxFps - minFps) * normalized).roundToInt().coerceIn(minFps, maxFps)
     }
 
-    private fun targetSmoothing(motionScore: Double): Double {
-        val normalized = min(1.0, motionScore / 0.03)
-        var factor = smoothing * (0.72 + normalized * 0.9)
-        if (effectiveMode == "single") {
-            factor *= 0.95 + normalized * 0.2
+    private fun targetSmoothing(motionScore: Double, dtSeconds: Double): Double {
+        // Frame-rate-independent settling model (parity with desktop V2):
+        // the smoothing setting maps to a settle window (0.2 -> 160 ms) where
+        // the output reaches ~95% of a new target regardless of adaptive FPS.
+        var settle = max(0.03, smoothing * 0.8)
+        // Divisor matches desktop: motion_threshold(0.015) * 3 = 0.045.
+        val normalized = min(1.0, motionScore / 0.045)
+        settle *= 1.0 - 0.55 * normalized
+        // Sync profile: cinema favors long calm transitions; action favors
+        // near-instant response for games / fast content.
+        when (syncProfile) {
+            "cinema" -> settle *= 1.7
+            "action" -> settle *= 0.45
         }
-        return factor.coerceIn(0.06, 0.9)
+        val dt = dtSeconds.coerceIn(0.005, 0.5)
+        if (settle <= dt) return 1.0
+        return (1.0 - exp(-3.0 * dt / settle)).coerceIn(0.05, 1.0)
     }
 
     private fun sendDeltaThreshold(motionScore: Double): Int {
         if (!adaptiveFps) {
             return minColorDelta
         }
-        val motionFactor = min(1.0, motionScore / 0.05)
-        val cap = when (deviceProfile) {
-            DeviceProfile.BRAVIA -> 4.0
-            DeviceProfile.WIDE_GAMUT_HDR -> 5.0
-            DeviceProfile.GENERIC -> 6.0
+        val motionFactor = min(1.0, motionScore / 0.06)  // desktop: mt*4 = 0.06
+        val cap = when (syncProfile) {
+            "cinema" -> 8.0
+            "action" -> 2.0
+            else -> when (deviceProfile) {
+                DeviceProfile.BRAVIA -> 4.0
+                DeviceProfile.WIDE_GAMUT_HDR -> 5.0
+                DeviceProfile.GENERIC -> 6.0
+            }
         }
         val staticExtra = ((1.0 - motionFactor) * cap).roundToInt()
         return max(minColorDelta, minColorDelta + staticExtra)
@@ -1088,8 +1515,111 @@ class ColorSyncEngine {
         )
     }
 
+    private fun loadLut(context: Context) {
+        if (lut != null) return  // already loaded
+        try {
+            val bytes = context.assets.open("wiz_rgbcw_lut_v1.bin").use { it.readBytes() }
+            // magic(6) grid(i32) channels(i32) lut(bytes) grayN(i32) gray(bytes)
+            var off = 6
+            fun i32(): Int {
+                val v = (bytes[off].toInt() and 0xFF) or
+                    ((bytes[off + 1].toInt() and 0xFF) shl 8) or
+                    ((bytes[off + 2].toInt() and 0xFF) shl 16) or
+                    ((bytes[off + 3].toInt() and 0xFF) shl 24)
+                off += 4
+                return v
+            }
+            if (bytes.size < 14 ||
+                bytes[0].toInt() != 'W'.code || bytes[1].toInt() != 'Z'.code
+            ) {
+                return
+            }
+            val grid = i32()
+            val channels = i32()
+            val lutSize = grid * grid * grid * channels
+            val lutArr = IntArray(lutSize) { bytes[off + it].toInt() and 0xFF }
+            off += lutSize
+            val grayN = i32()
+            val grayArr = IntArray(grayN * channels) { bytes[off + it].toInt() and 0xFF }
+            lutGrid = grid
+            lutChannels = channels
+            lut = lutArr
+            lutGray = grayArr
+        } catch (_: Throwable) {
+            lut = null
+            lutGray = null
+        }
+    }
+
+    /** Trilinear RGBCW lookup identical to desktop map_rgb (LUT + gray ramp). */
+    private fun mapViaLut(color: RgbColor): WizPilotColor {
+        val lutArr = lut ?: return mapToWizPilotColor(color)
+        val ch = lutChannels
+        val gmax = lutGrid - 1
+        val fr = color.r / 255.0 * gmax
+        val fg = color.g / 255.0 * gmax
+        val fb = color.b / 255.0 * gmax
+        val ri0 = fr.toInt(); val gi0 = fg.toInt(); val bi0 = fb.toInt()
+        val ri1 = min(ri0 + 1, gmax); val gi1 = min(gi0 + 1, gmax); val bi1 = min(bi0 + 1, gmax)
+        val tr = fr - ri0; val tg = fg - gi0; val tb = fb - bi0
+
+        fun idx(ri: Int, gi: Int, bi: Int) = ((ri * lutGrid + gi) * lutGrid + bi) * ch
+        val i000 = idx(ri0, gi0, bi0); val i001 = idx(ri0, gi0, bi1)
+        val i010 = idx(ri0, gi1, bi0); val i011 = idx(ri0, gi1, bi1)
+        val i100 = idx(ri1, gi0, bi0); val i101 = idx(ri1, gi0, bi1)
+        val i110 = idx(ri1, gi1, bi0); val i111 = idx(ri1, gi1, bi1)
+
+        val out = DoubleArray(ch)
+        for (k in 0 until ch) {
+            val c00 = lutArr[i000 + k] + (lutArr[i001 + k] - lutArr[i000 + k]) * tb
+            val c01 = lutArr[i010 + k] + (lutArr[i011 + k] - lutArr[i010 + k]) * tb
+            val c10 = lutArr[i100 + k] + (lutArr[i101 + k] - lutArr[i100 + k]) * tb
+            val c11 = lutArr[i110 + k] + (lutArr[i111 + k] - lutArr[i110 + k]) * tb
+            val c0 = c00 + (c01 - c00) * tg
+            val c1 = c10 + (c11 - c10) * tg
+            out[k] = c0 + (c1 - c0) * tr
+        }
+
+        // Near-neutral inputs blend toward the exact-gray ramp (desktop parity).
+        val maxc = max(color.r, max(color.g, color.b))
+        val grayArr = lutGray
+        if (maxc > 0 && grayArr != null) {
+            val sat = (maxc - min(color.r, min(color.g, color.b))).toDouble() / maxc
+            if (sat < 0.12) {
+                val t = min(1.0, (0.12 - sat) / 0.08)
+                val blend = t * t * (3.0 - 2.0 * t)
+                val luma = (color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722)
+                    .roundToInt().coerceIn(0, 255)
+                for (k in 0 until ch) {
+                    out[k] += (grayArr[luma * ch + k] - out[k]) * blend
+                }
+            }
+        }
+
+        val pr = out[0].roundToInt().coerceIn(0, 255)
+        val pg = out[1].roundToInt().coerceIn(0, 255)
+        val pb = out[2].roundToInt().coerceIn(0, 255)
+        var cold = if (ch >= 5) out[3].roundToInt().coerceIn(0, 255) else 0
+        var warm = if (ch >= 5) out[4].roundToInt().coerceIn(0, 255) else if (ch == 4) out[3].roundToInt().coerceIn(0, 255) else 0
+
+        // Per-device cool bias applied post-hoc (single generic LUT serves all).
+        val bias = when (deviceProfile) {
+            DeviceProfile.BRAVIA -> 0.10
+            DeviceProfile.WIDE_GAMUT_HDR -> 0.05
+            DeviceProfile.GENERIC -> 0.0
+        }
+        if (bias != 0.0) {
+            val total = cold + warm
+            if (total > 0) {
+                cold = (cold + total * bias).roundToInt().coerceIn(0, total)
+                warm = total - cold
+            }
+        }
+        return WizPilotColor(RgbColor(pr, pg, pb), cold, warm)
+    }
+
     private fun sendColor(ip: String, color: RgbColor) {
-        val mapped = mapToWizPilotColor(color)
+        val mapped = mapViaLut(color)
         val isOn = mapped.rgb.r > 0 || mapped.rgb.g > 0 || mapped.rgb.b > 0 ||
             mapped.coldWhite > 0 || mapped.warmWhite > 0
         val cacheKey =
@@ -1103,7 +1633,26 @@ class ColorSyncEngine {
         }
         val address = addressCache.getOrPut(ip) { InetAddress.getByName(ip) }
         val packet = DatagramPacket(payload, payload.size, address, WIZ_PORT)
-        udpSocket?.send(packet)
+        val socket = udpSocket ?: return
+        // UDP has no retransmit: burst duplicates on a genuine color change so a
+        // dropped packet doesn't leave the wrong color lingering. Heartbeat /
+        // force-refresh repeats (same key) send once.
+        val repeats = if (lastSentPacketKey[ip] != cacheKey) BURST_REPEATS else 1
+        for (attempt in 0 until repeats) {
+            try {
+                socket.send(packet)
+            } catch (_: Exception) {
+                break
+            }
+            if (attempt + 1 < repeats) {
+                try {
+                    Thread.sleep(BURST_GAP_MS)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+        }
+        lastSentPacketKey[ip] = cacheKey
     }
 
     // ── HDR FP16/PQ pixel decode (used by MediaProjection FP16 capture) ──────────

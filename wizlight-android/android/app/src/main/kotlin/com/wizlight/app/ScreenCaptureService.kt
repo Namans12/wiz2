@@ -60,6 +60,8 @@ class ScreenCaptureService : Service() {
         const val EXTRA_SOURCE_COLOR_SPACE = "sourceColorSpace"
         const val EXTRA_HDR_TONE_MAPPING = "hdrToneMapping"
         const val EXTRA_HDR_CAPTURE = "hdrCapture"
+        const val EXTRA_SYNC_PROFILE = "syncProfile"
+        const val EXTRA_BRIGHTNESS_FOLLOW = "brightnessFollow"
 
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "wizlight_capture"
@@ -182,6 +184,8 @@ class ScreenCaptureService : Service() {
                 requestedColorSpace = intent.getStringExtra(EXTRA_SOURCE_COLOR_SPACE) ?: "auto"
                 requestedHdrToneMapping = intent.getBooleanExtra(EXTRA_HDR_TONE_MAPPING, false)
                 requestedHdrCapture = intent.getBooleanExtra(EXTRA_HDR_CAPTURE, false)
+                engine.syncProfile = engine.normalizeSyncProfile(intent.getStringExtra(EXTRA_SYNC_PROFILE))
+                engine.brightnessFollow = intent.getBooleanExtra(EXTRA_BRIGHTNESS_FOLLOW, true)
                 engine.bulbTargets = bulbTargets
                 engine.effectiveMode = resolveEffectiveMode(requestedMode, bulbTargets)
                 startCapture()
@@ -208,23 +212,38 @@ class ScreenCaptureService : Service() {
 
         startForeground(NOTIFICATION_ID, createNotification())
 
-        val projectionManager =
-            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = projectionManager.getMediaProjection(mediaProjectionResultCode, projectionData)
-        mediaProjection?.registerCallback(mediaProjectionCallback, mainHandler)
+        try {
+            val projectionManager =
+                getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = projectionManager.getMediaProjection(mediaProjectionResultCode, projectionData)
+            mediaProjection?.registerCallback(mediaProjectionCallback, mainHandler)
 
-        imageReader = createImageReaderWithHdrFallback()
+            imageReader = createImageReaderWithHdrFallback()
 
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "WizLightCapture",
-            screenWidth,
-            screenHeight,
-            screenDensity,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface,
-            null,
-            mainHandler,
-        )
+            virtualDisplay = mediaProjection?.createVirtualDisplay(
+                "WizLightCapture",
+                screenWidth,
+                screenHeight,
+                screenDensity,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader?.surface,
+                null,
+                mainHandler,
+            )
+        } catch (error: Exception) {
+            // Projection setup failures (revoked consent, SecurityException on
+            // newer Android) used to kill the service silently — surface them.
+            lastError = "Projection setup failed: ${error.message ?: error}"
+            SyncBridge.post(
+                "onSyncUpdate",
+                hashMapOf<String, Any?>(
+                    "lastError" to lastError,
+                    "captureBackend" to "mediaprojection",
+                ),
+            )
+            stopSelf()
+            return
+        }
 
         engine.start()
         lastError = null
@@ -274,7 +293,13 @@ class ScreenCaptureService : Service() {
     }
 
     private fun captureFrame() {
-        val image = imageReader?.acquireLatestImage() ?: return
+        val image = imageReader?.acquireLatestImage() ?: run {
+            // Static screens produce no new frames (VirtualDisplay only pushes
+            // on change) — keep the diagnostics heartbeat alive regardless so
+            // the UI doesn't look dead.
+            maybePostStatus()
+            return
+        }
         try {
             val frame = imageToFrame(image) ?: return
             val contentFrame = cropContentArea(frame, ignoreLetterbox)
@@ -472,6 +497,7 @@ class ScreenCaptureService : Service() {
         val frameTimeMs = if (frameTimesMs.isEmpty()) 0.0 else frameTimesMs.average()
         val payload = HashMap<String, Any?>(engine.statusExtras())
         payload["frameTimeMs"] = frameTimeMs
+        payload["framesProcessed"] = framesProcessed
         payload["captureBackend"] = "mediaprojection"
         payload["hdrCaptureActive"] = hdrCaptureActive
         payload["captureBufferFormat"] = captureBufferFormat

@@ -463,3 +463,93 @@ def processor_for_display(
         tone_mapper="aces",
         target_nits=220.0,
     )
+
+
+# ─── Oklab perceptual color space (Björn Ottosson, 2020) ──────────────────────
+#
+# Used by screen-sync for perceptually-uniform color smoothing and send-delta
+# gating. Gamma-RGB lerp produces gray/muddy midpoints between hues and purple
+# shifts toward white; Oklab interpolation keeps hue and lightness uniform
+# (CSS Color 4 default interpolation space). Matrices from
+# https://bottosson.github.io/posts/oklab/ (verified reference values).
+
+_OKLAB_M1 = np.array([
+    [0.4122214708, 0.5363325363, 0.0514459929],
+    [0.2119034982, 0.6806995451, 0.1073969566],
+    [0.0883024619, 0.2817188376, 0.6299787005],
+], dtype=np.float64)
+
+_OKLAB_M2 = np.array([
+    [0.2104542553, 0.7936177850, -0.0040720468],
+    [1.9779984951, -2.4285922050, 0.4505937099],
+    [0.0259040371, 0.7827717662, -0.8086757660],
+], dtype=np.float64)
+
+_OKLAB_M2_INV = np.array([
+    [1.0, 0.3963377774, 0.2158037573],
+    [1.0, -0.1055613458, -0.0638541728],
+    [1.0, -0.0894841775, -1.2914855480],
+], dtype=np.float64)
+
+_OKLAB_M1_INV = np.array([
+    [4.0767416621, -3.3077115913, 0.2309699292],
+    [-1.2684380046, 2.6097574011, -0.3413193965],
+    [-0.0041960863, -0.7034186147, 1.7076147010],
+], dtype=np.float64)
+
+# 256-entry sRGB-decode table: uint8 channel -> linear light. Hot-path helper
+# shared by Oklab conversion and linear-light extraction averaging.
+SRGB8_TO_LINEAR = srgb_decode(np.arange(256, dtype=np.float64) / 255.0)
+
+
+def srgb8_to_oklab(rgb: tuple[int, int, int]) -> np.ndarray:
+    """Convert an 8-bit sRGB tuple to Oklab (L, a, b)."""
+
+    linear = SRGB8_TO_LINEAR[np.clip(np.asarray(rgb, dtype=np.int32), 0, 255)]
+    lms = _OKLAB_M1 @ linear
+    lms_cbrt = np.cbrt(lms)
+    return _OKLAB_M2 @ lms_cbrt
+
+
+def oklab_to_srgb8(lab: np.ndarray) -> tuple[int, int, int]:
+    """Convert Oklab (L, a, b) back to a clipped 8-bit sRGB tuple."""
+
+    lms_cbrt = _OKLAB_M2_INV @ np.asarray(lab, dtype=np.float64)
+    lms = lms_cbrt ** 3
+    linear = np.clip(_OKLAB_M1_INV @ lms, 0.0, 1.0)
+    encoded = srgb_encode(linear)
+    return tuple(int(v) for v in np.clip(np.round(encoded * 255.0), 0, 255))
+
+
+def oklab_distance8(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    """Euclidean Oklab distance between two 8-bit sRGB colors.
+
+    Scale guide: black->white = 1.0; a just-noticeable difference is ~0.02.
+    Screen-sync multiplies by OKLAB_DELTA_SCALE so existing min_color_delta
+    settings (default 8) keep their meaning across platforms.
+    """
+
+    diff = srgb8_to_oklab(a) - srgb8_to_oklab(b)
+    return float(np.sqrt(float(diff @ diff)))
+
+
+# Maps oklab distance onto the legacy 0-765-ish delta scale used by settings:
+# threshold 8 -> 0.02 Oklab (~1 JND).
+OKLAB_DELTA_SCALE = 400.0
+
+
+def lerp_oklab8(
+    current: tuple[int, int, int],
+    target: tuple[int, int, int],
+    t: float,
+) -> tuple[int, int, int]:
+    """Perceptually-uniform lerp between two 8-bit sRGB colors (t in 0..1)."""
+
+    t = max(0.0, min(1.0, float(t)))
+    if t >= 1.0:
+        return tuple(int(v) for v in target)
+    if t <= 0.0:
+        return tuple(int(v) for v in current)
+    lab_a = srgb8_to_oklab(current)
+    lab_b = srgb8_to_oklab(target)
+    return oklab_to_srgb8(lab_a + (lab_b - lab_a) * t)

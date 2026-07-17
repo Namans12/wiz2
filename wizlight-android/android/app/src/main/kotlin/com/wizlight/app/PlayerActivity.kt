@@ -103,6 +103,10 @@ class PlayerActivity : Activity() {
         engine.minColorDelta = intent.getIntExtra(ScreenCaptureService.EXTRA_MIN_COLOR_DELTA, 8).coerceIn(2, 48)
         engine.adaptiveFps = intent.getBooleanExtra(ScreenCaptureService.EXTRA_ADAPTIVE_FPS, true)
         engine.predictiveSmoothing = intent.getBooleanExtra(ScreenCaptureService.EXTRA_PREDICTIVE_SMOOTHING, true)
+        engine.syncProfile = engine.normalizeSyncProfile(
+            intent.getStringExtra(ScreenCaptureService.EXTRA_SYNC_PROFILE),
+        )
+        engine.brightnessFollow = intent.getBooleanExtra(ScreenCaptureService.EXTRA_BRIGHTNESS_FOLLOW, true)
         engine.bulbTargets = parseBulbs(intent.getStringExtra(ScreenCaptureService.EXTRA_BULBS_JSON) ?: "[]")
         engine.effectiveMode = "single"
         engine.configureAutoFromDisplay(

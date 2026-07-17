@@ -32,6 +32,7 @@ class BulbConfig:
 COLOR_ALGORITHMS = ("auto", "weighted", "kmeans", "histogram")
 COLOR_SOURCE_SPACES = ("auto", "srgb", "display-p3", "rec2020")
 DEVICE_PROFILES = ("auto", "generic", "mac", "bravia", "wide_gamut_hdr")
+SYNC_PROFILES = ("auto", "cinema", "action")
 
 
 @dataclass
@@ -61,6 +62,8 @@ class ScreenSyncConfig:
     source_color_space: str = "auto"
     hdr_tone_mapping: bool = False
     device_profile: str = "auto"
+    sync_profile: str = "auto"
+    brightness_follow: bool = True
 
     def __post_init__(self) -> None:
         self.mode = self.mode if self.mode in SCREEN_SYNC_MODES else "single"
@@ -100,6 +103,9 @@ class ScreenSyncConfig:
         if normalized_profile not in DEVICE_PROFILES:
             normalized_profile = "auto"
         self.device_profile = normalized_profile
+        normalized_sync = str(self.sync_profile).lower()
+        self.sync_profile = normalized_sync if normalized_sync in SYNC_PROFILES else "auto"
+        self.brightness_follow = bool(self.brightness_follow)
 
 
 @dataclass

@@ -1,8 +1,8 @@
 {
   "app_name": "wizlight-master",
   "version": "0.1.0",
-  "last_run": "2026-06-23",
-  "session_count": 4,
+  "last_run": "2026-07-12",
+  "session_count": 11,
   "user_preferences": {
     "primary_target_device": "Sony Bravia 8 Mark II (2025, QD-OLED, Google TV)",
     "build_targets": ["android-apk", "windows-exe", "macos-app"],
@@ -34,6 +34,41 @@
       "date": "2026-06-23",
       "action": "Verified 9 cross-session R&D bug claims (BUG-01/02/03/06/07/08/09/10/13/14) against current repo. Verdict: 0 of 9 present — all already guarded here (threading.Lock in screen_sync.py, _resolve_monitor, crop size guards, gain clamp 0.70-1.0, dxcam None guards, websocket snapshot-before-broadcast, default-arg lambda binding). R&D fixes were against the earlier sandbox copy. Read-only; no code changed. Open follow-up: confirm V2 debug_snapshot read/write can't tear.",
       "output": "verification only (no code change)"
+    },
+    {
+      "date": "2026-06-23",
+      "action": "Implemented + verified 3 latency/efficiency wins (option b), one at a time: (1) IP_TOS IPTOS_LOWDELAY socket flag in fast_udp_sender._connect (read back 0x10); (2) replaced PIL resize with strided numpy sampling in non-default extractors weighted/histogram/kmeans (screen_sync_v2.py) via new _stride_sample_rgb helper, removed now-unused PIL import; (3) quantized packet-cache channels to nearest 8 (_QUANTIZE_STEP, max 4/255 error, lit->off guard) collapsing jittered streams 1203->12 cache entries. All verified with synthetic tests + py_compile + package import. Global behavior notes: (3) adds <=4/255 banding for everyone (tunable, set _QUANTIZE_STEP=1 to disable); (2) only affects non-auto algorithms.",
+      "output": "src/features/fast_udp_sender.py, src/features/screen_sync_v2.py (no APK/build artifact)"
+    },
+    {
+      "date": "2026-07-02",
+      "action": "Architecture research (code audit + sourced prior-art sweep: Hyperion/Hue Entertainment/WLED/WiZ/Oklab) then implemented Phase 1 + Phase 2 items on BOTH platforms: (1) scene-cut detector (luma-hist TV>0.30 AND inst. diff>0.10) with one-frame snap bypassing smoothing/delta; (2) frame-rate-independent settling smoothing (smoothing setting -> settle window, 0.2=160ms, 95% conv at window, epsilon snap kills EMA tail; was ~640ms to 90%); (3) Oklab perceptual lerp + delta gate x400 scale (fixes gray-dip AND closes redmean-vs-Manhattan platform divergence); (4) linear-light mean accumulation in extractors (weights stay gamma-tuned); (5) trilinear interpolation in 33-cube LUT (was nearest-lattice +-4); (6) V2 gains 1.5s force-refresh (Kotlin parity); (7) new scripts/probe_wiz_rate.py measures real rate cap + dimming-vs-RGB latency (dimming-split gated on its results). 93 pytest passed, ruff clean, APK rebuilt 46.5MB.",
+      "output": "color_science.py, screen_sync_v2.py, color_mapping.py, ColorSyncEngine.kt, sync_service.dart, home_screen.dart, scripts/probe_wiz_rate.py + app-release.apk (46.5 MB)"
+    },
+    {
+      "date": "2026-07-03",
+      "action": "Content-adaptive mapping + profiles + device targeting. ROOT-CAUSE FIX for Bravia DV symptoms: capture-space binding — Android MediaProjection/TextureView (and Windows-SDR DXCam) buffers are ALREADY sRGB SDR; auto mode no longer applies rec2020 matrix + tone curve on top (double-processing caused too-bright/too-dim/wrong-hue); macOS keeps P3 (verified exception). Neutral/B&W pipeline: scene avg-saturation -> desaturate to true gray + suppress color boost + skip palette hold; brightness-follow scales output + floor with scene luma; true black -> bulb OFF (state:false). Fixed pre-existing LUT white-gate bug (channel gains faked sat 0.17 on pure gray -> whites leaked to RGB LEDs) + added 256-entry gray-ramp LUT (trilinear smears the neutral diagonal); near-white now (12,12,18,c160,w6). Sync profiles auto/cinema(settle x1.7, delta 8)/action(x0.45, delta 2, no hold) across config/V2/engine/extras. GUIs: Flutter Sync-Feel segmented control + brightness-follow switch + scene diagnostics; Windows CTk Sync Feel segmented + follow checkbox + Auto(detect) color source (was missing -> auto could not round-trip). Device research -> docs/device-display-matrix.md (Bravia 8 II, Tab S9U, S21-S25, MacBook Air M4 (IPS not OLED), Vivobook 16X OLED; Windows HDR-on 8-bit flagged unsupported-for-colorimetry). 93 pytest passed, ruff clean, APK rebuilt.",
+      "output": "ColorSyncEngine.kt, ScreenCaptureService.kt, PlayerActivity.kt, MainActivity.kt, sync_service.dart, home_screen.dart, screen_sync_v2.py, color_mapping.py, config.py, modern_app.py, display_detection.py, docs/device-display-matrix.md + app-release.apk (46.5 MB)"
+    },
+    {
+      "date": "2026-07-10",
+      "action": "'Sync not working' triage -> THREE stacked root causes found & fixed with live on-machine testing. (1) Android APK: black-DRM capture + new black->OFF turned bulb off permanently; fixed with 0.7s persistence + captureLooksBlack flag + orange DRM banner; projection-setup errors surfaced; status heartbeat on static screens. (2) Windows source: dxcam video-mode get_latest_frame() blocks forever on static desktops + stop() join timeout tears camera down under stuck thread poisoning restarts; GPUCaptureManager rewritten non-blocking (per-call grab + cached-frame-on-unchanged); verified 3x restart cycles + REAL bulb end-to-end (192.168.1.6, payload delivered, 0 drops). (3) Frozen EXE: WizLight.spec excludes cv2 but dxcam's default RGB processor imports cv2 at grab time -> every grab raised in EXE; ALSO mss fallback was main-thread-created but sync-thread-used (GDI thread-affinity) -> silent 0 frames. Fixed: dxcam output_color=BGRA (no cv2) + own slice + release-on-probe-failure; mss lazy-init inside sync thread. Proven via new packaging/FrozenDiag.spec console diagnostic: frozen engine frames=13, dxcam active, bulb reachable. 94 tests, production EXE rebuilt.",
+      "output": "screen_sync_v2.py (GPUCaptureManager + mss), ColorSyncEngine.kt, ScreenCaptureService.kt, sync_service.dart, home_screen.dart, tests/test_features.py, packaging/frozen_diag.py + FrozenDiag.spec, dist/WizLight.exe (36.5MB 17:00) + WizLight-Setup.exe + app-release.apk"
+    },
+    {
+      "date": "2026-07-10",
+      "action": "Map-accuracy test for 2 user videos (RGB/CMYK test pattern + Bond dark title seq). Tested the mapping FUNCTION with exact input colors (can't decode YouTube frames). map_rgb verified accurate (hue <5deg, secondaries preserved, no white leak). Found real bug: brightness_follow judged scene brightness by perceptual luma -> full-intensity saturated blue dimmed -45% (0,0,255->140), red -18%. Fixed by switching brightness_follow to VALUE (avg max-channel) in screen_sync_v2.py (_scene_stats now returns value; _brightness_factor(avg_value)) + ColorSyncEngine.kt (avgValue). Verified blue/red now full, dark scenes still dim, black->off intact. 94 pytest, ruff clean. EXE + APK rebuilt. Documented non-code residual causes: WiZ LED gamut vs QD-OLED (needs camera cal), single-bulb averaging of multi-color patterns, desktop-LUT vs Android-basis-projection parity gap.",
+      "output": "screen_sync_v2.py, ColorSyncEngine.kt, app-release.apk (46.5MB), dist/WizLight.exe (20:59)"
+    },
+    {
+      "date": "2026-07-12",
+      "action": "Codebase audit (subagent) found desktop<->Android parity drift; fixed 3 in Kotlin (5-frame motion avg, aligned motion divisors, ported adaptive_color_boost). Then LUT UNIFICATION (#6, biggest color gap): baked desktop 33^3 RGBCW LUT + 256 gray ramp to assets/wiz_rgbcw_lut_v1.bin via scripts/export_lut_for_android.py; Kotlin loadLut + mapViaLut trilinear replaces hue-basis projection (basis kept as fallback), per-device cool-bias applied post-hoc. Verified: Python replica of Kotlin trilinear vs desktop map_rgb = 0 max channel diff across 4000 colors -> Android bulb payloads now IDENTICAL to desktop. APK 46.6MB built with asset bundled. Deferred: #4 auto-extractor palette stage, #5 palette-hold, #7 cut-threshold retune, #8 zone stats.",
+      "output": "scripts/export_lut_for_android.py, assets/wiz_rgbcw_lut_v1.bin (180983 B), ColorSyncEngine.kt, app-release.apk (46.6MB)"
+    },
+    {
+      "date": "2026-07-12",
+      "action": "Knocked out the 4 remaining deferred parity items. #4: ported desktop palette-candidate/match/balance stage to Kotlin (paletteCandidates + selectPaletteMatch + paletteBalanceScore + perceptualColorDistance redmean) and wired into extractCinematicSingleColor + extractBalancedAutoColor to mirror desktop extract_cinematic_single_color / extract_dominant_auto; caught a truncation bug (candidate avg must .toInt not roundToInt to match desktop int(np.clip)). #5: removed the palette-hold frame cap (18/24/36) so applyCinematicPaletteHold matches desktop exactly (bounded feedback blend converges/releases smoothly; cap caused a hue pop on long calm scenes). #7: desktop MotionDetector uses resolution-aware stride (width//320) so the cut histogram stays ~57k samples after the 640px downscale (fixed ::8 left it too sparse for the 0.30 threshold). #8: Kotlin scene stats average ALL grid regions, not just left, so zone-mode neutral/brightness/black reflect the whole frame. Verified: palette selected-color 0/400 mismatch vs desktop, balance-delta 0.0000; cut detector quiet on still/pan + fires on hard cut; 94 pytest pass; APK 46.6MB built clean.",
+      "output": "ColorSyncEngine.kt, screen_sync_v2.py, app-release.apk (46.6MB)"
     }
   ],
   "flags": {

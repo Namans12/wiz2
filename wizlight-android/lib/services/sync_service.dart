@@ -20,6 +20,8 @@ class SyncSettings {
     this.sourceColorSpace = 'auto',
     this.hdrToneMapping = false,
     this.hdrCapture = false,
+    this.syncProfile = 'auto',
+    this.brightnessFollow = true,
   });
 
   final String mode;
@@ -38,6 +40,8 @@ class SyncSettings {
   final String sourceColorSpace;
   final bool hdrToneMapping;
   final bool hdrCapture;
+  final String syncProfile;
+  final bool brightnessFollow;
 
   SyncSettings copyWith({
     String? mode,
@@ -56,6 +60,8 @@ class SyncSettings {
     String? sourceColorSpace,
     bool? hdrToneMapping,
     bool? hdrCapture,
+    String? syncProfile,
+    bool? brightnessFollow,
   }) {
     return SyncSettings(
       mode: mode ?? this.mode,
@@ -74,6 +80,8 @@ class SyncSettings {
       sourceColorSpace: sourceColorSpace ?? this.sourceColorSpace,
       hdrToneMapping: hdrToneMapping ?? this.hdrToneMapping,
       hdrCapture: hdrCapture ?? this.hdrCapture,
+      syncProfile: syncProfile ?? this.syncProfile,
+      brightnessFollow: brightnessFollow ?? this.brightnessFollow,
     );
   }
 
@@ -96,6 +104,8 @@ class SyncSettings {
       'sourceColorSpace': sourceColorSpace,
       'hdrToneMapping': hdrToneMapping,
       'hdrCapture': hdrCapture,
+      'syncProfile': syncProfile,
+      'brightnessFollow': brightnessFollow,
     };
   }
 
@@ -117,6 +127,8 @@ class SyncSettings {
       'sourceColorSpace': sourceColorSpace,
       'hdrToneMapping': hdrToneMapping,
       'hdrCapture': hdrCapture,
+      'syncProfile': syncProfile,
+      'brightnessFollow': brightnessFollow,
     };
   }
 
@@ -140,7 +152,17 @@ class SyncSettings {
       ),
       hdrToneMapping: json['hdrToneMapping'] as bool? ?? false,
       hdrCapture: json['hdrCapture'] as bool? ?? false,
+      syncProfile: _normalizeSyncProfile(json['syncProfile'] as String? ?? 'auto'),
+      brightnessFollow: json['brightnessFollow'] as bool? ?? true,
     );
+  }
+
+  static String _normalizeSyncProfile(String value) {
+    final normalized = value.toLowerCase();
+    if (normalized == 'cinema' || normalized == 'action') {
+      return normalized;
+    }
+    return 'auto';
   }
 
   static String _normalizeSourceColorSpace(String value) {
@@ -186,6 +208,14 @@ class SyncRuntimeStats {
     this.primaryHdrType = 'none',
     this.hdrCaptureActive = false,
     this.captureBufferFormat = 'rgba8888',
+    this.sceneCut = false,
+    this.cutsDetected = 0,
+    this.sceneNeutral = 0.0,
+    this.sceneLuma = 0.0,
+    this.syncProfile = 'auto',
+    this.brightnessFollow = true,
+    this.captureLooksBlack = false,
+    this.framesProcessed = 0,
     this.targetColors = const <String, Color>{},
     this.outputColors = const <String, Color>{},
     this.lastError,
@@ -214,6 +244,14 @@ class SyncRuntimeStats {
   final String primaryHdrType;
   final bool hdrCaptureActive;
   final String captureBufferFormat;
+  final bool sceneCut;
+  final int cutsDetected;
+  final double sceneNeutral;
+  final double sceneLuma;
+  final String syncProfile;
+  final bool brightnessFollow;
+  final bool captureLooksBlack;
+  final int framesProcessed;
   final Map<String, Color> targetColors;
   final Map<String, Color> outputColors;
   final String? lastError;
@@ -258,6 +296,14 @@ class SyncRuntimeStats {
       'primaryHdrType': primaryHdrType,
       'hdrCaptureActive': hdrCaptureActive,
       'captureBufferFormat': captureBufferFormat,
+      'sceneCut': sceneCut,
+      'cutsDetected': cutsDetected,
+      'sceneNeutral': sceneNeutral,
+      'sceneLuma': sceneLuma,
+      'syncProfile': syncProfile,
+      'brightnessFollow': brightnessFollow,
+      'captureLooksBlack': captureLooksBlack,
+      'framesProcessed': framesProcessed,
       'updatesSent': updatesSent,
       'targetColors': _encodeColorMap(targetColors),
       'outputColors': _encodeColorMap(outputColors),
@@ -295,6 +341,14 @@ class SyncRuntimeStats {
       primaryHdrType: map['primaryHdrType'] as String? ?? 'none',
       hdrCaptureActive: map['hdrCaptureActive'] as bool? ?? false,
       captureBufferFormat: map['captureBufferFormat'] as String? ?? 'rgba8888',
+      sceneCut: map['sceneCut'] as bool? ?? false,
+      cutsDetected: (map['cutsDetected'] as num?)?.toInt() ?? 0,
+      sceneNeutral: (map['sceneNeutral'] as num?)?.toDouble() ?? 0.0,
+      sceneLuma: (map['sceneLuma'] as num?)?.toDouble() ?? 0.0,
+      syncProfile: map['syncProfile'] as String? ?? 'auto',
+      brightnessFollow: map['brightnessFollow'] as bool? ?? true,
+      captureLooksBlack: map['captureLooksBlack'] as bool? ?? false,
+      framesProcessed: (map['framesProcessed'] as num?)?.toInt() ?? 0,
       targetColors: _decodeColorMap(map['targetColors']),
       outputColors: _decodeColorMap(map['outputColors']),
       lastError: map['lastError'] as String?,

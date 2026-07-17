@@ -456,7 +456,7 @@ def test_motion_detector_detects_static():
 
 def test_gpu_capture_manager_preserves_dxcam_rgb_channel_order():
     class FakeCamera:
-        def get_latest_frame(self):
+        def grab(self):
             frame = np.zeros((2, 2, 3), dtype=np.uint8)
             frame[:, :, 0] = 255
             return frame
@@ -470,14 +470,39 @@ def test_gpu_capture_manager_preserves_dxcam_rgb_channel_order():
     assert tuple(frame[0, 0]) == (255, 0, 0)
 
 
+def test_gpu_capture_manager_serves_cached_frame_on_static_screen():
+    """Non-blocking contract: dxcam grab() returns None while the screen is
+    unchanged; the manager must serve the cached last frame instead of
+    stalling the sync loop (the static-desktop freeze regression)."""
+
+    class FakeCamera:
+        def __init__(self):
+            self.calls = 0
+
+        def grab(self):
+            self.calls += 1
+            if self.calls == 1:
+                frame = np.zeros((2, 2, 3), dtype=np.uint8)
+                frame[:, :, 1] = 200
+                return frame
+            return None  # screen unchanged
+
+    capture = GPUCaptureManager()
+    capture._camera = FakeCamera()
+
+    first = capture.grab()
+    second = capture.grab()
+    third = capture.grab()
+
+    assert first is not None
+    assert second is not None and tuple(second[0, 0]) == (0, 200, 0)
+    assert third is not None and tuple(third[0, 0]) == (0, 200, 0)
+
+
 def test_gpu_capture_manager_releases_camera_on_stop():
     class FakeCamera:
         def __init__(self):
-            self.stopped = False
             self.released = False
-
-        def stop(self):
-            self.stopped = True
 
         def release(self):
             self.released = True
@@ -488,7 +513,6 @@ def test_gpu_capture_manager_releases_camera_on_stop():
 
     capture.stop()
 
-    assert camera.stopped is True
     assert camera.released is True
     assert capture._camera is None
 
