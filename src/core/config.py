@@ -33,6 +33,7 @@ COLOR_ALGORITHMS = ("auto", "weighted", "kmeans", "histogram")
 COLOR_SOURCE_SPACES = ("auto", "srgb", "display-p3", "rec2020")
 DEVICE_PROFILES = ("auto", "generic", "mac", "bravia", "wide_gamut_hdr")
 SYNC_PROFILES = ("auto", "cinema", "action")
+BRIGHTNESS_MODES = ("follow", "constant")
 
 
 @dataclass
@@ -63,7 +64,12 @@ class ScreenSyncConfig:
     hdr_tone_mapping: bool = False
     device_profile: str = "auto"
     sync_profile: str = "auto"
-    brightness_follow: bool = True
+    brightness_follow: bool = True  # legacy; feeds brightness_mode default
+    # "follow": bulb brightness tracks scene brightness (black turns it off).
+    # "constant": brightness pinned at sync_brightness; only hue/sat track the
+    # screen and black frames hold the last color.
+    brightness_mode: Optional[str] = None
+    sync_brightness: int = 180
 
     def __post_init__(self) -> None:
         self.mode = self.mode if self.mode in SCREEN_SYNC_MODES else "single"
@@ -106,6 +112,12 @@ class ScreenSyncConfig:
         normalized_sync = str(self.sync_profile).lower()
         self.sync_profile = normalized_sync if normalized_sync in SYNC_PROFILES else "auto"
         self.brightness_follow = bool(self.brightness_follow)
+        if self.brightness_mode is None:
+            self.brightness_mode = "follow" if self.brightness_follow else "constant"
+        normalized_mode = str(self.brightness_mode).lower()
+        self.brightness_mode = normalized_mode if normalized_mode in BRIGHTNESS_MODES else "follow"
+        self.brightness_follow = self.brightness_mode == "follow"
+        self.sync_brightness = max(30, min(255, int(self.sync_brightness)))
 
 
 @dataclass

@@ -13,7 +13,6 @@ WiZ bulbs are controlled locally over UDP. Your bulbs and controlling device mus
 - [Latency And Accuracy Testing](docs/latency-and-accuracy-testing.md): synthetic benchmarks, fake UDP bulb, control-effect checks, and real hardware measurement.
 - [Hardware Color Accuracy](docs/hardware-color-accuracy.md): real-bulb camera verification flow.
 - [macOS And iOS Platform Notes](docs/apple-platform-notes.md): second-milestone Apple support direction.
-- [Alexa Setup](docs/alexa-setup.md): optional fauxmo/Alexa bridge setup.
 - [Android App README](wizlight-android/README.md): Android screen-sync usage and build notes.
 
 ## Highlights
@@ -25,7 +24,7 @@ WiZ bulbs are controlled locally over UDP. Your bulbs and controlling device mus
 - Clap detection with adaptive room-noise tracking, transient filtering, and double-clap mode.
 - Camera calibration and opt-in hardware color accuracy tests.
 - Android Flutter app with direct WiZ discovery, native MediaProjection capture, and direct UDP screen sync.
-- Optional CLI automation, WebSocket bridge, and Alexa bridge.
+- Optional CLI automation.
 
 ## Requirements
 

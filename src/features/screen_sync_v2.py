@@ -136,7 +136,11 @@ class OptimizedCaptureConfig(CaptureConfig):
 
     # Content-adaptive behavior
     sync_profile: str = "auto"       # "auto" | "cinema" | "action"
-    brightness_follow: bool = True   # bulb brightness tracks scene luma
+    brightness_follow: bool = True   # legacy alias of brightness_mode=="follow"
+    # "follow": bulb dimming tracks scene brightness (black -> off).
+    # "constant": dimming pinned at sync_brightness; black holds last color.
+    brightness_mode: str = "follow"
+    sync_brightness: int = 180
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -153,7 +157,10 @@ class OptimizedCaptureConfig(CaptureConfig):
         self.parallel_regions = bool(self.parallel_regions)
         profile = str(self.sync_profile).lower()
         self.sync_profile = profile if profile in {"auto", "cinema", "action"} else "auto"
-        self.brightness_follow = bool(self.brightness_follow)
+        mode = str(self.brightness_mode).lower()
+        self.brightness_mode = mode if mode in {"follow", "constant"} else ("follow" if self.brightness_follow else "constant")
+        self.brightness_follow = self.brightness_mode == "follow"
+        self.sync_brightness = max(30, min(255, int(self.sync_brightness)))
 
 
 def blend_colors(
@@ -253,15 +260,14 @@ def _brightness_factor(avg_value: float) -> float:
 def _apply_content_adaptation(
     color: tuple[int, int, int],
     neutral: float,
-    brightness: float,
-    follow: bool,
 ) -> tuple[int, int, int]:
-    """Desaturate neutral scenes toward true gray and track scene brightness.
+    """Desaturate neutral scenes toward true gray.
 
     Neutral scenes must land on the bulb's white channels (the WiZ mapper
     routes low-saturation colors to CW/WW), so B&W film reads as clean white
-    instead of an amplified color cast. Brightness-follow scales dim scenes
-    down instead of pinning everything at the minimum-brightness floor.
+    instead of an amplified color cast. Scene brightness is no longer encoded
+    here — it rides the setPilot ``dimming`` field so hue is always rendered
+    at full LED drive (see _normalize_to_full_drive).
     """
 
     r, g, b = color
@@ -270,15 +276,35 @@ def _apply_content_adaptation(
         r = int(round(r + (gray - r) * neutral))
         g = int(round(g + (gray - g) * neutral))
         b = int(round(b + (gray - b) * neutral))
-    if follow:
-        scale = 0.35 + 0.65 * brightness
-        r = int(round(r * scale))
-        g = int(round(g * scale))
-        b = int(round(b * scale))
     return (
         max(0, min(255, r)),
         max(0, min(255, g)),
         max(0, min(255, b)),
+    )
+
+
+def _normalize_to_full_drive(
+    color: tuple[int, int, int],
+    min_peak: int = 8,
+) -> tuple[int, int, int]:
+    """Scale a color so its max channel reaches 255 (hue/sat preserved).
+
+    Real video frames rarely average anywhere near channel 255, so the old
+    pipeline drove the bulb's LEDs at 30-60% where hue rendering is muddy and
+    dim — the single biggest "colors don't map" complaint. Brightness belongs
+    in the dimming field, not the RGB magnitude. Colors darker than
+    ``min_peak`` are left untouched (their hue is quantization noise; the
+    black/off path owns them).
+    """
+
+    peak = max(color)
+    if peak < min_peak or peak >= 255:
+        return color
+    scale = 255.0 / peak
+    return (
+        min(255, int(round(color[0] * scale))),
+        min(255, int(round(color[1] * scale))),
+        min(255, int(round(color[2] * scale))),
     )
 
 
@@ -704,6 +730,8 @@ def build_optimized_capture_config(
         parallel_regions=len(tuple(active_regions)) > 1,
         sync_profile=str(getattr(settings, "sync_profile", "auto")),
         brightness_follow=bool(getattr(settings, "brightness_follow", True)),
+        brightness_mode=str(getattr(settings, "brightness_mode", None) or ("follow" if getattr(settings, "brightness_follow", True) else "constant")),
+        sync_brightness=int(getattr(settings, "sync_brightness", 180)),
     )
 
 
@@ -1109,6 +1137,11 @@ class OptimizedScreenSync:
         self._scene_neutral = 0.0
         self._scene_luma = 0.0
         self._black_since: Optional[float] = None
+        self._output_brightness = (
+            255 if self.config.brightness_mode == "follow" else int(self.config.sync_brightness)
+        )
+        self._smoothed_brightness: Optional[float] = None
+        self._last_sent_brightness: Optional[int] = None
 
         # Optimization components
         self._gpu_capture: Optional[GPUCaptureManager] = None
@@ -1162,6 +1195,11 @@ class OptimizedScreenSync:
             self._scene_neutral = 0.0
             self._scene_luma = 0.0
             self._black_since = None
+            self._output_brightness = (
+                255 if self.config.brightness_mode == "follow" else int(self.config.sync_brightness)
+            )
+            self._smoothed_brightness = None
+            self._last_sent_brightness = None
             self._capture_status = "OK"
             self._dxcam_recovery_events_seen, _ = _dxcam_recovery_state()
             self._dxcam_recovery_status_until = 0.0
@@ -1295,21 +1333,14 @@ class OptimizedScreenSync:
         content: np.ndarray,
         region: str,
         neutral: float,
-        brightness: float,
-        follow: bool,
     ) -> tuple[str, tuple[int, int, int], float]:
         """Process a single region (for parallel execution)."""
         region_image = crop_relative_region(content, region)
         color = self._extract_color(region_image)
         effective_boost = adaptive_color_boost(color, self.config.color_boost)
         effective_boost = 1.0 + (effective_boost - 1.0) * (1.0 - neutral)
-        floor = int(self.config.min_brightness * (brightness if follow else 1.0))
-        enhanced = enhance_color(
-            color,
-            color_boost=effective_boost,
-            min_brightness=floor,
-        )
-        adapted = _apply_content_adaptation(enhanced, neutral, brightness, follow)
+        enhanced = enhance_color(color, color_boost=effective_boost, min_brightness=0)
+        adapted = _apply_content_adaptation(enhanced, neutral)
         return region, adapted, effective_boost
 
     def _extract_colors(self, image: np.ndarray) -> dict[str, tuple[int, int, int]]:
@@ -1320,15 +1351,29 @@ class OptimizedScreenSync:
         avg_saturation, avg_luma, avg_value = _scene_stats(content)
         neutral = _neutral_strength(avg_saturation)
         brightness = _brightness_factor(avg_value)
-        follow = self.config.brightness_follow
+        follow = self.config.brightness_mode == "follow"
         self._last_neutral = neutral
         with self._stats_lock:
             self._scene_neutral = neutral
             self._scene_luma = avg_luma
 
-        # A genuinely black frame turns the bulb off (payload of zeros encodes
-        # state:false in the sender) — but only after the black PERSISTS
-        # (~0.7s) so brief fades don't flicker the bulb's power state.
+        # Brightness rides the setPilot dimming field, decoupled from hue.
+        # Follow: scene value drives dimming, with the Dark Scene Floor slider
+        # as the minimum (true black turns the bulb off below). Constant:
+        # dimming is pinned so only hue/saturation track the screen. The final
+        # value is set after extraction (see _finalize_output_brightness) so
+        # near-black colors can taper the output instead of flashing white.
+        if follow:
+            floor_frac = max(10, min(60, int(self.config.min_brightness))) / 255.0
+            raw_brightness = 255.0 * (floor_frac + (1.0 - floor_frac) * brightness)
+        else:
+            raw_brightness = float(self.config.sync_brightness)
+
+        # A genuinely black frame: in follow mode the bulb turns OFF (payload
+        # of zeros encodes state:false in the sender) — but only after the
+        # black PERSISTS (~0.7s) so brief fades don't flicker the power state.
+        # In constant mode the bulb HOLDS the last color instead (brightness
+        # must not visibly react to content).
         is_black = avg_luma < _TRUE_BLACK_LUMA and neutral > 0.7
         now = time.perf_counter()
         if is_black:
@@ -1336,7 +1381,9 @@ class OptimizedScreenSync:
                 self._black_since = now
         else:
             self._black_since = None
-        if follow and is_black and self._black_since is not None and now - self._black_since >= 0.7:
+        if is_black and self._black_since is not None and now - self._black_since >= 0.7:
+            if not follow:
+                return {}
             if self._effective_mode == "single":
                 return {"all": (0, 0, 0)}
             return {region: (0, 0, 0) for region in self.config.active_regions}
@@ -1345,15 +1392,19 @@ class OptimizedScreenSync:
             color = self._extract_single_color(content)
             effective_boost = adaptive_color_boost(color, self.config.color_boost)
             effective_boost = 1.0 + (effective_boost - 1.0) * (1.0 - neutral)
-            floor = int(self.config.min_brightness * (brightness if follow else 1.0))
             with self._stats_lock:
                 self._effective_color_boost = effective_boost
-            enhanced = enhance_color(
-                color,
-                color_boost=effective_boost,
-                min_brightness=floor,
-            )
-            return {"all": _apply_content_adaptation(enhanced, neutral, brightness, follow)}
+            # min_brightness=0: the old floor inflated near-black noise into a
+            # visible color; dimness now belongs to the dimming taper below.
+            enhanced = enhance_color(color, color_boost=effective_boost, min_brightness=0)
+            adapted = _apply_content_adaptation(enhanced, neutral)
+            peak = max(adapted)
+            if not follow and peak < 24:
+                # Constant mode on a nearly-black frame: the hue is noise, and
+                # brightness must not react — hold the last color instead.
+                return {}
+            self._finalize_output_brightness(raw_brightness, follow, peak)
+            return {"all": _normalize_to_full_drive(adapted)}
 
         # Zone mode - process regions
         colors: dict[str, tuple[int, int, int]] = {}
@@ -1361,9 +1412,7 @@ class OptimizedScreenSync:
         if self._executor and self.config.parallel_regions:
             # Parallel processing
             futures = [
-                self._executor.submit(
-                    self._process_region, content, region, neutral, brightness, follow
-                )
+                self._executor.submit(self._process_region, content, region, neutral)
                 for region in self.config.active_regions
             ]
             boosts: list[float] = []
@@ -1381,17 +1430,42 @@ class OptimizedScreenSync:
             # Sequential processing
             boosts = []
             for region in self.config.active_regions:
-                _, color, effective_boost = self._process_region(
-                    content, region, neutral, brightness, follow
-                )
+                _, color, effective_boost = self._process_region(content, region, neutral)
                 colors[region] = color
                 boosts.append(effective_boost)
             if boosts:
                 with self._stats_lock:
                     self._effective_color_boost = float(np.mean(boosts))
 
-        return colors
+        peak = max((max(color) for color in colors.values()), default=0)
+        if not follow and peak < 24:
+            return {}
+        self._finalize_output_brightness(raw_brightness, follow, peak)
+        return {region: _normalize_to_full_drive(color) for region, color in colors.items()}
     
+    def _finalize_output_brightness(self, raw_brightness: float, follow: bool, peak: int) -> None:
+        """Finish the per-frame dimming value once the frame color is known.
+
+        Follow mode tapers brightness with the pre-normalize color peak so a
+        nearly-black scene glows faintly instead of flashing the normalized
+        color at the scene-value floor, then smooths with a short EMA (~3
+        frames) and quantizes to steps of 5 (deflicker + sender packet-cache
+        hits). Constant mode is pinned by definition — no taper, no smoothing.
+        """
+
+        if follow:
+            if peak < 48:
+                raw_brightness *= max(0.0, peak) / 48.0
+            prev = self._smoothed_brightness
+            smoothed = raw_brightness if prev is None else prev + (raw_brightness - prev) * 0.35
+            self._smoothed_brightness = smoothed
+            out_brightness = int(round(smoothed / 5.0) * 5)
+        else:
+            self._smoothed_brightness = None
+            out_brightness = int(round(raw_brightness / 5.0) * 5)
+        with self._stats_lock:
+            self._output_brightness = max(26, min(255, out_brightness))
+
     def _update_adaptive_fps(self, motion_score: float) -> None:
         """Update FPS based on motion detection."""
         if not self.config.adaptive_fps:
@@ -1554,13 +1628,35 @@ class OptimizedScreenSync:
                             self._last_sent_colors[key] = smoothed
                         changed_colors[key] = smoothed
                 
-                # Clean up stale keys
+                # Clean up stale keys — but NOT when target_colors is empty on
+                # purpose (constant-mode black hold): wiping state there would
+                # force a resend/snap on every un-black transition.
+                if target_colors:
+                    with self._stats_lock:
+                        stale_keys = set(self._current_colors) - set(target_colors)
+                        for key in stale_keys:
+                            self._current_colors.pop(key, None)
+                            self._last_sent_colors.pop(key, None)
+
+                # Brightness rides the dimming field: when it moves >=5 while
+                # the color holds steady (e.g. a slow fade in follow mode), the
+                # colors must be resent anyway or the bulb never dims.
                 with self._stats_lock:
-                    stale_keys = set(self._current_colors) - set(target_colors)
-                    for key in stale_keys:
-                        self._current_colors.pop(key, None)
-                        self._last_sent_colors.pop(key, None)
-                
+                    out_brightness = self._output_brightness
+                    last_sent_brightness = self._last_sent_brightness
+                if (
+                    not changed_colors
+                    and target_colors
+                    and last_sent_brightness is not None
+                    and abs(out_brightness - last_sent_brightness) >= 5
+                ):
+                    with self._stats_lock:
+                        changed_colors = {
+                            key: self._current_colors[key]
+                            for key in target_colors
+                            if key in self._current_colors
+                        }
+
                 # Send changes
                 if changed_colors:
                     self.on_color_change(changed_colors)
@@ -1571,6 +1667,7 @@ class OptimizedScreenSync:
                         self._last_send_time = now
                         self._updates_sent += 1
                         self._last_error = None
+                        self._last_sent_brightness = out_brightness
                 if changed_colors or self._last_forced_send_at == 0.0:
                     self._last_forced_send_at = time.perf_counter()
                 
@@ -1658,16 +1755,46 @@ class OptimizedScreenSync:
                 "sceneLuma": self._scene_luma,
                 "sync_profile": self.config.sync_profile,
                 "syncProfile": self.config.sync_profile,
-                "brightness_follow": self.config.brightness_follow,
-                "brightnessFollow": self.config.brightness_follow,
+                "brightness_mode": self.config.brightness_mode,
+                "brightnessMode": self.config.brightness_mode,
+                "output_brightness": self._output_brightness,
+                "outputBrightness": self._output_brightness,
+                "capture_looks_black": self._capture_looks_black_locked(),
+                "captureLooksBlack": self._capture_looks_black_locked(),
                 "last_error": self._last_error,
                 "lastError": self._last_error,
             }
     
+    def _capture_looks_black_locked(self) -> bool:
+        """True when capture has been solid black for >3s while running.
+
+        Persistent black during playback almost always means the video is not
+        capturable: DRM-protected apps/browsers (Netflix, Prime) and some
+        hardware-overlay players present black to Desktop Duplication even
+        though the screen shows video. Callers must hold no assumption that
+        content is dark — 3s of TRUE black in real footage is rare.
+        """
+
+        return self._running and self._black_since is not None and (
+            time.perf_counter() - self._black_since > 3.0
+        )
+
+    @property
+    def capture_looks_black(self) -> bool:
+        with self._stats_lock:
+            return self._capture_looks_black_locked()
+
+    @property
+    def output_brightness(self) -> int:
+        """Current bulb brightness (0-255) to send as the setPilot dimming."""
+
+        with self._stats_lock:
+            return self._output_brightness
+
     @property
     def current_fps(self) -> int:
         return self._current_fps
-    
+
     @property
     def capture_method(self) -> str:
         return self._capture_method

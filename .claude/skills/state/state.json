@@ -1,8 +1,8 @@
 {
   "app_name": "wizlight-master",
   "version": "0.1.0",
-  "last_run": "2026-07-12",
-  "session_count": 11,
+  "last_run": "2026-07-18",
+  "session_count": 12,
   "user_preferences": {
     "primary_target_device": "Sony Bravia 8 Mark II (2025, QD-OLED, Google TV)",
     "build_targets": ["android-apk", "windows-exe", "macos-app"],
@@ -69,6 +69,11 @@
       "date": "2026-07-12",
       "action": "Knocked out the 4 remaining deferred parity items. #4: ported desktop palette-candidate/match/balance stage to Kotlin (paletteCandidates + selectPaletteMatch + paletteBalanceScore + perceptualColorDistance redmean) and wired into extractCinematicSingleColor + extractBalancedAutoColor to mirror desktop extract_cinematic_single_color / extract_dominant_auto; caught a truncation bug (candidate avg must .toInt not roundToInt to match desktop int(np.clip)). #5: removed the palette-hold frame cap (18/24/36) so applyCinematicPaletteHold matches desktop exactly (bounded feedback blend converges/releases smoothly; cap caused a hue pop on long calm scenes). #7: desktop MotionDetector uses resolution-aware stride (width//320) so the cut histogram stays ~57k samples after the 640px downscale (fixed ::8 left it too sparse for the 0.30 threshold). #8: Kotlin scene stats average ALL grid regions, not just left, so zone-mode neutral/brightness/black reflect the whole frame. Verified: palette selected-color 0/400 mismatch vs desktop, balance-delta 0.0000; cut detector quiet on still/pan + fires on hard cut; 94 pytest pass; APK 46.6MB built clean.",
       "output": "ColorSyncEngine.kt, screen_sync_v2.py, app-release.apk (46.6MB)"
+    },
+    {
+      "date": "2026-07-18",
+      "action": "PC video mapping audit + brightness redesign + de-bloat. Root cause of 'video colors not mapped': colors were sent at the scene's low RGB magnitude so LEDs ran at 30-60% drive (muddy dim hue). Redesign: value-normalize color to full drive, brightness rides setPilot dimming separately. Two modes per user: brightness_mode=follow (dimming tracks scene value, floor slider, near-black taper, black->off) and constant (dimming pinned at sync_brightness, black holds last color). Loop resends when dimming moves >=5. GUI: Brightness Mode segmented control + Constant Brightness slider, deleted the lines that stomped saved use_gpu/adaptive/predictive/algorithm each launch, added capture-looks-black status hint (DRM/overlay video captures black). De-bloat: removed alexa_bridge, websocket_server, CLI serve/alexa, fauxmo+websockets deps from requirements/pyproject/all specs, dead v1 ScreenSync class (506->377 lines), alexa docs. Verified: truth harness 8 frames x 2 modes all correct, 99 pytest (5 new), import smoke. EXE rebuild + live-bulb run pending.",
+      "output": "screen_sync_v2.py, config.py, modern_app.py, commands.py, screen_sync.py, requirements.txt, pyproject.toml, 3 specs, README; deleted alexa_bridge.py + websocket_server.py + docs/alexa-setup.md"
     }
   ],
   "flags": {

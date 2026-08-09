@@ -693,3 +693,89 @@ def test_optimized_screen_sync_debug_snapshot_reports_runtime_stats():
     assert round(snapshot["sendRateHz"], 3) == round(1 / 0.075, 3)
     assert snapshot["updates_sent"] == 4
     assert snapshot["frames_processed"] == 8
+
+
+# ---------------------------------------------------------------------------
+# Brightness modes: full-drive normalization + dimming-channel brightness
+# ---------------------------------------------------------------------------
+
+
+def _frame(rgb, shape=(120, 200)):
+    frame = np.zeros((*shape, 3), dtype=np.uint8)
+    frame[:] = rgb
+    return frame
+
+
+def test_brightness_mode_config_back_compat():
+    from src.core.config import ScreenSyncConfig
+
+    # Old configs carry only brightness_follow; the mode must derive from it.
+    assert ScreenSyncConfig(brightness_follow=True).brightness_mode == "follow"
+    assert ScreenSyncConfig(brightness_follow=False).brightness_mode == "constant"
+    # Explicit mode wins and re-derives the legacy flag.
+    cfg = ScreenSyncConfig(brightness_follow=True, brightness_mode="constant")
+    assert cfg.brightness_mode == "constant"
+    assert cfg.brightness_follow is False
+    assert ScreenSyncConfig(sync_brightness=999).sync_brightness == 255
+
+
+def test_normalize_to_full_drive():
+    from src.features.screen_sync_v2 import _normalize_to_full_drive
+
+    # Half-intensity red reaches full drive with hue/sat preserved.
+    assert _normalize_to_full_drive((128, 0, 0)) == (255, 0, 0)
+    assert _normalize_to_full_drive((100, 60, 20)) == (255, 153, 51)
+    # Near-black noise is NOT amplified (black/off path owns it).
+    assert _normalize_to_full_drive((4, 4, 6)) == (4, 4, 6)
+    assert _normalize_to_full_drive((0, 0, 0)) == (0, 0, 0)
+
+
+def test_extract_colors_normalizes_and_sets_dimming_follow():
+    engine = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="follow", min_brightness=20),
+    )
+    colors = engine._extract_colors(_frame((128, 0, 0)))
+    assert colors["all"][0] >= 250  # red normalized to full drive
+    assert colors["all"][1] <= 20 and colors["all"][2] <= 20
+    # value 0.5 is above the brightness knee -> full dimming
+    assert engine.output_brightness == 255
+
+
+def test_extract_colors_constant_mode_pins_brightness_and_holds_on_black():
+    engine = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="constant", sync_brightness=180),
+    )
+    colors = engine._extract_colors(_frame((0, 160, 160)))
+    assert colors, "colorful frame must produce an update"
+    assert engine.output_brightness == 180
+
+    # Persistent black: constant mode HOLDS (returns no update) instead of off.
+    engine._black_since = None
+    first = engine._extract_colors(_frame((0, 0, 0)))
+    engine._black_since -= 1.0  # simulate persistence beyond 0.7s
+    held = engine._extract_colors(_frame((0, 0, 0)))
+    assert held == {}
+    assert engine.output_brightness == 180
+    assert first == {} or all(max(c) < 24 or c == (0, 0, 0) for c in first.values())
+
+
+def test_extract_colors_follow_black_turns_off_and_dark_tapers():
+    engine = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="follow", min_brightness=20),
+    )
+    engine._extract_colors(_frame((0, 0, 0)))
+    engine._black_since -= 1.0
+    off = engine._extract_colors(_frame((0, 0, 0)))
+    assert off == {"all": (0, 0, 0)}
+
+    # Near-black (above the black threshold): output brightness tapers to the
+    # floor instead of flashing the normalized color at scene-floor dimming.
+    engine2 = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="follow", min_brightness=20),
+    )
+    engine2._extract_colors(_frame((5, 5, 7)))
+    assert engine2.output_brightness <= 40

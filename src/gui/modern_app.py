@@ -419,8 +419,22 @@ class WizLightModernGUI(AnimationMixin):
                 "Auto",
             )
         )
-        self.brightness_follow_var = ctk.BooleanVar(
-            value=self.config.screen_sync.brightness_follow
+        self.brightness_mode_labels = {
+            "Follow video": "follow",
+            "Constant": "constant",
+        }
+        self.brightness_mode_value = ctk.StringVar(
+            value=next(
+                (
+                    label
+                    for label, key in self.brightness_mode_labels.items()
+                    if key == self.config.screen_sync.brightness_mode
+                ),
+                "Follow video",
+            )
+        )
+        self.sync_brightness_value = ctk.IntVar(
+            value=self.config.screen_sync.sync_brightness
         )
 
         self.fps_label, self.fps_slider = self._slider_control(
@@ -484,19 +498,37 @@ class WizLightModernGUI(AnimationMixin):
         )
         self.sync_profile_menu.pack(fill="x", padx=14, pady=(0, 10))
 
-        ctk.CTkCheckBox(
+        ctk.CTkLabel(settings, text="Brightness Mode", anchor="w").pack(
+            fill="x", padx=14, pady=(2, 4)
+        )
+        self.brightness_mode_menu = ctk.CTkSegmentedButton(
             settings,
-            text="Follow scene brightness (dim scenes dim the bulb, black turns it off)",
-            variable=self.brightness_follow_var,
-            command=self._queue_screen_sync_settings_save,
-        ).pack(fill="x", padx=14, pady=(0, 10))
+            values=list(self.brightness_mode_labels.keys()),
+            variable=self.brightness_mode_value,
+            command=self._on_brightness_mode_change,
+        )
+        self.brightness_mode_menu.pack(fill="x", padx=14, pady=(0, 4))
+        self.brightness_mode_hint = ctk.CTkLabel(
+            settings,
+            text=self._brightness_mode_hint_text(),
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray60"),
+        )
+        self.brightness_mode_hint.pack(fill="x", padx=14, pady=(0, 6))
+        self.sync_brightness_label, self.sync_brightness_slider = self._slider_control(
+            settings,
+            "Constant Brightness",
+            f"{round(self.sync_brightness_value.get() / 255 * 100)}%",
+            30,
+            255,
+            self._on_sync_brightness_change,
+            self.sync_brightness_value.get(),
+        )
+        self._update_sync_brightness_state()
 
         flags = ctk.CTkFrame(settings, fg_color=self._surface_color(settings))
         flags.pack(fill="x", padx=14, pady=(0, 10))
-        self.use_gpu_var.set(True)
-        self.adaptive_fps_var.set(True)
-        self.predictive_smoothing_var.set(True)
-        self.algorithm_value.set("Auto")
         ctk.CTkCheckBox(
             flags,
             text="Fast GPU capture",
@@ -747,10 +779,14 @@ class WizLightModernGUI(AnimationMixin):
             self.sync_profile_value.get(),
             "auto",
         )
-        settings.brightness_follow = bool(self.brightness_follow_var.get())
+        settings.brightness_mode = self.brightness_mode_labels.get(
+            self.brightness_mode_value.get(),
+            "follow",
+        )
+        settings.sync_brightness = int(self.sync_brightness_value.get())
         settings.use_gpu = bool(self.use_gpu_var.get())
-        settings.adaptive_fps = True
-        settings.predictive_smoothing = True
+        settings.adaptive_fps = bool(self.adaptive_fps_var.get())
+        settings.predictive_smoothing = bool(self.predictive_smoothing_var.get())
         settings.bulb_layout = {}
         settings.__post_init__()
         self.config.save()
@@ -817,6 +853,28 @@ class WizLightModernGUI(AnimationMixin):
     def _on_min_brightness_change(self, value):
         self.min_brightness_value.set(int(float(value)))
         self.min_brightness_label.set(f"Dark Scene Floor: {self.min_brightness_value.get()}")
+        self._queue_screen_sync_settings_save()
+
+    def _brightness_mode_hint_text(self) -> str:
+        if self.brightness_mode_labels.get(self.brightness_mode_value.get(), "follow") == "follow":
+            return "Bulb brightness tracks the scene; true black turns the bulb off."
+        return "Brightness stays fixed; only the color follows the screen (black holds the last color)."
+
+    def _update_sync_brightness_state(self) -> None:
+        mode = self.brightness_mode_labels.get(self.brightness_mode_value.get(), "follow")
+        state = "normal" if mode == "constant" else "disabled"
+        self.sync_brightness_slider.configure(state=state)
+
+    def _on_brightness_mode_change(self, _value=None):
+        self.brightness_mode_hint.configure(text=self._brightness_mode_hint_text())
+        self._update_sync_brightness_state()
+        self._queue_screen_sync_settings_save()
+
+    def _on_sync_brightness_change(self, value):
+        self.sync_brightness_value.set(int(float(value)))
+        self.sync_brightness_label.set(
+            f"Constant Brightness: {round(self.sync_brightness_value.get() / 255 * 100)}%"
+        )
         self._queue_screen_sync_settings_save()
 
     def _on_layout_change(self, _ip: str):
@@ -949,6 +1007,14 @@ class WizLightModernGUI(AnimationMixin):
         )
 
         status = snapshot.get("capture_status") or "OK"
+        # Persistent all-black capture during playback = the video is not
+        # capturable (DRM-protected app/browser or hardware-overlay player);
+        # without this hint the bulb just sits dark and mapping looks broken.
+        if snapshot.get("capture_looks_black"):
+            status = (
+                "Capture is black — protected/overlay video? "
+                "Try fullscreen browser playback or disable hardware acceleration"
+            )
         status_part = f" | {status}" if status != "OK" else ""
         status_display = "Running" if status == "OK" else status
         self._set_color_panel(self.sync_target_preview, target)
@@ -985,8 +1051,10 @@ class WizLightModernGUI(AnimationMixin):
         self.screen_sync_debug_motion.set(
             f"Motion: {snapshot['motion_score']:.3f} | smooth {snapshot['smoothing_factor']:.2f} | predict {snapshot['prediction_weight']:.2f}"
         )
+        mode_label = "follow" if snapshot.get("brightness_mode") == "follow" else "constant"
         self.screen_sync_debug_settings.set(
-            f"Settings: boost {snapshot['effectiveColorBoost']:.2f}x | floor {snapshot['minBrightness']} | delta {snapshot['deltaThreshold']}"
+            f"Settings: boost {snapshot['effectiveColorBoost']:.2f}x | delta {snapshot['deltaThreshold']} | "
+            f"brightness {mode_label} {round(snapshot.get('output_brightness', 255) / 255 * 100)}%"
         )
         self.screen_sync_debug_error.set(
             f"Error: {snapshot['last_error']}" if snapshot["last_error"] else ""
@@ -1210,9 +1278,14 @@ class WizLightModernGUI(AnimationMixin):
         def on_color_change(colors_by_target):
             bulb_colors = build_bulb_color_map(ips, colors_by_target, "single", {})
             if bulb_colors:
+                # Brightness rides the setPilot dimming field so hue is always
+                # rendered at full LED drive (colors are value-normalized by
+                # the engine); read it at send time from the engine.
+                engine = self.screen_sync
+                brightness = engine.output_brightness if engine else None
                 payloads = self.controller.map_screen_sync_payloads_cached(bulb_colors)
                 if self._screen_sync_fast_sender and len(payloads) == len(bulb_colors):
-                    self._screen_sync_fast_sender.send_payload_map(payloads)
+                    self._screen_sync_fast_sender.send_payload_map(payloads, brightness)
                 elif self._screen_sync_dispatcher:
                     self._screen_sync_dispatcher.submit(bulb_colors)
             preview = average_colors(tuple(colors_by_target.values()))
