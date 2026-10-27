@@ -1,5 +1,6 @@
 """Modern GUI for WizLight using CustomTkinter."""
 
+import asyncio
 import gc
 import json
 import sys
@@ -1326,30 +1327,41 @@ class WizLightModernGUI(AnimationMixin):
         self._set_status(
             f"Screen sync ON ({runtime}{', skipped ' + str(skipped) + ' stale bulb(s)' if skipped else ''})"
         )
+        missing = set(configured_ips) - set(ips)
+        self._sync_active_ips = set(ips)
+        self._sync_missing_ips = set(missing)
+        if missing:
+            self._recover_sync_bulbs(background=True, target_ips=missing)
+        else:
+            self._schedule_bulb_recovery_monitor()
 
-    def _recover_sync_bulbs(self):
-        """Search in the background when all saved addresses are unreachable."""
+    def _recover_sync_bulbs(self, *, background=False, target_ips=None):
+        """Search in the background and verify matching saved devices."""
         token = object()
         self._bulb_recovery_token = token
         bulbs = tuple(self.config.bulbs)
-        self._set_status("Searching for saved lights on the local network...")
+        engine = self.screen_sync if background else None
+        if not background:
+            self._set_status("Searching for saved lights on the local network...")
 
         async def recover():
             try:
-                result = await recover_saved_bulbs(self.controller, bulbs)
+                result = await recover_saved_bulbs(self.controller, bulbs, target_ips=target_ips)
                 message = None
             except Exception as exc:
                 result, message = [], str(exc)
             if not self._closing:
-                self.root.after(0, lambda: self._finish_bulb_recovery(token, result, message))
+                self.root.after(0, lambda: self._finish_bulb_recovery(token, result, message, engine))
 
         self._run_async(recover())
 
-    def _finish_bulb_recovery(self, token, recovered, error):
+    def _finish_bulb_recovery(self, token, recovered, error, engine=None):
         if self._closing or getattr(self, "_bulb_recovery_token", None) is not token:
             return
         self._bulb_recovery_token = None
         if not self.screen_sync_switch.get():
+            return
+        if engine is not None and self.screen_sync is not engine:
             return
         moved = 0
         for item in recovered:
@@ -1361,7 +1373,12 @@ class WizLightModernGUI(AnimationMixin):
             moved += 1
         if moved:
             self._update_bulb_status()
+            if engine is not None:
+                self._stop_screen_sync(update_status=False)
             self._start_screen_sync()
+            return
+        if engine is not None:
+            self._schedule_bulb_recovery_monitor()
             return
         self.screen_sync_switch.deselect()
         self._set_sync_running_ui(False)
@@ -1369,8 +1386,62 @@ class WizLightModernGUI(AnimationMixin):
         self.config.save()
         self._set_status(f"Light search failed: {error}" if error else "No reachable saved lights found")
 
+    def _schedule_bulb_recovery_monitor(self):
+        if self._closing or not self.screen_sync or not self.screen_sync.is_running:
+            return
+        if getattr(self, "_bulb_recovery_monitor_id", None) is None:
+            self._bulb_recovery_monitor_id = self.root.after(30000, self._poll_sync_bulbs)
+
+    def _poll_sync_bulbs(self):
+        self._bulb_recovery_monitor_id = None
+        engine = self.screen_sync
+        if self._closing or not engine or not engine.is_running:
+            return
+        bulbs = tuple(self.config.bulbs)
+
+        async def poll():
+            results = await asyncio.gather(
+                *(self.controller._resolve_screen_sync_target(bulb.ip) for bulb in bulbs),
+                return_exceptions=True,
+            )
+            missing = {
+                bulb.ip for bulb, result in zip(bulbs, results)
+                if mac_identity(bulb.mac) and (
+                    isinstance(result, BaseException) or result is None
+                    or mac_identity(result.mac) != mac_identity(bulb.mac)
+                )
+            }
+            if not self._closing:
+                self.root.after(0, lambda: self._finish_sync_bulb_poll(engine, missing))
+
+        self._run_async(poll())
+
+    def _finish_sync_bulb_poll(self, engine, missing):
+        if self._closing or self.screen_sync is not engine or not engine.is_running:
+            return
+        previous_missing = getattr(self, "_sync_missing_ips", set())
+        returned = previous_missing - missing
+        self._sync_missing_ips = set(missing)
+        if returned - getattr(self, "_sync_active_ips", set()):
+            self._stop_screen_sync(update_status=False)
+            self._start_screen_sync()
+            return
+        if returned:
+            # A reconnected light may have reverted to its own saved scene.
+            # Force a fresh update even when the screen colour has not changed.
+            with engine._stats_lock:
+                engine._last_sent_colors.clear()
+        if missing and getattr(self, "_bulb_recovery_token", None) is None:
+            self._recover_sync_bulbs(background=True, target_ips=missing)
+        else:
+            self._schedule_bulb_recovery_monitor()
+
     def _stop_screen_sync(self, update_status: bool = True):
         self._bulb_recovery_token = None
+        monitor = getattr(self, "_bulb_recovery_monitor_id", None)
+        if monitor is not None:
+            self.root.after_cancel(monitor)
+            self._bulb_recovery_monitor_id = None
         if self.screen_sync:
             self.screen_sync.stop()
             self.screen_sync = None

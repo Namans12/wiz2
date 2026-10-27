@@ -15,7 +15,7 @@ class RecoveredBulb:
     mac: str
 
 
-async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6.0):
+async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6.0, target_ips=None):
     """Find and verify changed addresses without modifying the saved config.
 
     Ambiguous identities, already configured addresses and unverified replies
@@ -47,6 +47,8 @@ async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6
         if len(entries) != 1 or len(addresses) != 1:
             continue
         bulb = entries[0]
+        if target_ips is not None and bulb.ip not in target_ips:
+            continue
         address = next(iter(addresses))
         if address == bulb.ip or address in occupied:
             continue
