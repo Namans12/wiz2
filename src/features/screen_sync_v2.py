@@ -1161,6 +1161,8 @@ class OptimizedScreenSync:
         
         # Performance stats
         self._frame_times: deque = deque(maxlen=30)
+        self._capture_times: deque = deque(maxlen=120)
+        self._processing_times: deque = deque(maxlen=120)
         self._capture_method = "mss"
         self._capture_status = "Ready"
         self._dxcam_recovery_events_seen = 0
@@ -1176,6 +1178,8 @@ class OptimizedScreenSync:
         self._color_predictor.clear()
         self._current_fps = self.config.max_fps if self.config.adaptive_fps else self.config.fps
         with self._stats_lock:
+            self._capture_times.clear()
+            self._processing_times.clear()
             self._last_target_colors = {}
             self._last_send_time = None
             self._send_intervals.clear()
@@ -1528,10 +1532,13 @@ class OptimizedScreenSync:
         """Main sync loop with all optimizations."""
         while self._running:
             frame_start = time.perf_counter()
+            image = None
+            capture_end = None
             
             try:
                 # Capture frame
                 image = self._capture_frame()
+                capture_end = time.perf_counter()
                 if image is None:
                     time.sleep(0.1)
                     continue
@@ -1680,6 +1687,9 @@ class OptimizedScreenSync:
             frame_time = time.perf_counter() - frame_start
             with self._stats_lock:
                 self._frame_times.append(frame_time)
+                if image is not None and capture_end is not None:
+                    self._capture_times.append(capture_end - frame_start)
+                    self._processing_times.append(max(0.0, frame_time - (capture_end - frame_start)))
             
             target_frame_time = 1.0 / self._current_fps
             if frame_time < target_frame_time:
@@ -1704,6 +1714,8 @@ class OptimizedScreenSync:
 
         with self._stats_lock:
             frame_times = tuple(self._frame_times)
+            capture_times = tuple(self._capture_times)
+            processing_times = tuple(self._processing_times)
             send_intervals = tuple(self._send_intervals)
             target_colors = dict(self._last_target_colors)
             current_colors = dict(self._current_colors)
@@ -1722,6 +1734,11 @@ class OptimizedScreenSync:
                 "currentFps": self._current_fps,
                 "average_frame_time_ms": avg_frame_time_ms,
                 "frameTimeMs": avg_frame_time_ms,
+                "capture_time_ms": float(np.mean(capture_times) * 1000) if capture_times else None,
+                "capture_time_p95_ms": float(np.percentile(capture_times, 95) * 1000) if capture_times else None,
+                "processing_time_ms": float(np.mean(processing_times) * 1000) if processing_times else None,
+                "processing_time_p95_ms": float(np.percentile(processing_times, 95) * 1000) if processing_times else None,
+                "timing_samples": len(capture_times),
                 "motion_score": self._motion_score,
                 "motionScore": self._motion_score,
                 "smoothing_factor": self._smoothing_factor,

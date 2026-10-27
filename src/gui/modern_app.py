@@ -1037,9 +1037,13 @@ class WizLightModernGUI(AnimationMixin):
         )
         self.screen_sync_debug_target.set(f"Target: {self._format_debug_color(target)}")
         self.screen_sync_debug_output.set(f"Output: {self._format_debug_color(output)}")
-        self.screen_sync_debug_perf.set(
-            f"FPS: {snapshot['current_fps']} | frame {snapshot['average_frame_time_ms']:.1f} ms"
-        )
+        perf_text = f"FPS: {snapshot['current_fps']} | frame {snapshot['average_frame_time_ms']:.1f} ms"
+        if snapshot.get("capture_time_ms") is not None:
+            perf_text += (
+                f" | capture {snapshot['capture_time_ms']:.1f} ms"
+                f" | processing {snapshot['processing_time_ms']:.1f} ms"
+            )
+        self.screen_sync_debug_perf.set(perf_text)
         if snapshot["send_rate_hz"] > 0:
             self.screen_sync_debug_cadence.set(
                 f"Cadence: {snapshot['send_rate_hz']:.1f} Hz | {snapshot['send_interval_ms']:.0f} ms | sends {snapshot['updates_sent']}"
