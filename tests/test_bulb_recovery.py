@@ -7,7 +7,7 @@ import threading
 import pytest
 
 from src.core.config import BulbConfig, Config
-from src.features.bulb_recovery import RecoveredBulb, recover_saved_bulbs
+from src.features.bulb_recovery import RecoveredBulb, recover_saved_bulbs, refresh_verified_targets
 from src.gui.modern_app import WizLightModernGUI
 
 
@@ -24,6 +24,41 @@ class FakeController:
     async def _resolve_screen_sync_target(self, ip):
         self.lookups.append(ip)
         return self.states.get(ip)
+
+    def _get_bulb(self, ip):
+        async def get_config():
+            self.lookups.append(ip)
+            state = self.states.get(ip)
+            return {"result": {"mac": state.mac}} if state is not None else {}
+        return SimpleNamespace(getBulbConfig=get_config)
+
+    async def refresh_screen_sync_targets(self, ips):
+        return list(ips)
+
+
+@pytest.mark.asyncio
+async def test_startup_rejects_reused_address_but_keeps_unknown_identity():
+    saved = [BulbConfig("old", "Lamp", "aa:bb:cc:dd:ee:ff"),
+             BulbConfig("manual", "Manual", None)]
+    controller = FakeController([], {"old": SimpleNamespace(mac="11:22:33:44:55:66")})
+    assert await refresh_verified_targets(controller, saved) == ["manual"]
+    controller.states["old"] = SimpleNamespace(mac="aa-bb-cc-dd-ee-ff")
+    assert await refresh_verified_targets(controller, saved) == ["old", "manual"]
+
+
+@pytest.mark.asyncio
+async def test_startup_ignores_stale_cached_mac():
+    saved = [BulbConfig("old", "Lamp", "aa:bb:cc:dd:ee:ff")]
+
+    class CachedBulb:
+        mac = "aa:bb:cc:dd:ee:ff"
+
+        async def getBulbConfig(self):
+            return {"result": {"mac": "11:22:33:44:55:66"}}
+
+    controller = FakeController([], {})
+    controller._get_bulb = lambda ip: CachedBulb()
+    assert await refresh_verified_targets(controller, saved) == []
 
 
 @pytest.mark.asyncio

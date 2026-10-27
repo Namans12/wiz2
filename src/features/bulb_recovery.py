@@ -15,6 +15,34 @@ class RecoveredBulb:
     mac: str
 
 
+async def fetch_fresh_identity(controller, ip, *, timeout: float = 1.8):
+    """Read the MAC from a fresh response, not pywizlight's cached attribute."""
+    try:
+        response = await asyncio.wait_for(controller._get_bulb(ip).getBulbConfig(), timeout)
+    except (OSError, asyncio.TimeoutError):
+        return None
+    if not isinstance(response, dict) or not isinstance(response.get("result"), dict):
+        return None
+    return mac_identity(response["result"].get("mac"))
+
+
+async def refresh_verified_targets(controller, bulbs):
+    """Reject an address that now belongs to a different saved device."""
+    saved = list(bulbs)
+    reachable = await controller.refresh_screen_sync_targets([bulb.ip for bulb in saved])
+    by_ip = {bulb.ip: bulb for bulb in saved}
+    to_verify = [ip for ip in reachable if ip in by_ip and mac_identity(by_ip[ip].mac)]
+    results = await asyncio.gather(
+        *(fetch_fresh_identity(controller, ip) for ip in to_verify),
+        return_exceptions=True,
+    )
+    accepted = set(reachable) - set(to_verify)
+    for ip, identity in zip(to_verify, results):
+        if isinstance(identity, str) and identity == mac_identity(by_ip[ip].mac):
+            accepted.add(ip)
+    return [ip for ip in reachable if ip in accepted]
+
+
 async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6.0, target_ips=None):
     """Find and verify changed addresses without modifying the saved config.
 
@@ -54,12 +82,12 @@ async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6
             continue
         requests.append((bulb, identity, address))
     states = await asyncio.gather(
-        *(controller._resolve_screen_sync_target(address) for _, _, address in requests),
+        *(fetch_fresh_identity(controller, address) for _, _, address in requests),
         return_exceptions=True,
     )
     recovered = []
-    for (bulb, identity, address), state in zip(requests, states):
-        if isinstance(state, BaseException) or state is None or mac_identity(state.mac) != identity:
+    for (bulb, identity, address), actual_identity in zip(requests, states):
+        if not isinstance(actual_identity, str) or actual_identity != identity:
             continue
         recovered.append(RecoveredBulb(bulb.ip, address, bulb.name, bulb.mac))
     return recovered

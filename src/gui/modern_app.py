@@ -16,7 +16,7 @@ from ..core.bulb_controller import BulbController, PRESETS, apply_preset
 from ..core.config import Config, SCREEN_SYNC_REGIONS
 from ..core.diagnostics import build_diagnostics_report
 from ..core.device_identity import mac_identity
-from ..features.bulb_recovery import recover_saved_bulbs
+from ..features.bulb_recovery import fetch_fresh_identity, recover_saved_bulbs, refresh_verified_targets
 from ..features.clap_detector import ClapConfig, ClapDetector
 from ..features.screen_sync import (
     average_colors,
@@ -1229,7 +1229,7 @@ class WizLightModernGUI(AnimationMixin):
         configured_ips = self._get_bulb_ips()
         try:
             ips = self._async_runner.run(
-                self.controller.refresh_screen_sync_targets(configured_ips),
+                refresh_verified_targets(self.controller, tuple(self.config.bulbs)),
                 timeout=6.0,
             )
         except Exception as exc:
@@ -1401,14 +1401,13 @@ class WizLightModernGUI(AnimationMixin):
 
         async def poll():
             results = await asyncio.gather(
-                *(self.controller._resolve_screen_sync_target(bulb.ip) for bulb in bulbs),
+                *(fetch_fresh_identity(self.controller, bulb.ip) for bulb in bulbs),
                 return_exceptions=True,
             )
             missing = {
                 bulb.ip for bulb, result in zip(bulbs, results)
                 if mac_identity(bulb.mac) and (
-                    isinstance(result, BaseException) or result is None
-                    or mac_identity(result.mac) != mac_identity(bulb.mac)
+                    not isinstance(result, str) or result != mac_identity(bulb.mac)
                 )
             }
             if not self._closing:
