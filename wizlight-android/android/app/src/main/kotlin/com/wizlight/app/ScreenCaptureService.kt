@@ -111,6 +111,7 @@ class ScreenCaptureService : Service() {
     private var requestedHdrToneMapping = false
     private var requestedHdrCapture = false
     private var hdrCaptureActive = false
+    private var hdrReaderActive = false
     private var captureBufferFormat = "rgba8888"
 
     private var isRunning = false
@@ -263,6 +264,7 @@ class ScreenCaptureService : Service() {
         val sdrReader = {
             captureBufferFormat = "rgba8888"
             hdrCaptureActive = false
+            hdrReaderActive = false
             ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
         }
         if (!requestedHdrCapture) return sdrReader()
@@ -284,8 +286,9 @@ class ScreenCaptureService : Service() {
             builderClass.getMethod("setDefaultDataSpace", Int::class.javaPrimitiveType)
                 .invoke(builder, bt2020Pq)
             val reader = builderClass.getMethod("build").invoke(builder) as ImageReader
-            captureBufferFormat = "rgba_fp16_bt2020_pq"
-            hdrCaptureActive = true
+            captureBufferFormat = "rgba_fp16 (awaiting frame metadata)"
+            hdrReaderActive = true
+            hdrCaptureActive = false
             reader
         } catch (_: Throwable) {
             sdrReader()
@@ -300,7 +303,19 @@ class ScreenCaptureService : Service() {
             maybePostStatus()
             return
         }
+        var fallbackToSdr = false
         try {
+            if (hdrReaderActive) {
+                val plane = image.planes.firstOrNull()
+                val actualDataSpace = if (Build.VERSION.SDK_INT >= 33) image.dataSpace else 0
+                val pq = if (Build.VERSION.SDK_INT >= 33) android.hardware.DataSpace.DATASPACE_BT2020_PQ else -1
+                if (plane == null || !CaptureFormatPolicy.isFp16Pq(plane.pixelStride, actualDataSpace, pq)) {
+                    fallbackToSdr = true
+                    return
+                }
+                hdrCaptureActive = true
+                captureBufferFormat = "rgba_fp16_bt2020_pq"
+            }
             val frame = imageToFrame(image) ?: return
             val contentFrame = cropContentArea(frame, ignoreLetterbox)
 
@@ -325,6 +340,31 @@ class ScreenCaptureService : Service() {
             maybePostStatus()
         } finally {
             image.close()
+            if (fallbackToSdr) switchToSdrCapture()
+        }
+    }
+
+    private fun switchToSdrCapture() {
+        val previous = imageReader ?: return
+        var replacement: ImageReader? = null
+        try {
+            val display = virtualDisplay ?: throw IllegalStateException("Virtual display unavailable")
+            replacement = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
+            display.surface = replacement.surface
+            imageReader = replacement
+            hdrReaderActive = false
+            hdrCaptureActive = false
+            captureBufferFormat = "rgba8888 (HDR format unavailable)"
+            cachedContentBounds = null
+            previous.close()
+            maybePostStatus()
+        } catch (error: Exception) {
+            replacement?.close()
+            hdrReaderActive = false
+            hdrCaptureActive = false
+            lastError = "HDR fallback failed: ${error.message ?: error}"
+            stopCapture()
+            stopSelf()
         }
     }
 
