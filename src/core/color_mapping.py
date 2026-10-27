@@ -215,6 +215,11 @@ class BulbGamutMapper:
         peak = np.maximum(balanced.max(axis=-1, keepdims=True), 1.0)
         balanced = balanced / peak
 
+        # RGB-only fixtures cannot use energy assigned to a white channel.
+        if self.profile.white_channels <= 0:
+            rgb_enc = np.clip(np.round(_linear_to_srgb(balanced) * 255.0), 0, 255).astype(np.uint8)
+            return np.concatenate((rgb_enc, np.zeros_like(rgb_enc[..., :1])), axis=-1)
+
         # ── 5. Per-pixel saturation and luminance ──────────────────────────────
         #
         # IMPORTANT: neutrality must be judged on the ORIGINAL linear color,
