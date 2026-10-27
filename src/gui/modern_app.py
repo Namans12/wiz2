@@ -14,6 +14,8 @@ from ..core.async_runtime import BackgroundAsyncLoop
 from ..core.bulb_controller import BulbController, PRESETS, apply_preset
 from ..core.config import Config, SCREEN_SYNC_REGIONS
 from ..core.diagnostics import build_diagnostics_report
+from ..core.device_identity import mac_identity
+from ..features.bulb_recovery import recover_saved_bulbs
 from ..features.clap_detector import ClapConfig, ClapDetector
 from ..features.screen_sync import (
     average_colors,
@@ -1221,6 +1223,8 @@ class WizLightModernGUI(AnimationMixin):
         self._temp_debounce_id = self.root.after(160, send)
 
     def _start_screen_sync(self):
+        if getattr(self, "_bulb_recovery_token", None) is not None:
+            return
         configured_ips = self._get_bulb_ips()
         try:
             ips = self._async_runner.run(
@@ -1233,6 +1237,9 @@ class WizLightModernGUI(AnimationMixin):
             self._set_status(f"Sync preflight failed: {exc}")
             return
         if not ips:
+            if any(mac_identity(bulb.mac) for bulb in self.config.bulbs):
+                self._recover_sync_bulbs()
+                return
             self.screen_sync_switch.deselect()
             self._set_sync_running_ui(False)
             self.config.screen_sync.enabled = False
@@ -1320,7 +1327,50 @@ class WizLightModernGUI(AnimationMixin):
             f"Screen sync ON ({runtime}{', skipped ' + str(skipped) + ' stale bulb(s)' if skipped else ''})"
         )
 
+    def _recover_sync_bulbs(self):
+        """Search in the background when all saved addresses are unreachable."""
+        token = object()
+        self._bulb_recovery_token = token
+        bulbs = tuple(self.config.bulbs)
+        self._set_status("Searching for saved lights on the local network...")
+
+        async def recover():
+            try:
+                result = await recover_saved_bulbs(self.controller, bulbs)
+                message = None
+            except Exception as exc:
+                result, message = [], str(exc)
+            if not self._closing:
+                self.root.after(0, lambda: self._finish_bulb_recovery(token, result, message))
+
+        self._run_async(recover())
+
+    def _finish_bulb_recovery(self, token, recovered, error):
+        if self._closing or getattr(self, "_bulb_recovery_token", None) is not token:
+            return
+        self._bulb_recovery_token = None
+        if not self.screen_sync_switch.get():
+            return
+        moved = 0
+        for item in recovered:
+            existing = next((bulb for bulb in self.config.bulbs if bulb.ip == item.old_ip
+                             and mac_identity(bulb.mac) == mac_identity(item.mac)), None)
+            if existing is None or any(bulb.ip == item.new_ip for bulb in self.config.bulbs):
+                continue
+            self.config.add_bulb(item.new_ip, existing.name, existing.mac)
+            moved += 1
+        if moved:
+            self._update_bulb_status()
+            self._start_screen_sync()
+            return
+        self.screen_sync_switch.deselect()
+        self._set_sync_running_ui(False)
+        self.config.screen_sync.enabled = False
+        self.config.save()
+        self._set_status(f"Light search failed: {error}" if error else "No reachable saved lights found")
+
     def _stop_screen_sync(self, update_status: bool = True):
+        self._bulb_recovery_token = None
         if self.screen_sync:
             self.screen_sync.stop()
             self.screen_sync = None
