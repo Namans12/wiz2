@@ -13,6 +13,7 @@ from .calibration import (
     sanitize_calibration_key,
 )
 from .color_mapping import BulbColorProfile, BulbGamutMapper
+from .wiz_profile_metadata import parse_wiz_profile_hints
 
 PROFILE_QUERY_TIMEOUT = 2.5
 
@@ -143,22 +144,17 @@ class BulbController:
         model_result = await self._query_profile_metadata(bulb.getModelConfig())
         user_result = await self._query_profile_metadata(bulb.getUserConfig())
 
-        rgb_current = profile.rgb_channel_current
-        driver = model_result.get("i2cDrv")
-        if isinstance(driver, list) and driver:
-            currents = driver[0].get("curr")
-            if isinstance(currents, list) and len(currents) >= 3:
-                rgb_current = tuple(int(max(1, value)) for value in currents[:3])
+        hints = parse_wiz_profile_hints(model_result, user_result, profile)
 
         profile = BulbColorProfile(
             model_name=system_result.get("moduleName"),
             mac=system_result.get("mac") or bulb.mac,
-            white_channels=int(model_result.get("nowc", profile.white_channels)),
-            white_to_color_ratio=int(model_result.get("wcr", profile.white_to_color_ratio)),
-            rgb_channel_current=rgb_current,
-            render_factor=tuple(int(value) for value in model_result.get("renderFactor", ())),
-            fade_in_ms=int(user_result.get("fadeIn", 0)),
-            fade_out_ms=int(user_result.get("fadeOut", 0)),
+            white_channels=hints.white_channels,
+            white_to_color_ratio=hints.white_to_color_ratio,
+            rgb_channel_current=hints.rgb_channel_current,
+            render_factor=hints.render_factor,
+            fade_in_ms=hints.fade_in_ms,
+            fade_out_ms=hints.fade_out_ms,
             source_color_space=self._screen_sync_source_color_space,
             device_profile=self._screen_sync_device_profile,
             cool_mix_bias=self._screen_sync_cool_mix_bias,
