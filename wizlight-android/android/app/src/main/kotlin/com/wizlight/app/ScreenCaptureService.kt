@@ -378,7 +378,7 @@ class ScreenCaptureService : Service() {
             val region = if (item.optString("region") == "right") "right" else "left"
             bulbs.add(ColorSyncEngine.BulbTarget(ip = ip, region = region))
         }
-        return bulbs.take(2)
+        return bulbs
     }
 
     private fun resolveEffectiveMode(mode: String, bulbs: List<ColorSyncEngine.BulbTarget>): String {

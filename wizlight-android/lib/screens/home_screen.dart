@@ -56,7 +56,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _saveBulbs(List<WizBulb> bulbs) async {
-    setState(() => _bulbs = bulbs.take(2).toList(growable: false));
+    setState(() => _bulbs = bulbs.toList(growable: false));
     await _settingsService.saveBulbs(_bulbs);
   }
 
