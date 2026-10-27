@@ -1,6 +1,7 @@
 """Modern GUI for WizLight using CustomTkinter."""
 
 import asyncio
+import copy
 import gc
 import json
 import sys
@@ -17,6 +18,7 @@ from ..core.config import Config, SCREEN_SYNC_REGIONS
 from ..core.diagnostics import build_diagnostics_report
 from ..core.device_identity import mac_identity
 from ..features.bulb_recovery import fetch_fresh_identity, recover_saved_bulbs, refresh_verified_targets
+from ..features.sync_preflight import prepare_screen_sync_mapping
 from ..features.clap_detector import ClapConfig, ClapDetector
 from ..features.screen_sync import (
     average_colors,
@@ -1224,14 +1226,54 @@ class WizLightModernGUI(AnimationMixin):
         self._temp_debounce_id = self.root.after(160, send)
 
     def _start_screen_sync(self):
+        if self._closing or (self.screen_sync and self.screen_sync.is_running):
+            return
         if getattr(self, "_bulb_recovery_token", None) is not None:
             return
+        if getattr(self, "_sync_start_future", None) is not None:
+            return
         configured_ips = self._get_bulb_ips()
+        self._save_screen_sync_settings()
+        settings = copy.deepcopy(self.config.screen_sync)
+        bulbs = copy.deepcopy(tuple(self.config.bulbs))
+
+        async def prepare():
+            ips = await asyncio.wait_for(refresh_verified_targets(self.controller, bulbs), 6.0)
+            warning = None
+            if ips:
+                try:
+                    await asyncio.wait_for(prepare_screen_sync_mapping(self.controller, ips, settings), 8.0)
+                except Exception as exc:
+                    warning = str(exc) or type(exc).__name__
+            return ips, warning
+
         try:
-            ips = self._async_runner.run(
-                refresh_verified_targets(self.controller, tuple(self.config.bulbs)),
-                timeout=6.0,
+            future = self._async_runner.submit(prepare())
+        except Exception as exc:
+            self.screen_sync_switch.deselect()
+            self._set_sync_running_ui(False)
+            self._set_status(f"Sync preflight failed: {exc}")
+            return
+        self._sync_start_future = future
+        self._set_status("Preparing screen sync...")
+        self._sync_start_poll_id = self.root.after(
+            50, lambda: self._poll_sync_start(future, configured_ips, settings)
+        )
+
+    def _poll_sync_start(self, future, configured_ips, settings):
+        self._sync_start_poll_id = None
+        if self._closing or getattr(self, "_sync_start_future", None) is not future:
+            return
+        if not future.done():
+            self._sync_start_poll_id = self.root.after(
+                50, lambda: self._poll_sync_start(future, configured_ips, settings)
             )
+            return
+        self._sync_start_future = None
+        if not self.screen_sync_switch.get():
+            return
+        try:
+            ips, warning = future.result()
         except Exception as exc:
             self.screen_sync_switch.deselect()
             self._set_sync_running_ui(False)
@@ -1247,35 +1289,9 @@ class WizLightModernGUI(AnimationMixin):
             self.config.save()
             self._set_status("No reachable bulbs available for screen sync")
             return
+        self._finish_sync_start(ips, configured_ips, settings, warning)
 
-        self._save_screen_sync_settings()
-        settings = self.config.screen_sync
-        try:
-            from src.features.screen_sync_v2 import resolve_auto_display_profile
-            resolved = resolve_auto_display_profile(settings)
-        except Exception:
-            resolved = {}
-        effective_color_space = resolved.get(
-            "source_color_space", settings.source_color_space
-        )
-        if effective_color_space == "auto":
-            effective_color_space = "srgb"
-        effective_profile = resolved.get("device_profile", "generic")
-        if effective_profile in (None, "", "auto"):
-            effective_profile = "generic"
-        cool_bias = float(resolved.get("cool_mix_bias", 0.0))
-        try:
-            self._async_runner.run(
-                self.controller.prepare_screen_sync_mappers(
-                    ips,
-                    source_color_space=effective_color_space,
-                    device_profile=effective_profile,
-                    cool_mix_bias=cool_bias,
-                ),
-                timeout=8.0,
-            )
-        except Exception:
-            pass
+    def _finish_sync_start(self, ips, configured_ips, settings, warning=None):
         active_regions: tuple[str, ...] = ()
         mode = "single"
         self._screen_sync_dispatcher = CoalescingAsyncDispatcher(
@@ -1437,6 +1453,14 @@ class WizLightModernGUI(AnimationMixin):
 
     def _stop_screen_sync(self, update_status: bool = True):
         self._bulb_recovery_token = None
+        future = getattr(self, "_sync_start_future", None)
+        self._sync_start_future = None
+        if future is not None:
+            future.cancel()
+        poll_id = getattr(self, "_sync_start_poll_id", None)
+        if poll_id is not None:
+            self.root.after_cancel(poll_id)
+            self._sync_start_poll_id = None
         monitor = getattr(self, "_bulb_recovery_monitor_id", None)
         if monitor is not None:
             self.root.after_cancel(monitor)
@@ -1467,7 +1491,9 @@ class WizLightModernGUI(AnimationMixin):
             self._stop_screen_sync()
 
     def _toggle_screen_sync_from_primary(self):
-        if self.screen_sync and self.screen_sync.is_running:
+        if ((self.screen_sync and self.screen_sync.is_running)
+                or getattr(self, "_sync_start_future", None) is not None
+                or getattr(self, "_bulb_recovery_token", None) is not None):
             self.screen_sync_switch.deselect()
         else:
             self.screen_sync_switch.select()
