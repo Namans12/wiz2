@@ -402,7 +402,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 6),
             Text(
               _syncBackend == 'usb'
-                  ? 'Plays a video from USB in-app and drives bulbs from decoded frames. Works with non-DRM local files; no Netflix/HDMI.'
+                  ? 'Plays a local USB video and sends one shared colour to the lights. Supports non-DRM files.'
                   : 'Mirrors accessible screen content. Some protected apps and HDMI inputs may not allow capture.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -450,6 +450,9 @@ class _HomeScreenState extends State<HomeScreen> {
           items: const <DropdownMenuItem<String>>[
             DropdownMenuItem(value: 'left', child: Text('Left')),
             DropdownMenuItem(value: 'right', child: Text('Right')),
+            DropdownMenuItem(value: 'top', child: Text('Top')),
+            DropdownMenuItem(value: 'bottom', child: Text('Bottom')),
+            DropdownMenuItem(value: 'center', child: Text('Center')),
           ],
           onChanged: (value) {
             if (value == null) {
@@ -529,7 +532,7 @@ class _HomeScreenState extends State<HomeScreen> {
             SegmentedButton<String>(
               segments: const <ButtonSegment<String>>[
                 ButtonSegment(value: 'single', label: Text('Single')),
-                ButtonSegment(value: 'zones', label: Text('Left + Right')),
+                ButtonSegment(value: 'zones', label: Text('Regions')),
               ],
               selected: <String>{_settings.mode},
               onSelectionChanged: (selection) {

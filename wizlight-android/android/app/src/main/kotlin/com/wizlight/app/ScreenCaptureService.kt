@@ -375,7 +375,7 @@ class ScreenCaptureService : Service() {
             val item = array.optJSONObject(index) ?: continue
             val ip = item.optString("ip")
             if (ip.isBlank()) continue
-            val region = if (item.optString("region") == "right") "right" else "left"
+            val region = RegionLayout.normalize(item.optString("region"))
             bulbs.add(ColorSyncEngine.BulbTarget(ip = ip, region = region))
         }
         return bulbs
@@ -472,20 +472,13 @@ class ScreenCaptureService : Service() {
     }
 
     private fun cropRelativeRegion(source: ImageFrame, region: String): ImageFrame {
-        val rect = when (region) {
-            "right" -> Rect(
-                source.left + (source.width * 0.78).roundToInt(),
-                source.top + (source.height * 0.08).roundToInt(),
-                source.left + source.width,
-                source.top + (source.height * 0.92).roundToInt(),
-            )
-            else -> Rect(
-                source.left,
-                source.top + (source.height * 0.08).roundToInt(),
-                source.left + (source.width * 0.22).roundToInt().coerceAtLeast(1),
-                source.top + (source.height * 0.92).roundToInt(),
-            )
-        }
+        val bounds = RegionLayout.bounds(region)
+        val rect = Rect(
+            source.left + (source.width * bounds[0]).roundToInt(),
+            source.top + (source.height * bounds[1]).roundToInt(),
+            source.left + (source.width * bounds[2]).roundToInt(),
+            source.top + (source.height * bounds[3]).roundToInt(),
+        )
         val left = rect.left.coerceIn(source.left, source.left + source.width - 1)
         val top = rect.top.coerceIn(source.top, source.top + source.height - 1)
         val right = rect.right.coerceIn(left + 1, source.left + source.width)

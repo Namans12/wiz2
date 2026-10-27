@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 @immutable
 class WizBulb {
+  static const supportedRegions = {'left', 'right', 'top', 'bottom', 'center'};
   const WizBulb({
     required this.ip,
     required this.name,
@@ -39,7 +40,7 @@ class WizBulb {
       ip: json['ip'] as String? ?? '',
       name: json['name'] as String? ?? 'WiZ Bulb',
       mac: json['mac'] as String?,
-      region: json['region'] as String? ?? 'left',
+      region: supportedRegions.contains(json['region']) ? json['region'] as String : 'left',
     );
   }
 

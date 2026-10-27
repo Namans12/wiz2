@@ -157,7 +157,7 @@ class PlayerActivity : Activity() {
             val item = array.optJSONObject(index) ?: continue
             val ip = item.optString("ip")
             if (ip.isBlank()) continue
-            val region = if (item.optString("region") == "right") "right" else "left"
+            val region = RegionLayout.normalize(item.optString("region"))
             bulbs.add(ColorSyncEngine.BulbTarget(ip = ip, region = region))
         }
         return bulbs
