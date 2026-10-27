@@ -179,6 +179,9 @@ class BulbUDPSocket:
             # Burst only on a real color change; identical repeats send once.
             repeats = _BURST_REPEATS if packet != self._last_packet_sent else 1
             for attempt in range(repeats):
+                # A queued newer colour supersedes retransmissions of this one.
+                if attempt and not self._queue.empty():
+                    break
                 if not self._send_raw(packet):
                     break
                 if attempt + 1 < repeats:
