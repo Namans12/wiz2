@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .device_identity import mac_identity
+
 
 SCREEN_SYNC_MODES = ("single", "zones")
 SCREEN_SYNC_REGIONS = (
@@ -210,10 +212,11 @@ class Config:
 
         preserved_region = self.screen_sync.bulb_layout.get(ip)
         normalized_mac = mac.lower() if mac else None
+        identity = mac_identity(mac)
         stale_ips = {ip}
-        if normalized_mac:
+        if identity:
             for bulb in self.bulbs:
-                if bulb.mac and bulb.mac.lower() == normalized_mac:
+                if mac_identity(bulb.mac) == identity:
                     stale_ips.add(bulb.ip)
                     preserved_region = preserved_region or self.screen_sync.bulb_layout.get(bulb.ip)
 

@@ -13,6 +13,7 @@ from .calibration import (
     sanitize_calibration_key,
 )
 from .color_mapping import BulbColorProfile, BulbGamutMapper
+from .device_identity import mac_identity
 from .wiz_profile_metadata import parse_wiz_profile_hints
 
 PROFILE_QUERY_TIMEOUT = 2.5
@@ -257,7 +258,7 @@ class BulbController:
             if isinstance(result, Exception) or result is None:
                 stale.append(ip)
                 continue
-            key = result.mac or result.ip or ip
+            key = mac_identity(result.mac) or result.ip or ip
             if key in seen_macs:
                 stale.append(ip)
                 continue
