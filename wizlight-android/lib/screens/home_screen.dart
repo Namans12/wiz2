@@ -369,9 +369,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'Capture is black: this content (Netflix/DRM apps, '
-                        'HDMI inputs) cannot be screen-captured by Android. '
-                        'For local files, use USB Media mode instead.',
+                        'Capture looks black. The scene may be dark, or this '
+                        'app or input may not allow screen capture. For local '
+                        'files, you can try USB Media mode.',
                         style: TextStyle(fontSize: 12),
                       ),
                     ),
@@ -403,7 +403,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Text(
               _syncBackend == 'usb'
                   ? 'Plays a video from USB in-app and drives bulbs from decoded frames. Works with non-DRM local files; no Netflix/HDMI.'
-                  : 'Mirrors the screen. Captures non-DRM apps, games and the home UI; DRM streaming and HDMI inputs appear black.',
+                  : 'Mirrors accessible screen content. Some protected apps and HDMI inputs may not allow capture.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 10),
@@ -582,6 +582,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               initialValue: _settings.sourceColorSpace,
+              isExpanded: true,
               decoration: const InputDecoration(labelText: 'Color Source'),
               items: const <DropdownMenuItem<String>>[
                 DropdownMenuItem(
