@@ -2,60 +2,80 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 import '../models/wiz_bulb.dart';
+
+bool _validDiscoveryAddress(String address) {
+  final parts = address.split('.');
+  if (parts.length != 4) return false;
+  final numbers = parts.map(int.tryParse).toList();
+  if (numbers.any((value) => value == null || value < 0 || value > 255)) {
+    return false;
+  }
+  return numbers[0] != 0 && numbers[0] != 127 && numbers[0]! < 224 && numbers[3] != 255;
+}
+
+@visibleForTesting
+void drainDiscoveryPackets(
+    Datagram? Function() receive, Map<String, WizBulb> bulbs) {
+  Datagram? packet;
+  while ((packet = receive()) != null) {
+    final current = packet!;
+    if (current.port != WizBulbService.wizPort) continue;
+    try {
+      final message = jsonDecode(utf8.decode(current.data));
+      final result = message is Map ? message['result'] : null;
+      if (result is! Map ||
+          result['mac'] is! String ||
+          (result['mac'] as String).isEmpty) {
+        continue;
+      }
+      final bulb = WizBulb.fromJson({
+        'ip': current.address.address,
+        'mac': result['mac'],
+        'name': result['moduleName'] ?? 'WiZ ${current.address.address}',
+      });
+      if (_validDiscoveryAddress(bulb.ip)) bulbs[bulb.ip] = bulb;
+    } catch (_) {/* Ignore unrelated LAN datagrams and keep draining. */}
+  }
+}
+
 
 class WizBulbService {
   static const int wizPort = 38899;
 
-  Future<List<WizBulb>> discover({
-    Duration timeout = const Duration(seconds: 3),
-  }) async {
+  Future<List<WizBulb>> discover(
+      {Duration timeout = const Duration(seconds: 3)}) async {
     final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+    StreamSubscription<RawSocketEvent>? subscription;
+    Timer? retryTimer;
     final bulbs = <String, WizBulb>{};
-    final done = Completer<List<WizBulb>>();
-    Timer? timer;
-
-    socket.broadcastEnabled = true;
-    socket.listen((event) {
-      if (event != RawSocketEvent.read) {
-        return;
+    try {
+      socket.broadcastEnabled = true;
+      subscription = socket.listen((event) {
+        if (event != RawSocketEvent.read) return;
+        drainDiscoveryPackets(socket.receive, bulbs);
+      });
+      final payload = utf8.encode('{"method":"getSystemConfig","params":{}}');
+      void sendProbe() {
+        socket.send(payload, InternetAddress('255.255.255.255'), wizPort);
       }
-      final packet = socket.receive();
-      if (packet == null) {
-        return;
-      }
-      try {
-        final message = jsonDecode(utf8.decode(packet.data));
-        if (message is! Map) {
-          return;
+      sendProbe();
+      retryTimer = Timer.periodic(const Duration(milliseconds: 600), (_) {
+        try {
+          sendProbe();
+        } on SocketException {
+          // The network can disappear during the discovery window.
         }
-        final result = message['result'];
-        final mac = result is Map ? result['mac'] as String? : null;
-        final moduleName =
-            result is Map ? result['moduleName'] as String? : null;
-        final ip = packet.address.address;
-        bulbs[ip] = WizBulb(
-          ip: ip,
-          name: moduleName?.isNotEmpty == true ? moduleName! : 'WiZ $ip',
-          mac: mac,
-        );
-      } catch (_) {
-        // Ignore non-WiZ UDP replies.
-      }
-    });
-
-    final payload = utf8.encode('{"method":"getSystemConfig","params":{}}');
-    socket.send(payload, InternetAddress('255.255.255.255'), wizPort);
-    timer = Timer(timeout, () {
+      });
+      await Future<void>.delayed(timeout);
+      return bulbs.values.toList(growable: false);
+    } finally {
+      retryTimer?.cancel();
+      await subscription?.cancel();
       socket.close();
-      if (!done.isCompleted) {
-        done.complete(bulbs.values.toList(growable: false));
-      }
-    });
-
-    final result = await done.future;
-    timer.cancel();
-    return result;
+    }
   }
 
   WizBulb fromManualIp(String ip, {int index = 1}) {
