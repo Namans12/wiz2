@@ -116,15 +116,6 @@ def pq_decode(e_prime: np.ndarray) -> np.ndarray:
     return np.power(num / den, 1.0 / _PQ_M1)
 
 
-def pq_encode(linear: np.ndarray) -> np.ndarray:
-    """ST.2084 (PQ) OETF: linear light [0,1] at 10 000 nits → encoded [0,1]."""
-    y = np.clip(linear, 0.0, 1.0).astype(np.float64)
-    yp = np.power(y, _PQ_M1)
-    return np.power(
-        (_PQ_C1 + _PQ_C2 * yp) / (1.0 + _PQ_C3 * yp),
-        _PQ_M2,
-    )
-
 
 # HLG constants (BT.2100)
 _HLG_A = 0.17883277
@@ -427,43 +418,6 @@ def detect_hdr_content(frame: np.ndarray, sample_frac: float = 0.002) -> dict:
 
 # ─── Convenience preset builders ────────────────────────────────────────────────
 
-def processor_for_display(
-    display_type: str = "srgb",
-    hdr_enabled: bool = False,
-    peak_nits: float = 1000.0,
-) -> WideGamutFrameProcessor:
-    """Build a ``WideGamutFrameProcessor`` from a human-readable display type.
-
-    Parameters
-    ----------
-    display_type:
-        One of ``"srgb"``, ``"p3"``, ``"rec2020"``, ``"oled_laptop"``,
-        ``"sony_bravia"``, ``"samsung_tab"``, ``"android_p3"``.
-    hdr_enabled:
-        True if the display/capture is in HDR mode.
-    peak_nits:
-        HDR content peak (ignored for SDR).
-    """
-    _DISPLAY_MAP: dict[str, tuple[ColorSpace, float]] = {
-        "srgb":         (ColorSpace.SRGB,       100.0),
-        "p3":           (ColorSpace.DISPLAY_P3, 500.0),
-        "rec2020":      (ColorSpace.REC2020,    1000.0),
-        "oled_laptop":  (ColorSpace.DISPLAY_P3, 400.0),   # ASUS Vivobook Pro 16X OLED
-        "sony_bravia":  (ColorSpace.DISPLAY_P3, 2000.0),  # Sony BRAVIA 8 MK II
-        "samsung_tab":  (ColorSpace.DISPLAY_P3, 900.0),   # Galaxy Tab S9 Ultra
-        "android_p3":   (ColorSpace.DISPLAY_P3, 500.0),   # Generic Android P3
-    }
-    cs, default_peak = _DISPLAY_MAP.get(display_type.lower(), (ColorSpace.SRGB, 100.0))
-    p_nits           = peak_nits if hdr_enabled else default_peak
-
-    return WideGamutFrameProcessor(
-        source_color_space=cs,
-        hdr_curve=HDRCurve.PQ if hdr_enabled else HDRCurve.NONE,
-        peak_nits=p_nits,
-        tone_mapper="aces",
-        target_nits=220.0,
-    )
-
 
 # ─── Oklab perceptual color space (Björn Ottosson, 2020) ──────────────────────
 #
@@ -553,3 +507,139 @@ def lerp_oklab8(
     lab_a = srgb8_to_oklab(current)
     lab_b = srgb8_to_oklab(target)
     return oklab_to_srgb8(lab_a + (lab_b - lab_a) * t)
+
+
+# ─── Linear-domain Oklab + XYZ round trips (no 8-bit quantization) ────────────
+#
+# srgb8_to_oklab/oklab_to_srgb8 above round-trip through 8-bit sRGB for the
+# screen-sync hot path. The physical bulb-mixing model (bulb_physical_model.py)
+# works in continuous linear light / XYZ, so it needs the same Oklab matrices
+# without the byte quantization — and needs to accept out-of-[0,1] linear RGB,
+# since a physical LED-mix target can legitimately fall outside the sRGB unit
+# cube (LMS and its cube root are well-defined for negative/large inputs).
+
+SRGB_TO_XYZ = _SRGB_TO_XYZ
+XYZ_TO_SRGB = _XYZ_TO_SRGB
+
+
+def linear_srgb_to_oklab(linear_rgb: np.ndarray) -> np.ndarray:
+    """Linear-light sRGB (any range) -> Oklab (L, a, b). No clipping."""
+
+    linear_rgb = np.asarray(linear_rgb, dtype=np.float64)
+    lms = _OKLAB_M1 @ linear_rgb
+    lms_cbrt = np.sign(lms) * np.abs(lms) ** (1.0 / 3.0)
+    return _OKLAB_M2 @ lms_cbrt
+
+
+def oklab_to_linear_srgb(lab: np.ndarray) -> np.ndarray:
+    """Oklab (L, a, b) -> linear-light sRGB (any range). No clipping."""
+
+    lms_cbrt = _OKLAB_M2_INV @ np.asarray(lab, dtype=np.float64)
+    lms = lms_cbrt ** 3
+    return _OKLAB_M1_INV @ lms
+
+
+def xyz_to_oklab(xyz: np.ndarray) -> np.ndarray:
+    """CIE XYZ (D65) -> Oklab, via linear sRGB (Oklab has no native XYZ path)."""
+
+    return linear_srgb_to_oklab(_XYZ_TO_SRGB @ np.asarray(xyz, dtype=np.float64))
+
+
+def oklab_to_xyz(lab: np.ndarray) -> np.ndarray:
+    """Oklab -> CIE XYZ (D65)."""
+
+    return _SRGB_TO_XYZ @ oklab_to_linear_srgb(lab)
+
+
+# ─── CIE 1931 color-matching functions + spectral integration ─────────────────
+#
+# Used by bulb_physical_model.py to derive the WiZ bulb's 5 LED primaries'
+# actual CIE XYZ tristimulus values from their documented peak wavelengths
+# (R~625nm, G~530nm, B~455nm color LEDs; ~6200K cold-white / ~2700K
+# warm-white), instead of treating "map RGB to RGBCW" as a purely heuristic
+# gain-and-threshold problem with no model of what color the bulb emits.
+#
+# x_bar/y_bar/z_bar use the Wyman/Sloan/Shirley 2013 (JCGT 2(2), "Simple
+# Analytic Approximations to the CIE XYZ Color Matching Functions")
+# multi-lobe Gaussian fit -- a peer-reviewed, publicly verifiable closed-form
+# approximation to the CIE 1931 2-degree standard observer (fit error well
+# under the between-observer variance of the underlying human data), used
+# here instead of a hand-transcribed data table to avoid transcription error.
+
+_CMF_WAVELENGTHS_NM = np.arange(380.0, 781.0, 1.0)  # 1nm steps, 380-780nm
+
+
+def _gaussian_lobe(wavelength: np.ndarray, mean: float, inv_width_lo: float, inv_width_hi: float) -> np.ndarray:
+    """Asymmetric Gaussian lobe (different width below/above the mean)."""
+
+    width = np.where(wavelength < mean, inv_width_lo, inv_width_hi)
+    t = (wavelength - mean) * width
+    return np.exp(-0.5 * t * t)
+
+
+def cie_1931_xyz_bar(wavelength_nm: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Wyman/Sloan/Shirley multi-lobe Gaussian fit to the CIE 1931 2-deg CMFs.
+
+    Returns (x_bar, y_bar, z_bar) evaluated at each wavelength in nm.
+    """
+
+    w = np.asarray(wavelength_nm, dtype=np.float64)
+    x_bar = (
+        0.362 * _gaussian_lobe(w, 442.0, 0.0624, 0.0374)
+        + 1.056 * _gaussian_lobe(w, 599.8, 0.0264, 0.0323)
+        - 0.065 * _gaussian_lobe(w, 501.1, 0.0490, 0.0382)
+    )
+    y_bar = (
+        0.821 * _gaussian_lobe(w, 568.8, 0.0213, 0.0247)
+        + 0.286 * _gaussian_lobe(w, 530.9, 0.0613, 0.0322)
+    )
+    z_bar = (
+        1.217 * _gaussian_lobe(w, 437.0, 0.0845, 0.0278)
+        + 0.681 * _gaussian_lobe(w, 459.0, 0.0385, 0.0725)
+    )
+    return x_bar, y_bar, z_bar
+
+
+_CMF_X_BAR, _CMF_Y_BAR, _CMF_Z_BAR = cie_1931_xyz_bar(_CMF_WAVELENGTHS_NM)
+
+
+def led_gaussian_xyz(center_nm: float, fwhm_nm: float) -> np.ndarray:
+    """Integrate a Gaussian LED spectral power distribution against the CMFs.
+
+    Models a narrowband color LED as a Gaussian SPD of the given FWHM (real
+    LED spectra are not exactly Gaussian, but this is the standard first-order
+    approximation absent a spectrometer trace for the actual part). Returns
+    raw (relative-unit) XYZ -- callers normalize luminance themselves, since
+    without radiometric calibration only the SHAPE of this integration
+    (i.e. the resulting chromaticity) is meaningful, not its absolute scale.
+    """
+
+    sigma = float(fwhm_nm) / 2.3548200450309493  # FWHM = 2*sqrt(2*ln2)*sigma
+    spd = np.exp(-0.5 * ((_CMF_WAVELENGTHS_NM - float(center_nm)) / sigma) ** 2)
+    x = float(np.sum(spd * _CMF_X_BAR))
+    y = float(np.sum(spd * _CMF_Y_BAR))
+    z = float(np.sum(spd * _CMF_Z_BAR))
+    return np.array([x, y, z], dtype=np.float64)
+
+
+def blackbody_xyz(kelvin: float) -> np.ndarray:
+    """Integrate a Planckian (blackbody) spectrum against the CMFs.
+
+    Models a phosphor-converted white LED's overall chromaticity by its
+    correlated color temperature (the same simplification already used
+    elsewhere in this codebase's CCT estimation) rather than its true
+    multi-peak SPD (blue pump + broad phosphor hump), which is unknown
+    without a spectrometer trace. Returns raw (relative-unit) XYZ.
+    """
+
+    h, c, k = 6.62607015e-34, 2.99792458e8, 1.380649e-23
+    wavelength_m = _CMF_WAVELENGTHS_NM * 1e-9
+    t = float(kelvin)
+    # Planck's law, relative spectral radiance (constant prefactors cancel
+    # out once we normalize downstream, so they're omitted).
+    exponent = (h * c) / (wavelength_m * k * t)
+    spd = (wavelength_m ** -5) / (np.exp(np.clip(exponent, -50, 50)) - 1.0)
+    x = float(np.sum(spd * _CMF_X_BAR))
+    y = float(np.sum(spd * _CMF_Y_BAR))
+    z = float(np.sum(spd * _CMF_Z_BAR))
+    return np.array([x, y, z], dtype=np.float64)

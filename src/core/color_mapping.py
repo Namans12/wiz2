@@ -37,6 +37,7 @@ from .color_science import (
     ColorSpace,
     REC2020_TO_SRGB,
     DCI_P3_TO_SRGB,
+    SRGB_TO_XYZ,
     compress_to_srgb,
 )
 
@@ -90,6 +91,11 @@ class BulbColorProfile:
     cct_warm_kelvin: float = 2700.0
     cct_cool_kelvin: float = 6500.0
     cool_mix_bias: float = 0.0                         # added to coolMix per profile (Bravia: +0.10)
+    # "heuristic" (default): the channel-gain + saturation/brightness-gated
+    # white-mixing pipeline below. "physical": solve the bulb's actual LED
+    # primaries for an exact color-mixing match instead -- see
+    # bulb_physical_model.py for the model and its stated assumptions.
+    mixing_model: str = "heuristic"
 
     @property
     def white_ratio(self) -> float:
@@ -186,6 +192,13 @@ class BulbGamutMapper:
         return self._build_payload_volume(diagonal).reshape(256, -1)
 
     def _build_payload_volume(self, rgb: np.ndarray) -> np.ndarray:
+        """Dispatch to the configured mixing model; default path is unchanged."""
+
+        if self.profile.mixing_model == "physical":
+            return self._build_payload_volume_physical(rgb)
+        return self._build_payload_volume_heuristic(rgb)
+
+    def _build_payload_volume_heuristic(self, rgb: np.ndarray) -> np.ndarray:
         """Run the full color pipeline over any (..., 3) grid of source colors."""
 
         # ── 2. Optional tone/calibration correction ────────────────────────────
@@ -211,11 +224,14 @@ class BulbGamutMapper:
             linear = _srgb_to_linear(rgb)
 
         # ── 4. Channel-current gain equalisation ──────────────────────────────
+        # `linear` is always in [0,1] here (compress_to_srgb bounds the
+        # wide-gamut path; _srgb_to_linear clips the SDR path) and
+        # _rgb_gain <= 1.0, so `balanced` never exceeds 1.0 -- no renormalize
+        # needed.
         balanced = np.clip(linear * self._rgb_gain.reshape(1, 1, 1, 3), 0.0, None)
-        peak = np.maximum(balanced.max(axis=-1, keepdims=True), 1.0)
-        balanced = balanced / peak
 
-        # RGB-only fixtures cannot use energy assigned to a white channel.
+        # RGB-only fixtures cannot reproduce energy assigned to a white LED.
+        # Keep the fourth channel at zero for the existing WiZ payload format.
         if self.profile.white_channels <= 0:
             rgb_enc = np.clip(np.round(_linear_to_srgb(balanced) * 255.0), 0, 255).astype(np.uint8)
             return np.concatenate((rgb_enc, np.zeros_like(rgb_enc[..., :1])), axis=-1)
@@ -331,6 +347,49 @@ class BulbGamutMapper:
             (rgb_enc, cold_w[..., None], warm_w[..., None]),
             axis=-1,
         )
+
+    def _build_payload_volume_physical(self, rgb: np.ndarray) -> np.ndarray:
+        """Physical (spectral, additive-mixing) alternative to the heuristic above.
+
+        Solves the bulb's actual LED-primary mixing equation per grid point
+        instead of the channel-gain + saturation-gated white-mixing heuristic.
+        See bulb_physical_model.py for the model and its stated assumptions.
+        Shares steps 2-3 (tone/calibration correction, source-gamut -> linear
+        sRGB) with the heuristic path verbatim; duplicated rather than
+        factored out so this opt-in path cannot alter the default path's
+        behavior via a shared-code refactor.
+        """
+
+        from .bulb_physical_model import PhysicalPrimaries, solve_channel_mix_batch
+
+        # ── 2. Optional tone/calibration correction ────────────────────────────
+        if self.tone_lut is not None:
+            rgb = self.tone_lut.correct_rgb_batch(rgb)
+        if self.calibration is not None:
+            rgb = self.calibration.correct_rgb_batch(rgb)
+
+        # ── 3. Convert to linear sRGB ──────────────────────────────────────────
+        if self._gamut_matrix is not None:
+            linear_wide = _srgb_to_linear(rgb)
+            h, w_sz, d = linear_wide.shape[0], linear_wide.shape[1], linear_wide.shape[2]
+            flat = linear_wide.reshape(-1, 3).astype(np.float64)
+            flat = (flat @ self._gamut_matrix.T).astype(np.float32)
+            flat = compress_to_srgb(flat)
+            linear = flat.reshape(h, w_sz, d, 3)
+        else:
+            linear = _srgb_to_linear(rgb)
+
+        # ── 4. Solve the LED-mixing equation for every grid point at once ──────
+        shape = linear.shape
+        primaries = PhysicalPrimaries.from_profile(self.profile)
+        target_xyz = linear.reshape(-1, 3).astype(np.float64) @ SRGB_TO_XYZ.T
+        weights = solve_channel_mix_batch(target_xyz, primaries)  # (N, n_channels) in [0,1]
+
+        # ── 5. Encode channel weights (0..1 drive fraction) to uint8 payload ────
+        payload = np.clip(np.round(weights * 255.0), 0, 255).astype(np.uint8)
+        if self.profile.white_channels <= 0:
+            payload = np.concatenate((payload, np.zeros((len(payload), 1), dtype=np.uint8)), axis=-1)
+        return payload.reshape(shape[:-1] + (payload.shape[-1],))
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
