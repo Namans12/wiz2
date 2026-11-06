@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
+import java.util.concurrent.atomic.AtomicBoolean
 import android.view.TextureView
 import android.view.WindowManager
 import androidx.media3.common.MediaItem
@@ -18,7 +19,7 @@ import org.json.JSONArray
  * USB media player front-end. Plays a local (non-DRM) media URI with ExoPlayer,
  * renders to a TextureView, samples decoded frames via getBitmap, and feeds them
  * to the shared [ColorSyncEngine] — no MediaProjection, no secure-surface risk,
- * pristine frames. Identical color behavior to screen-capture mode.
+ * pristine frames. Shares color mapping; screen-capture-only crop/HDR/zones settings are not applied.
  */
 class PlayerActivity : Activity() {
 
@@ -47,6 +48,9 @@ class PlayerActivity : Activity() {
     private var sampleHandler: Handler? = null
 
     private var isSyncing = false
+    private val framePending = AtomicBoolean(false)
+    private var sessionId = ""
+    private var sessionFailure: String? = null
     private var lastStatusAt = 0L
     private var lastError: String? = null
 
@@ -66,6 +70,12 @@ class PlayerActivity : Activity() {
         textureView = TextureView(this)
         setContentView(textureView)
 
+        sessionId = intent.getStringExtra("sessionId") ?: ""
+        if (!SyncSessionRegistry.attach(sessionId) { runOnUiThread { finish() } }) {
+            finish()
+            return
+        }
+        try {
         configureEngineFromIntent()
 
         sampleThread = HandlerThread("WizPlayerSync").also { it.start() }
@@ -80,15 +90,20 @@ class PlayerActivity : Activity() {
         engine.start()
 
         val exo = ExoPlayer.Builder(this).build()
+        player = exo
         exo.setVideoTextureView(textureView)
         exo.setMediaItem(MediaItem.fromUri(Uri.parse(uriString)))
         exo.prepare()
         exo.playWhenReady = true
-        player = exo
 
         active = this
         isSyncing = true
         mainHandler.postDelayed(frameTick, 250L)
+        SyncSessionRegistry.running(sessionId)
+        } catch (error: Exception) {
+            sessionFailure = error.message ?: "Player startup failed"
+            finish()
+        }
     }
 
     private fun configureEngineFromIntent() {
@@ -118,10 +133,11 @@ class PlayerActivity : Activity() {
 
     private fun captureAndSubmit() {
         val view = textureView
-        if (!view.isAvailable) return
+        if (!view.isAvailable || !framePending.compareAndSet(false, true)) return
         try {
             view.getBitmap(sampleBitmap)
         } catch (_: Throwable) {
+            framePending.set(false)
             return
         }
         sampleBitmap.getPixels(samplePixels, 0, GRID, 0, 0, GRID, GRID)
@@ -133,6 +149,7 @@ class PlayerActivity : Activity() {
             } catch (error: Exception) {
                 lastError = error.message ?: error.toString()
             }
+            framePending.set(false)
             maybePostStatus()
         }
     }
@@ -181,10 +198,23 @@ class PlayerActivity : Activity() {
         if (active === this) active = null
         player?.release()
         player = null
-        sampleThread?.quitSafely()
+        val worker = sampleThread
+        val handler = sampleHandler
+        handler?.removeCallbacksAndMessages(null)
+        val cleanup = Runnable {
+            try {
+                engine.close()
+            } finally {
+                framePending.set(false)
+                SyncSessionRegistry.finish(sessionId, sessionFailure)
+            }
+        }
+        if (worker != null && worker.isAlive && handler != null) {
+            handler.post(cleanup)
+            worker.quitSafely()
+        } else cleanup.run()
         sampleThread = null
         sampleHandler = null
-        engine.close()
         super.onDestroy()
     }
 }

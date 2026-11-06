@@ -114,8 +114,12 @@ class ScreenCaptureService : Service() {
     private var hdrReaderActive = false
     private var captureBufferFormat = "rgba8888"
 
-    private var isRunning = false
+    @Volatile private var isRunning = false
+    private var cleanupStarted = false
     private var lastError: String? = null
+    private var sessionId = ""
+    private var sessionFailure: String? = null
+    private var latestGrids: Map<String, IntArray>? = null
     private var lastStatusUpdateAt = 0L
     private var cachedContentBounds: Rect? = null
     private var cachedContentBoundsAtFrame = -1
@@ -123,14 +127,15 @@ class ScreenCaptureService : Service() {
     private var framesProcessed = 0
     private var replayedFrames = 0
     private var lastFreshFrameAtMs = 0L
-    private var latestGrids: Map<String, IntArray>? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val mediaProjectionCallback =
         object : MediaProjection.Callback() {
             override fun onStop() {
-                stopCapture(stopProjection = false)
-                stopSelf()
+                if (isRunning) {
+                    stopCapture(stopProjection = false)
+                    stopSelf()
+                }
             }
         }
 
@@ -140,7 +145,12 @@ class ScreenCaptureService : Service() {
                 return
             }
             val startedAt = SystemClock.elapsedRealtime()
-            captureFrame()
+            try {
+                captureFrame()
+            } catch (error: Exception) {
+                lastError = error.message ?: error.toString()
+                maybePostStatus()
+            }
             val elapsed = SystemClock.elapsedRealtime() - startedAt
             frameTimesMs.addLast(elapsed)
             while (frameTimesMs.size > 30) {
@@ -170,6 +180,12 @@ class ScreenCaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
+                sessionId = intent.getStringExtra("sessionId") ?: ""
+                if (!SyncSessionRegistry.attach(sessionId) { mainHandler.post { stopCapture(); stopSelf() } }) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                try {
                 bulbTargets = parseBulbs(intent.getStringExtra(EXTRA_BULBS_JSON) ?: "[]")
                 requestedMode = intent.getStringExtra(EXTRA_MODE) ?: "single"
                 engine.minFps = intent.getIntExtra(EXTRA_MIN_FPS, 10).coerceIn(4, 30)
@@ -193,6 +209,12 @@ class ScreenCaptureService : Service() {
                 engine.bulbTargets = bulbTargets
                 engine.effectiveMode = resolveEffectiveMode(requestedMode, bulbTargets)
                 startCapture()
+                } catch (error: Exception) {
+                    lastError = error.message ?: "Capture startup failed"
+                    sessionFailure = lastError
+                    stopCapture()
+                    stopSelf()
+                }
             }
 
             ACTION_STOP -> {
@@ -208,6 +230,8 @@ class ScreenCaptureService : Service() {
             return
         }
         val projectionData = mediaProjectionData ?: run {
+            sessionFailure = "Capture permission is missing"
+            stopCapture()
             stopSelf()
             return
         }
@@ -238,6 +262,8 @@ class ScreenCaptureService : Service() {
             // Projection setup failures (revoked consent, SecurityException on
             // newer Android) used to kill the service silently — surface them.
             lastError = "Projection setup failed: ${error.message ?: error}"
+            sessionFailure = lastError
+            stopCapture()
             SyncBridge.post(
                 "onSyncUpdate",
                 hashMapOf<String, Any?>(
@@ -249,7 +275,9 @@ class ScreenCaptureService : Service() {
             return
         }
 
+        mediaProjectionData = null
         engine.start()
+        latestGrids = null
         lastError = null
         lastStatusUpdateAt = 0L
         cachedContentBounds = null
@@ -258,12 +286,12 @@ class ScreenCaptureService : Service() {
         framesProcessed = 0
         replayedFrames = 0
         lastFreshFrameAtMs = 0L
-        latestGrids = null
 
         captureThread = HandlerThread("WizLightCaptureThread").also { it.start() }
         captureHandler = Handler(captureThread!!.looper)
         isRunning = true
         captureHandler?.post(captureRunnable)
+        SyncSessionRegistry.running(sessionId)
     }
 
     private fun createImageReaderWithHdrFallback(): ImageReader {
@@ -306,7 +334,10 @@ class ScreenCaptureService : Service() {
             // Static screens produce no new frames (VirtualDisplay only pushes
             // on change) — keep the diagnostics heartbeat alive regardless so
             // the UI doesn't look dead.
-            latestGrids?.let { replayedFrames += 1; engine.submitFrame(it, sampleSize) }
+            latestGrids?.let {
+                replayedFrames += 1
+                engine.submitFrame(it, sampleSize)
+            }
             maybePostStatus()
             return
         }
@@ -330,7 +361,7 @@ class ScreenCaptureService : Service() {
             val grids = if (engine.effectiveMode == "single") {
                 mapOf("all" to sampleGrid(contentFrame, sampleSize))
             } else {
-                val map = mutableMapOf<String, IntArray>()
+                val map = mutableMapOf("all" to sampleGrid(contentFrame, sampleSize))
                 for (region in bulbTargets.map { it.region }.toSet()) {
                     map[region] = sampleGrid(cropRelativeRegion(contentFrame, region), sampleSize)
                 }
@@ -373,6 +404,7 @@ class ScreenCaptureService : Service() {
             hdrReaderActive = false
             hdrCaptureActive = false
             lastError = "HDR fallback failed: ${error.message ?: error}"
+            sessionFailure = lastError
             stopCapture()
             stopSelf()
         }
@@ -400,7 +432,7 @@ class ScreenCaptureService : Service() {
     private fun imageToFrame(image: Image): ImageFrame? {
         val plane = image.planes.firstOrNull() ?: return null
         return ImageFrame(
-            buffer = plane.buffer.duplicate(),
+            buffer = plane.buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN),
             sourceWidth = image.width,
             sourceHeight = image.height,
             rowStride = plane.rowStride,
@@ -551,27 +583,42 @@ class ScreenCaptureService : Service() {
         SyncBridge.post("onSyncUpdate", payload)
     }
 
+    @Synchronized
     private fun stopCapture(stopProjection: Boolean = true) {
+        if (cleanupStarted) return
+        cleanupStarted = true
         isRunning = false
-        captureHandler?.removeCallbacksAndMessages(null)
-        captureThread?.quitSafely()
+        val worker = captureThread
+        val handler = captureHandler
+        handler?.removeCallbacksAndMessages(null)
+        val cleanup = Runnable {
+            fun release(action: () -> Unit) {
+                try { action() } catch (error: Exception) {
+                    if (sessionFailure == null) sessionFailure = error.message ?: "Capture cleanup failed"
+                }
+            }
+            release { virtualDisplay?.release() }
+            virtualDisplay = null
+            release { imageReader?.close() }
+            imageReader = null
+            release { mediaProjection?.unregisterCallback(mediaProjectionCallback) }
+            if (stopProjection) release { mediaProjection?.stop() }
+            mediaProjection = null
+            mediaProjectionData = null
+            latestGrids = null
+            release { engine.close() }
+            SyncSessionRegistry.finish(sessionId, sessionFailure)
+        }
+        if (worker != null && worker.isAlive && Thread.currentThread() !== worker && handler != null) {
+            handler.post(cleanup)
+            worker.quitSafely()
+        } else {
+            cleanup.run()
+            worker?.quitSafely()
+        }
         captureThread = null
         captureHandler = null
-
-        virtualDisplay?.release()
-        virtualDisplay = null
-
-        imageReader?.close()
-        imageReader = null
-
-        val projection = mediaProjection
-        mediaProjection = null
-        if (projection != null && stopProjection) {
-            projection.unregisterCallback(mediaProjectionCallback)
-            projection.stop()
-        }
-
-        engine.close()
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     private fun createNotificationChannel() {

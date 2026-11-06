@@ -15,6 +15,43 @@ class ScreenCaptureService {
   );
 
   SyncStatsListener? onStats;
+  void Function(Map<dynamic, dynamic>)? onSession;
+  String _sessionId = '';
+
+  Future<void> refreshSession() async {
+    final state =
+        await _channel.invokeMapMethod<dynamic, dynamic>('querySession');
+    if (state != null) {
+      _sessionId = state['sessionId'] as String? ?? '';
+      onSession?.call(state);
+    }
+  }
+
+  void dispose() {
+    onStats = null;
+    onSession = null;
+    _channel.setMethodCallHandler(null);
+  }
+
+  Map<String, Object> _startArguments(
+      List<WizBulb> bulbs, SyncSettings settings) {
+    _sessionId = DateTime.now().microsecondsSinceEpoch.toString();
+    return {...settings.toMethodArgs(bulbs), 'sessionId': _sessionId};
+  }
+
+  Future<void> waitUntilStopped() async {
+    for (var attempt = 0; attempt < 60; attempt++) {
+      final state =
+          await _channel.invokeMapMethod<dynamic, dynamic>('querySession');
+      if (state == null ||
+          state['state'] == 'stopped' ||
+          state['state'] == 'error') {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    throw StateError('Previous sync session has not stopped yet');
+  }
 
   Future<bool> requestPermission() async {
     return await _channel.invokeMethod<bool>('requestPermission') ?? false;
@@ -24,12 +61,13 @@ class ScreenCaptureService {
     required List<WizBulb> bulbs,
     required SyncSettings settings,
   }) async {
-    final args = settings.toMethodArgs(bulbs);
+    final args = _startArguments(bulbs, settings);
     return await _channel.invokeMethod<bool>('startCapture', args) ?? false;
   }
 
   Future<void> stopCapture() async {
-    await _channel.invokeMethod<bool>('stopCapture');
+    await _channel.invokeMethod<bool>('stopCapture', {'sessionId': _sessionId});
+    await waitUntilStopped();
   }
 
   /// Opens the system document picker for a video file (USB drives appear here
@@ -45,16 +83,22 @@ class ScreenCaptureService {
     required List<WizBulb> bulbs,
     required SyncSettings settings,
   }) async {
-    final args = Map<String, Object>.from(settings.toMethodArgs(bulbs));
+    final args = _startArguments(bulbs, settings);
     args['mediaUri'] = mediaUri;
     return await _channel.invokeMethod<bool>('playMedia', args) ?? false;
   }
 
   Future<void> stopMedia() async {
-    await _channel.invokeMethod<bool>('stopMedia');
+    await _channel.invokeMethod<bool>('stopMedia', {'sessionId': _sessionId});
+    await waitUntilStopped();
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
+    if (call.method == 'onSessionState' && call.arguments is Map) {
+      final state = call.arguments as Map;
+      if (state['sessionId'] == _sessionId) onSession?.call(state);
+      return;
+    }
     if (call.method != 'onSyncUpdate') {
       return;
     }

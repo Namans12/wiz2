@@ -133,27 +133,38 @@ class SyncSettings {
   }
 
   factory SyncSettings.fromJson(Map<String, dynamic> json) {
+    num number(String key, num fallback) =>
+        json[key] is num && (json[key] as num).isFinite
+            ? json[key] as num
+            : fallback;
+    bool flag(String key, bool fallback) =>
+        json[key] is bool ? json[key] as bool : fallback;
+    String text(String key, String fallback) =>
+        json[key] is String ? json[key] as String : fallback;
+    final minFps = number('minFps', 10).toInt().clamp(4, 30);
     return SyncSettings(
-      mode: json['mode'] as String? ?? 'single',
-      minFps: (json['minFps'] as num?)?.toInt() ?? 10,
-      maxFps: (json['maxFps'] as num?)?.toInt() ?? 24,
-      smoothing: (json['smoothing'] as num?)?.toDouble() ?? 0.2,
-      sampleSize: (json['sampleSize'] as num?)?.toInt() ?? 56,
-      colorBoost: (json['colorBoost'] as num?)?.toDouble() ?? 1.18,
-      edgeWeight: (json['edgeWeight'] as num?)?.toDouble() ?? 1.5,
-      colorAlgorithm: json['colorAlgorithm'] as String? ?? 'auto',
-      minBrightness: (json['minBrightness'] as num?)?.toInt() ?? 20,
-      minColorDelta: (json['minColorDelta'] as num?)?.toInt() ?? 8,
-      adaptiveFps: json['adaptiveFps'] as bool? ?? true,
-      predictiveSmoothing: json['predictiveSmoothing'] as bool? ?? true,
-      ignoreLetterbox: json['ignoreLetterbox'] as bool? ?? true,
-      sourceColorSpace: _normalizeSourceColorSpace(
-        json['sourceColorSpace'] as String? ?? 'auto',
-      ),
-      hdrToneMapping: json['hdrToneMapping'] as bool? ?? false,
-      hdrCapture: json['hdrCapture'] as bool? ?? false,
-      syncProfile: _normalizeSyncProfile(json['syncProfile'] as String? ?? 'auto'),
-      brightnessFollow: json['brightnessFollow'] as bool? ?? true,
+      mode: text('mode', 'single') == 'zones' ? 'zones' : 'single',
+      minFps: minFps,
+      maxFps: number('maxFps', 24).toInt().clamp(minFps, 30),
+      smoothing: number('smoothing', 0.2).toDouble().clamp(0.05, 0.85),
+      sampleSize: number('sampleSize', 56).toInt().clamp(24, 96),
+      colorBoost: number('colorBoost', 1.18).toDouble().clamp(1.0, 1.8),
+      edgeWeight: number('edgeWeight', 1.5).toDouble().clamp(1.0, 2.5),
+      colorAlgorithm: const {'auto', 'weighted', 'kmeans', 'histogram'}
+              .contains(json['colorAlgorithm'])
+          ? json['colorAlgorithm'] as String
+          : 'auto',
+      minBrightness: number('minBrightness', 20).toInt().clamp(0, 80),
+      minColorDelta: number('minColorDelta', 8).toInt().clamp(2, 48),
+      adaptiveFps: flag('adaptiveFps', true),
+      predictiveSmoothing: flag('predictiveSmoothing', true),
+      ignoreLetterbox: flag('ignoreLetterbox', true),
+      sourceColorSpace:
+          _normalizeSourceColorSpace(text('sourceColorSpace', 'auto')),
+      hdrToneMapping: flag('hdrToneMapping', false),
+      hdrCapture: flag('hdrCapture', false),
+      syncProfile: _normalizeSyncProfile(text('syncProfile', 'auto')),
+      brightnessFollow: flag('brightnessFollow', true),
     );
   }
 
@@ -341,9 +352,10 @@ class SyncRuntimeStats {
       detectedDisplayGamut: map['detectedDisplayGamut'] as String? ?? 'srgb',
       detectedHdrSupport: map['detectedHdrSupport'] as bool? ?? false,
       deviceProfile: map['deviceProfile'] as String? ?? 'generic',
-      supportedHdrTypes: ((map['supportedHdrTypes'] as List<dynamic>?) ?? const <dynamic>[])
-          .map((e) => e.toString())
-          .toList(),
+      supportedHdrTypes:
+          ((map['supportedHdrTypes'] as List<dynamic>?) ?? const <dynamic>[])
+              .map((e) => e.toString())
+              .toList(),
       primaryHdrType: map['primaryHdrType'] as String? ?? 'none',
       hdrCaptureActive: map['hdrCaptureActive'] as bool? ?? false,
       captureBufferFormat: map['captureBufferFormat'] as String? ?? 'rgba8888',

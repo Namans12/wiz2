@@ -41,7 +41,6 @@ void drainDiscoveryPackets(
   }
 }
 
-
 class WizBulbService {
   static const int wizPort = 38899;
 
@@ -78,7 +77,39 @@ class WizBulbService {
     }
   }
 
+  Future<bool> probe(String ip) async {
+    if (!WizBulb.isValidIp(ip)) return false;
+    final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+    StreamSubscription<RawSocketEvent>? subscription;
+    final reply = Completer<bool>();
+    try {
+      subscription = socket.listen((event) {
+        if (event != RawSocketEvent.read || reply.isCompleted) return;
+        final packet = socket.receive();
+        if (packet == null ||
+            packet.address.address != ip ||
+            packet.port != wizPort) {
+          return;
+        }
+        try {
+          final message = jsonDecode(utf8.decode(packet.data));
+          if (message is Map && message['result'] is Map) reply.complete(true);
+        } catch (_) {/* Keep waiting for a valid response. */}
+      });
+      socket.send(utf8.encode('{"method":"getPilot","params":{}}'),
+          InternetAddress(ip), wizPort);
+      return await reply.future
+          .timeout(const Duration(seconds: 2), onTimeout: () => false);
+    } finally {
+      await subscription?.cancel();
+      socket.close();
+    }
+  }
+
   WizBulb fromManualIp(String ip, {int index = 1}) {
+    if (!WizBulb.isValidIp(ip)) {
+      throw const FormatException('Enter a valid local IPv4 address');
+    }
     return WizBulb(ip: ip.trim(), name: 'Bulb $index');
   }
 }

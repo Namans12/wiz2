@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/wiz_bulb.dart';
+import '../widgets/remote_slider.dart';
 import '../services/screen_capture_service.dart';
 import '../services/settings_service.dart';
 import '../services/sync_service.dart';
@@ -16,7 +17,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final SettingsService _settingsService = SettingsService();
   final WizBulbService _bulbService = WizBulbService();
   late final ScreenCaptureService _captureService;
@@ -24,21 +25,28 @@ class _HomeScreenState extends State<HomeScreen> {
   List<WizBulb> _bulbs = const <WizBulb>[];
   SyncSettings _settings = const SyncSettings();
   SyncRuntimeStats? _runtimeStats;
+  final _syncActionFocus = FocusNode(debugLabel: 'Sync action');
   bool _loading = true;
   bool _syncRunning = false;
   bool _playerRunning = false;
   String _syncBackend = 'screen'; // 'screen' | 'usb'
   String? _status;
+  bool _busy = false;
+  bool _settingsPending = false;
+  String _sessionState = 'stopped';
+  String? _lastMediaUri;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _captureService = ScreenCaptureService()
       ..onStats = (stats) {
         if (mounted) {
           setState(() => _runtimeStats = stats);
         }
       };
+    _captureService.onSession = _onSession;
     _load();
   }
 
@@ -52,7 +60,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _bulbs = bulbs;
       _settings = settings;
       _loading = false;
+      _status = _settingsService.warning;
     });
+    await _refreshSession();
   }
 
   Future<void> _saveBulbs(List<WizBulb> bulbs) async {
@@ -61,7 +71,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _saveSettings(SyncSettings settings) async {
-    setState(() => _settings = settings);
+    setState(() {
+      _settings = settings;
+      _settingsPending = _syncRunning || _playerRunning;
+    });
     await _settingsService.saveSyncSettings(settings);
   }
 
@@ -76,7 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() => _status = 'No bulbs found. Add by IP instead.');
         return;
       }
-      await _saveBulbs(discovered);
+      await _saveBulbs(WizBulb.merge(_bulbs, discovered));
       if (!mounted) {
         return;
       }
@@ -121,96 +134,131 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) {
       return;
     }
+    if (!WizBulb.isValidIp(ip)) {
+      setState(() => _status = 'Enter a valid IPv4 bulb address.');
+      return;
+    }
     final nextBulbs = <WizBulb>[
       ..._bulbs,
       _bulbService.fromManualIp(ip, index: _bulbs.length + 1),
     ];
-    await _saveBulbs(nextBulbs);
+    await _saveBulbs(WizBulb.merge(_bulbs, nextBulbs));
   }
+
+  void _onSession(Map<dynamic, dynamic> session) {
+    if (!mounted) return;
+    setState(() {
+      _sessionState = session['state'] as String? ?? 'stopped';
+      final running = _sessionState == 'running';
+      _syncRunning = running && session['backend'] == 'screen';
+      _playerRunning = running && session['backend'] == 'usb';
+      if (running) _syncBackend = session['backend'] as String? ?? 'screen';
+      _status = session['error'] as String? ?? 'Sync $_sessionState';
+    });
+  }
+
+  Future<void> _refreshSession() async {
+    try {
+      await _captureService.refreshSession();
+    } catch (error) {
+      if (mounted) {
+        setState(() => _status = 'Native status unavailable: $error');
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshSession();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _captureService.dispose();
+    _syncActionFocus.dispose();
+    super.dispose();
+  }
+
+  bool get _transitioning =>
+      _busy || _sessionState == 'starting' || _sessionState == 'stopping';
 
   Future<void> _toggleSync() async {
-    if (_syncRunning) {
-      await _captureService.stopCapture();
-      if (!mounted) {
+    if (_transitioning) return;
+    setState(() => _busy = true);
+    try {
+      if (_syncRunning) {
+        await _captureService.stopCapture();
+        await _refreshSession();
         return;
       }
+      if (_playerRunning) {
+        throw StateError('Stop the player before starting screen capture');
+      }
+      if (_bulbs.isEmpty) throw StateError('Add at least one bulb first');
+      final granted = await _captureService.requestPermission();
+      if (!mounted) return;
+      if (!granted) throw StateError('Screen capture permission denied');
       setState(() {
-        _syncRunning = false;
-        _status = 'Screen sync stopped';
+        _settingsPending = false;
+        _status = 'Starting screen capture...';
       });
-      return;
+      final accepted = await _captureService.startCapture(
+          bulbs: _bulbs, settings: _settings);
+      if (!accepted) throw StateError('Capture start was rejected');
+      await _refreshSession();
+    } catch (error) {
+      if (mounted) setState(() => _status = 'Screen sync: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
-
-    if (_bulbs.isEmpty) {
-      setState(() => _status = 'Add at least one bulb first.');
-      return;
-    }
-
-    final granted = await _captureService.requestPermission();
-    if (!mounted) {
-      return;
-    }
-    if (!granted) {
-      setState(() => _status = 'Screen capture permission denied.');
-      return;
-    }
-
-    final started = await _captureService.startCapture(
-      bulbs: _bulbs,
-      settings: _settings,
-    );
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _syncRunning = started;
-      _status =
-          started ? 'Screen sync running' : 'Could not start screen sync.';
-    });
   }
 
-  Future<void> _pickAndPlayUsb() async {
-    if (_playerRunning) {
-      await _captureService.stopMedia();
-      if (!mounted) {
+  Future<void> _pickAndPlayUsb({String? replayUri}) async {
+    if (_transitioning) return;
+    setState(() => _busy = true);
+    try {
+      if (_playerRunning) {
+        await _captureService.stopMedia();
+        await _refreshSession();
         return;
       }
+      if (_syncRunning) {
+        throw StateError('Stop screen capture before starting the player');
+      }
+      if (_bulbs.isEmpty) throw StateError('Add at least one bulb first');
+      final uri = replayUri ?? await _captureService.pickMedia();
+      if (!mounted || uri == null || uri.isEmpty) return;
+      _lastMediaUri = uri;
       setState(() {
-        _playerRunning = false;
-        _status = 'USB player stopped';
+        _settingsPending = false;
+        _status = 'Starting local player...';
       });
-      return;
+      final accepted = await _captureService.playMedia(
+          mediaUri: uri, bulbs: _bulbs, settings: _settings);
+      if (!accepted) throw StateError('Player start was rejected');
+      await _refreshSession();
+    } catch (error) {
+      if (mounted) setState(() => _status = 'Local player: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
+  }
 
-    if (_bulbs.isEmpty) {
-      setState(() => _status = 'Add at least one bulb first.');
-      return;
+  Future<void> _applySettings() async {
+    if (_transitioning) return;
+    final player = _playerRunning;
+    if (player) {
+      await _pickAndPlayUsb();
+    } else if (_syncRunning) {
+      await _toggleSync();
     }
-
-    setState(() => _status = 'Pick a video from your USB drive...');
-    final uri = await _captureService.pickMedia();
-    if (!mounted) {
-      return;
+    if (!mounted || _syncRunning || _playerRunning) return;
+    if (player) {
+      await _pickAndPlayUsb(replayUri: _lastMediaUri);
+    } else {
+      await _toggleSync();
     }
-    if (uri == null || uri.isEmpty) {
-      setState(() => _status = 'No file selected.');
-      return;
-    }
-
-    final started = await _captureService.playMedia(
-      mediaUri: uri,
-      bulbs: _bulbs,
-      settings: _settings,
-    );
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _playerRunning = started;
-      _status = started
-          ? 'Playing USB media — driving bulbs from decoded frames'
-          : 'Could not start the USB player.';
-    });
   }
 
   Future<void> _exportDiagnostics() async {
@@ -238,52 +286,118 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _status = 'Diagnostics exported: ${file.path}');
   }
 
+  Widget _pendingSettingsNotice() => Column(children: [
+        if (_settingsPending)
+          ListTile(
+            title: const Text(
+                'Settings saved; running sync still uses previous settings.'),
+            trailing: FilledButton(
+                onPressed: _transitioning ? null : _applySettings,
+                child: const Text('Apply / restart')),
+          ),
+        if (_syncBackend == 'usb')
+          const Padding(
+            padding: EdgeInsets.all(8),
+            child: Text(
+                'Local player uses single full-frame sampling. Zone, letterbox and FP16 capture controls apply only to screen capture.'),
+          ),
+      ]);
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('WizLight Sync'),
-        actions: <Widget>[
-          IconButton(
-            onPressed: _discover,
-            icon: const Icon(Icons.search),
-            tooltip: 'Discover',
-          ),
-          IconButton(
-            onPressed: _addIp,
-            icon: const Icon(Icons.add),
-            tooltip: 'Add IP',
-          ),
-          IconButton(
-            onPressed: _showSyncGuide,
-            icon: const Icon(Icons.info_outline),
-            tooltip: 'Sync guide',
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: <Widget>[
-          _buildSyncHero(),
-          const SizedBox(height: 16),
-          ..._bulbs.map(_buildBulbTile),
-          if (_bulbs.isEmpty)
-            const ListTile(
-              leading: Icon(Icons.lightbulb_outline),
-              title: Text('No bulbs configured'),
-              subtitle: Text('Discover bulbs or add an IP manually.'),
-            ),
-          const SizedBox(height: 16),
-          _buildSyncControls(),
-          const SizedBox(height: 16),
-          _buildRuntimeCard(),
-          const SizedBox(height: 16),
-          _buildDiagnosticsCard(),
-        ],
+    // Build the small settings form eagerly so off-screen controls remain in
+    // focus traversal. A lazy ListView can strand a remote at its last child.
+    return FocusTraversalGroup(
+      policy: ReadingOrderTraversalPolicy(),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('WizLight'),
+          actions: <Widget>[
+            IconButton(
+                onPressed: _discover,
+                icon: const Icon(Icons.search),
+                tooltip: 'Discover bulbs'),
+            IconButton(
+                onPressed: _addIp,
+                icon: const Icon(Icons.add),
+                tooltip: 'Add bulb by IP'),
+            IconButton(
+                onPressed: _showSyncGuide,
+                icon: const Icon(Icons.help_outline),
+                tooltip: 'Sync guide'),
+          ],
+        ),
+        body: SafeArea(
+          child: LayoutBuilder(builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 900;
+            return SingleChildScrollView(
+              padding: EdgeInsets.all(wide ? 32 : 16),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 960),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text('Your screen. Your atmosphere.',
+                          style: Theme.of(context).textTheme.headlineSmall),
+                      const SizedBox(height: 6),
+                      const Text(
+                          'Remote: Up / Down moves between controls. Left / Right adjusts a slider.'),
+                      const SizedBox(height: 20),
+                      _pendingSettingsNotice(),
+                      _buildSyncHero(),
+                      const SizedBox(height: 16),
+                      Text('Your lights',
+                          style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 8),
+                      ..._bulbs.map(_buildBulbTile),
+                      if (_bulbs.isEmpty)
+                        const Card(
+                            child: ListTile(
+                          leading: Icon(Icons.lightbulb_outline),
+                          title: Text('No bulbs configured'),
+                          subtitle: Text(
+                              'Use Discover or + above to add your lights.'),
+                        )),
+                      const SizedBox(height: 16),
+                      _buildSyncControls(),
+                      const SizedBox(height: 16),
+                      Card(
+                          child: ExpansionTile(
+                        title: const Text('Live diagnostics'),
+                        subtitle: const Text(
+                            'Performance, capture details and support report'),
+                        children: [
+                          _buildRuntimeCard(),
+                          _buildDiagnosticsCard()
+                        ],
+                      )),
+                      const SizedBox(height: 16),
+                      Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: () {
+                              _syncActionFocus.requestFocus();
+                              final actionContext = _syncActionFocus.context;
+                              if (actionContext != null) {
+                                Scrollable.ensureVisible(actionContext,
+                                    alignment: 0.1);
+                              }
+                            },
+                            icon: const Icon(Icons.arrow_upward),
+                            label: const Text('Back to sync'),
+                          )),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
       ),
     );
   }
@@ -311,7 +425,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       Text(
                         _syncRunning
                             ? 'Screen sync running'
-                            : 'Screen sync idle',
+                            : _playerRunning
+                                ? 'USB player running'
+                                : 'Ready to sync',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       Text(
@@ -381,23 +497,26 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
             const SizedBox(height: 14),
             SegmentedButton<String>(
-              segments: const <ButtonSegment<String>>[
+              segments: <ButtonSegment<String>>[
                 ButtonSegment(
                   value: 'screen',
-                  label: Text('Screen Capture'),
-                  icon: Icon(Icons.screenshot_monitor),
+                  label: Text(MediaQuery.sizeOf(context).width < 500
+                      ? 'Screen'
+                      : 'Screen capture'),
+                  icon: const Icon(Icons.screenshot_monitor),
                 ),
-                ButtonSegment(
+                const ButtonSegment(
                   value: 'usb',
-                  label: Text('USB Media'),
+                  label: Text('USB video'),
                   icon: Icon(Icons.usb),
                 ),
               ],
               selected: <String>{_syncBackend},
-              onSelectionChanged: (_syncRunning || _playerRunning)
-                  ? null
-                  : (selection) =>
-                      setState(() => _syncBackend = selection.first),
+              onSelectionChanged:
+                  (_syncRunning || _playerRunning || _transitioning)
+                      ? null
+                      : (selection) =>
+                          setState(() => _syncBackend = selection.first),
             ),
             const SizedBox(height: 6),
             Text(
@@ -411,7 +530,10 @@ class _HomeScreenState extends State<HomeScreen> {
               width: double.infinity,
               child: _syncBackend == 'usb'
                   ? FilledButton.icon(
-                      onPressed: _pickAndPlayUsb,
+                      autofocus: true,
+                      focusNode: _syncActionFocus,
+                      onPressed:
+                          _transitioning ? null : () => _pickAndPlayUsb(),
                       icon: Icon(
                           _playerRunning ? Icons.stop : Icons.video_library),
                       label: Text(_playerRunning
@@ -419,7 +541,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           : 'Pick & Play USB Video'),
                     )
                   : FilledButton.icon(
-                      onPressed: _toggleSync,
+                      autofocus: true,
+                      focusNode: _syncActionFocus,
+                      onPressed: _transitioning ? null : _toggleSync,
                       icon: Icon(_syncRunning ? Icons.stop : Icons.play_arrow),
                       label: Text(_syncRunning
                           ? 'Stop Screen Sync'
@@ -527,7 +651,8 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text('Screen Sync', style: Theme.of(context).textTheme.titleMedium),
+            Text('Picture & response',
+                style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 12),
             SegmentedButton<String>(
               segments: const <ButtonSegment<String>>[
@@ -543,21 +668,27 @@ class _HomeScreenState extends State<HomeScreen> {
             Text('Sync feel', style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 6),
             SegmentedButton<String>(
-              segments: const <ButtonSegment<String>>[
+              segments: <ButtonSegment<String>>[
                 ButtonSegment(
                   value: 'auto',
-                  label: Text('Auto'),
-                  icon: Icon(Icons.auto_awesome),
+                  label: const Text('Auto'),
+                  icon: MediaQuery.sizeOf(context).width < 500
+                      ? null
+                      : const Icon(Icons.auto_awesome),
                 ),
                 ButtonSegment(
                   value: 'cinema',
-                  label: Text('Cinema'),
-                  icon: Icon(Icons.theaters),
+                  label: const Text('Cinema'),
+                  icon: MediaQuery.sizeOf(context).width < 500
+                      ? null
+                      : const Icon(Icons.theaters),
                 ),
                 ButtonSegment(
                   value: 'action',
-                  label: Text('Action'),
-                  icon: Icon(Icons.sports_esports),
+                  label: const Text('Action'),
+                  icon: MediaQuery.sizeOf(context).width < 500
+                      ? null
+                      : const Icon(Icons.sports_esports),
                 ),
               ],
               selected: <String>{_settings.syncProfile},
@@ -666,19 +797,13 @@ class _HomeScreenState extends State<HomeScreen> {
     required ValueChanged<double> onChanged,
     int? divisions,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        const SizedBox(height: 12),
-        Text('$label: ${value.toStringAsFixed(value < 2 ? 2 : 0)}'),
-        Slider(
-          value: value.clamp(min, max),
-          min: min,
-          max: max,
-          divisions: divisions,
-          onChanged: onChanged,
-        ),
-      ],
+    return RemoteSlider(
+      label: label,
+      value: value,
+      min: min,
+      max: max,
+      divisions: divisions,
+      onChanged: onChanged,
     );
   }
 
@@ -726,7 +851,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Text('Primary HDR: ${stats?.primaryHdrType ?? '-'}'),
             Text(
                 'Capture buffer: ${stats?.captureBufferFormat ?? '-'}${(stats?.hdrCaptureActive ?? false) ? ' (HDR active)' : ''}'),
-            Text('Updates: ${stats?.updatesSent ?? 0}'),
+            Text('Updates queued: ${stats?.updatesSent ?? 0}'),
             Text('Scene cuts: ${stats?.cutsDetected ?? 0}'),
             Text('Profile: ${stats?.syncProfile ?? _settings.syncProfile}'),
             Text(

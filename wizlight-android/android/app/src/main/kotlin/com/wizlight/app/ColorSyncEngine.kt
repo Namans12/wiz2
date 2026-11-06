@@ -90,6 +90,16 @@ class ColorSyncEngine {
         private set
     private var blackSinceMs = 0L
     private var currentBrightnessFactor = 1.0
+    private val dimmingPolicy = DimmingPolicy()
+    var outputBrightness = 255
+        private set
+    private val lastSentBrightness = mutableMapOf<String, Int>()
+    @Volatile var lastSendError: String? = null
+        private set
+    @Volatile var datagramsSent = 0
+        private set
+    @Volatile var sendErrors = 0
+        private set
     var lastMotionScore = 0.0
         private set
     var lastSmoothingFactor = 0.2
@@ -108,13 +118,13 @@ class ColorSyncEngine {
     val lastSentColors = mutableMapOf<String, RgbColor>()
     val lastTargetColors = mutableMapOf<String, RgbColor>()
     private val predictionTargets = mutableMapOf<String, RgbColor>()
-    private val addressCache = mutableMapOf<String, InetAddress>()
     private val packetCache = object : LinkedHashMap<String, ByteArray>(128, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?): Boolean {
             return size > 4096
         }
     }
     private var udpSocket: DatagramSocket? = null
+    private var outputSender: LatestWizSender? = null
 
     // Shared 33^3 RGBCW LUT baked from the desktop mapper (assets/wiz_rgbcw_lut_v1.bin).
     // When loaded, mapViaLut() interpolates it identically to desktop map_rgb so a
@@ -143,12 +153,8 @@ class ColorSyncEngine {
 
     companion object {
         private const val WIZ_PORT = 38899
-        // Duplicate a changed color this many times (UDP has no retransmit).
-        private const val BURST_REPEATS = 3
-        private const val BURST_GAP_MS = 3L
     }
 
-    private val lastSentPacketKey = mutableMapOf<String, String>()
 
     // 8-bit sRGB -> linear-light decode table. Extractor means accumulate in
     // linear light (light adds linearly; gamma-space means darken mixes) while
@@ -173,8 +179,24 @@ class ColorSyncEngine {
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
     fun start() {
-        udpSocket = DatagramSocket().apply { sendBufferSize = 262144 }
         reset()
+        val socket = DatagramSocket().apply { sendBufferSize = 262144 }
+        udpSocket = socket
+        outputSender = LatestWizSender(
+            transmit = { ip, payload ->
+                val address = InetAddress.getByName(ip)
+                socket.send(DatagramPacket(payload, payload.size, address, WIZ_PORT))
+            },
+            onResult = { error ->
+                if (error == null) {
+                    datagramsSent += 1
+                    lastSendError = null
+                } else {
+                    sendErrors += 1
+                    lastSendError = error.message ?: error.toString()
+                }
+            },
+        )
     }
 
     fun reset() {
@@ -190,6 +212,12 @@ class ColorSyncEngine {
         captureLooksBlack = false
         blackSinceMs = 0L
         currentBrightnessFactor = 1.0
+        dimmingPolicy.reset()
+        outputBrightness = 255
+        lastSentBrightness.clear()
+        lastSendError = null
+        datagramsSent = 0
+        sendErrors = 0
         lastMotionScore = 0.0
         lastForcedSendAt = 0L
         lastSendAt = null
@@ -202,13 +230,15 @@ class ColorSyncEngine {
         lastSentColors.clear()
         lastTargetColors.clear()
         predictionTargets.clear()
-        addressCache.clear()
         packetCache.clear()
-        lastSentPacketKey.clear()
     }
 
     fun close() {
+        // Closing the socket first ensures a blocked sender cannot transmit
+        // after the session has stopped, even if joining the worker times out.
         udpSocket?.close()
+        outputSender?.close()
+        outputSender = null
         udpSocket = null
     }
 
@@ -350,7 +380,7 @@ class ColorSyncEngine {
     // ── Main per-frame entry ─────────────────────────────────────────────────────
     /**
      * @param grids region -> NxN ARGB grid. Single mode uses key "all"; zones uses
-     *              "left"/"right". @return true if any bulb update was sent.
+     *              "left"/"right". @return true if any bulb update was queued.
      */
     fun submitFrame(grids: Map<String, IntArray>, size: Int): Boolean {
         if (grids.isEmpty()) return false
@@ -419,13 +449,21 @@ class ColorSyncEngine {
             blackSinceMs = 0L
         }
         captureLooksBlack = isBlackFrame && (nowMs - blackSinceMs) > 3000L
-        val targetColors: Map<String, RgbColor> =
+        if (isBlackFrame && (!brightnessFollow || nowMs - blackSinceMs < 700L)) return false
+        val extractedTargets: Map<String, RgbColor> =
             if (brightnessFollow && isBlackFrame && (nowMs - blackSinceMs) >= 700L) {
                 // Sustained true black: payload of zeros -> state:false (off).
                 grids.keys.associateWith { RgbColor(0, 0, 0) }
             } else {
                 extractTargetColors(grids, size, motionScore)
             }
+        val peak = extractedTargets.values.maxOfOrNull { max(it.r, max(it.g, it.b)) } ?: 0
+        if (!brightnessFollow && peak < 24) return false
+        outputBrightness = dimmingPolicy.value(avgValue, minBrightness, peak, brightnessFollow)
+        val targetColors = extractedTargets.mapValues { (_, color) ->
+            val rgb = WizOutputPolicy.normalize(intArrayOf(color.r, color.g, color.b))
+            RgbColor(rgb[0], rgb[1], rgb[2])
+        }
         lastTargetColors.clear()
         lastTargetColors.putAll(targetColors)
 
@@ -435,6 +473,8 @@ class ColorSyncEngine {
         lastDeltaThreshold = sendThreshold
         val mappedBulbColors = buildBulbColorMap(targetColors)
         var sentAnyUpdate = false
+        val pendingColors = linkedMapOf<String, RgbColor>()
+        val pendingPayloads = linkedMapOf<String, ByteArray>()
 
         val forceRefreshDue = nowMs - lastForcedSendAt >= 1500L
         for ((ip, targetColor) in mappedBulbColors) {
@@ -455,17 +495,24 @@ class ColorSyncEngine {
             val lastSent = lastSentColors[ip]
             val needsForcedRefresh = lastSent != null &&
                 forceRefreshDue &&
-                perceptualDelta(smoothed, lastSent) >= max(2, minColorDelta / 2).toDouble()
+                true
             if (
                 lastSent == null ||
+                lastSentBrightness[ip] != outputBrightness ||
                 sceneCut ||
                 perceptualDelta(smoothed, lastSent) >= sendThreshold.toDouble() ||
                 needsForcedRefresh
             ) {
-                sendColor(ip, smoothed)
-                lastSentColors[ip] = smoothed
-                sentAnyUpdate = true
+                pendingColors[ip] = smoothed
+                pendingPayloads[ip] = makeColorPayload(smoothed)
             }
+        }
+        if (pendingPayloads.isNotEmpty() && outputSender?.offerBatch(pendingPayloads) == true) {
+            for ((ip, color) in pendingColors) {
+                lastSentColors[ip] = color
+                lastSentBrightness[ip] = outputBrightness
+            }
+            sentAnyUpdate = true
         }
         if (sentAnyUpdate || lastForcedSendAt == 0L) {
             lastForcedSendAt = nowMs
@@ -499,6 +546,12 @@ class ColorSyncEngine {
     /** Color-pipeline status fields; merged by the front-end with capture-specific stats. */
     fun statusExtras(): Map<String, Any?> {
         return mapOf(
+            "outputBrightness" to outputBrightness,
+            // updatesSent is retained for older clients and counts queued groups.
+            "updatesQueued" to updatesSent,
+            "datagramsSent" to datagramsSent,
+            "sendErrors" to sendErrors,
+            "sendError" to lastSendError,
             "mode" to effectiveMode,
             "requestedFps" to maxFps,
             "currentFps" to currentFps,
@@ -606,6 +659,7 @@ class ColorSyncEngine {
             previousSingleColor = null
             val targets = mutableMapOf<String, RgbColor>()
             for ((region, grid) in grids) {
+                if (region == "all") continue
                 val sampled = SampledFrame(grid, size, size)
                 targets[region] = enhanceColor(mapSourceColorToSrgb(extractColor(sampled)))
             }
@@ -1150,7 +1204,6 @@ class ColorSyncEngine {
         // routes them to the white LEDs. Brightness-follow scales dim scenes
         // down instead of pinning them at the minimum-brightness floor.
         val neutral = sceneNeutral
-        val brightness = currentBrightnessFactor
         // Saturation-aware boost (desktop adaptive_color_boost parity): damp the
         // boost on low-saturation colors so already-vivid frames aren't
         // over-saturated, THEN suppress further on neutral/B&W scenes.
@@ -1165,35 +1218,11 @@ class ColorSyncEngine {
         var green = mean + (color.g - mean) * boostEff
         var blue = mean + (color.b - mean) * boostEff
 
-        val trueBlack = color.r <= 2 && color.g <= 2 && color.b <= 2
-        val oledLike = deviceProfile == DeviceProfile.BRAVIA || deviceProfile == DeviceProfile.WIDE_GAMUT_HDR
-        var effectiveFloor = when {
-            trueBlack -> 0.0
-            oledLike -> minBrightness * 0.35
-            else -> minBrightness.toDouble()
-        }
-        if (brightnessFollow) {
-            effectiveFloor *= brightness
-        }
-        val peak = max(1.0, max(red, max(green, blue)))
-        if (peak < effectiveFloor) {
-            val scale = effectiveFloor / peak
-            red *= scale
-            green *= scale
-            blue *= scale
-        }
-
         if (neutral > 0.0) {
             val gray = red * 0.2126 + green * 0.7152 + blue * 0.0722
             red += (gray - red) * neutral
             green += (gray - green) * neutral
             blue += (gray - blue) * neutral
-        }
-        if (brightnessFollow) {
-            val scale = 0.35 + 0.65 * brightness
-            red *= scale
-            green *= scale
-            blue *= scale
         }
         return RgbColor(
             red.roundToInt().coerceIn(0, 255),
@@ -1618,44 +1647,16 @@ class ColorSyncEngine {
         return WizPilotColor(RgbColor(pr, pg, pb), cold, warm)
     }
 
-    private fun sendColor(ip: String, color: RgbColor) {
+    private fun makeColorPayload(color: RgbColor): ByteArray {
         val mapped = mapViaLut(color)
-        val isOn = mapped.rgb.r > 0 || mapped.rgb.g > 0 || mapped.rgb.b > 0 ||
-            mapped.coldWhite > 0 || mapped.warmWhite > 0
-        val cacheKey =
-            "${if (isOn) 1 else 0}:${mapped.rgb.r}:${mapped.rgb.g}:${mapped.rgb.b}:${mapped.coldWhite}:${mapped.warmWhite}"
+        val channels = intArrayOf(mapped.rgb.r, mapped.rgb.g, mapped.rgb.b, mapped.coldWhite, mapped.warmWhite)
+        val cacheKey = channels.joinToString(":") + ":$outputBrightness"
         val payload = packetCache.getOrPut(cacheKey) {
-            (
-                """{"method":"setPilot","params":{"state":$isOn,""" +
-                    """"r":${mapped.rgb.r},"g":${mapped.rgb.g},"b":${mapped.rgb.b},""" +
-                    """"c":${mapped.coldWhite},"w":${mapped.warmWhite}}}"""
-                ).toByteArray(StandardCharsets.UTF_8)
+            WizOutputPolicy.packet(channels, outputBrightness).toByteArray(StandardCharsets.UTF_8)
         }
-        val address = addressCache.getOrPut(ip) { InetAddress.getByName(ip) }
-        val packet = DatagramPacket(payload, payload.size, address, WIZ_PORT)
-        val socket = udpSocket ?: return
-        // UDP has no retransmit: burst duplicates on a genuine color change so a
-        // dropped packet doesn't leave the wrong color lingering. Heartbeat /
-        // force-refresh repeats (same key) send once.
-        val repeats = if (lastSentPacketKey[ip] != cacheKey) BURST_REPEATS else 1
-        for (attempt in 0 until repeats) {
-            try {
-                socket.send(packet)
-            } catch (_: Exception) {
-                break
-            }
-            if (attempt + 1 < repeats) {
-                try {
-                    Thread.sleep(BURST_GAP_MS)
-                } catch (_: InterruptedException) {
-                    break
-                }
-            }
-        }
-        lastSentPacketKey[ip] = cacheKey
+        return payload
     }
 
-    // ── HDR FP16/PQ pixel decode (used by MediaProjection FP16 capture) ──────────
     fun fp16PqPixelToSrgbArgb(rH: Short, gH: Short, bH: Short): Int {
         val r = halfToFloat(rH).toDouble().coerceIn(0.0, 1.0)
         val g = halfToFloat(gH).toDouble().coerceIn(0.0, 1.0)
