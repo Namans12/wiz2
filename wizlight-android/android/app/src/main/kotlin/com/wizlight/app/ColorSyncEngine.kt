@@ -112,7 +112,7 @@ class ColorSyncEngine {
         private set
     var updatesSent = 0
         private set
-    private var lastForcedSendAt = 0L
+    private val refreshPolicy = PerLightRefresh()
     private var lastSendAt: Long? = null
     private val sendIntervalsMs = ArrayDeque<Long>()
 
@@ -221,7 +221,7 @@ class ColorSyncEngine {
         datagramsSent = 0
         sendErrors = 0
         lastMotionScore = 0.0
-        lastForcedSendAt = 0L
+        refreshPolicy.clear()
         lastSendAt = null
         lastEffectiveColorBoost = colorBoost
         lastDeltaThreshold = minColorDelta
@@ -478,7 +478,6 @@ class ColorSyncEngine {
         val pendingColors = linkedMapOf<String, RgbColor>()
         val pendingPayloads = linkedMapOf<String, ByteArray>()
 
-        val forceRefreshDue = nowMs - lastForcedSendAt >= 1500L
         for ((ip, targetColor) in mappedBulbColors) {
             val current = currentOutputColors[ip]
             val predictedTarget = if (sceneCut) {
@@ -495,9 +494,7 @@ class ColorSyncEngine {
             currentOutputColors[ip] = smoothed
 
             val lastSent = lastSentColors[ip]
-            val needsForcedRefresh = lastSent != null &&
-                forceRefreshDue &&
-                true
+            val needsForcedRefresh = lastSent != null && refreshPolicy.due(ip, nowMs)
             if (
                 lastSent == null ||
                 lastSentBrightness[ip] != outputBrightness ||
@@ -513,18 +510,17 @@ class ColorSyncEngine {
             for ((ip, color) in pendingColors) {
                 lastSentColors[ip] = color
                 lastSentBrightness[ip] = outputBrightness
+                refreshPolicy.markQueued(ip, nowMs)
             }
             sentAnyUpdate = true
         }
-        if (sentAnyUpdate || lastForcedSendAt == 0L) {
-            lastForcedSendAt = nowMs
-        }
-
         val staleIps = currentOutputColors.keys - mappedBulbColors.keys
         for (ip in staleIps) {
             currentOutputColors.remove(ip)
             lastSentColors.remove(ip)
             predictionTargets.remove(ip)
+            lastSentBrightness.remove(ip)
+            refreshPolicy.remove(ip)
         }
 
         if (sentAnyUpdate) {
