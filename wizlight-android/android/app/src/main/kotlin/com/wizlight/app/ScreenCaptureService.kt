@@ -299,6 +299,7 @@ class ScreenCaptureService : Service() {
             captureBufferFormat = "rgba8888"
             hdrCaptureActive = false
             hdrReaderActive = false
+            engine.capturedPixelsAreSrgb = false
             ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
         }
         if (!requestedHdrCapture) return sdrReader()
@@ -353,6 +354,7 @@ class ScreenCaptureService : Service() {
                     return
                 }
                 hdrCaptureActive = true
+                engine.capturedPixelsAreSrgb = true
                 captureBufferFormat = "rgba_fp16_bt2020_pq"
             }
             val frame = imageToFrame(image) ?: return
@@ -394,6 +396,7 @@ class ScreenCaptureService : Service() {
             imageReader = replacement
             hdrReaderActive = false
             hdrCaptureActive = false
+            engine.capturedPixelsAreSrgb = false
             captureBufferFormat = "rgba8888 (HDR format unavailable)"
             latestGrids = null
             cachedContentBounds = null

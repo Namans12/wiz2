@@ -59,6 +59,8 @@ class ColorSyncEngine {
     var predictionWeight = 0.3
     var sourceColorSpace = "srgb"
     var hdrToneMapping = false
+    // HDR capture has already been converted to sRGB before grid sampling.
+    var capturedPixelsAreSrgb = false
     var deviceProfile = DeviceProfile.GENERIC
     var bulbTargets: List<BulbTarget> = emptyList()
     var syncProfile = "auto"        // "auto" | "cinema" | "action"
@@ -1106,6 +1108,7 @@ class ColorSyncEngine {
     }
 
     private fun mapSourceColorToSrgb(color: RgbColor): RgbColor {
+        if (capturedPixelsAreSrgb) return color
         if (sourceColorSpace == "srgb" && !hdrToneMapping) {
             return color
         }
