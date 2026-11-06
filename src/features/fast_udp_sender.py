@@ -12,7 +12,7 @@ WIZ_PORT = 38899
 DEFAULT_MAX_SEND_HZ = 28.0
 _SNDBUF = 262144
 
-_ENCODE_CACHE: dict[tuple[int, ...], bytes] = {}
+_ENCODE_CACHE: dict[tuple[tuple[int, ...], Optional[int]], bytes] = {}
 _CACHE_LOCK = threading.Lock()
 _MAX_CACHE_SIZE = 4096
 _CACHE_EVICT_SIZE = 512
@@ -73,7 +73,7 @@ def encode_set_pilot_payload(
 
     channels = _quantize_channels(tuple(_clamp_channel(value) for value in payload))
     dimming = None if brightness is None else max(10, min(100, round(int(brightness) / 255 * 100)))
-    key = channels if dimming is None else (*channels, dimming)
+    key = (channels, dimming)
 
     cached = _ENCODE_CACHE.get(key)
     if cached is not None:
@@ -104,10 +104,16 @@ class BulbUDPSocket:
         self.max_send_hz = max(1.0, float(max_send_hz))
         self._min_interval = 1.0 / self.max_send_hz
         self._queue: queue.SimpleQueue[bytes | object] = queue.SimpleQueue()
+        self._state_lock = threading.Lock()
+        self._stop_event = threading.Event()
         self._socket = self._connect()
         self._running = True
         self._sent = 0
         self._dropped = 0
+        self._attempted = 0
+        self._datagrams_sent = 0
+        self._send_errors = 0
+        self._last_error: Optional[str] = None
         self._last_send_at = 0.0
         self._last_packet_sent: bytes | None = None
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"WiZFastUDP-{ip}")
@@ -127,68 +133,93 @@ class BulbUDPSocket:
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, 0x10)
         except OSError:
             pass
-        sock.connect((self.ip, WIZ_PORT))
+        try:
+            sock.connect((self.ip, WIZ_PORT))
+        except OSError:
+            sock.close()
+            raise
         return sock
 
-    def send(self, packet: bytes) -> None:
-        while not self._queue.empty():
+    def send(self, packet: bytes) -> bool:
+        """Queue a packet, or return False once shutdown has begun."""
+        with self._state_lock:
+            if not self._running:
+                return False
+            self._drain_latest(packet)
+            self._queue.put(packet)
+            return True
+
+    def _drain_latest(self, packet: bytes) -> bytes:
+        """Drain pending updates while holding _state_lock."""
+        while True:
             try:
-                self._queue.get_nowait()
-                self._dropped += 1
+                item = self._queue.get_nowait()
             except queue.Empty:
-                break
-        self._queue.put(packet)
+                return packet
+            if isinstance(item, bytes):
+                packet = item
+                self._dropped += 1
 
     def stop(self) -> None:
-        self._running = False
-        self._queue.put(self._SENTINEL)
-        self._thread.join(timeout=1.0)
-        try:
-            self._socket.close()
-        except OSError:
-            pass
+        with self._state_lock:
+            if self._running:
+                self._running = False
+                self._stop_event.set()
+                self._queue.put(self._SENTINEL)
+        if threading.current_thread() is not self._thread:
+            self._thread.join(timeout=1.0)
 
     def _run(self) -> None:
-        while self._running:
-            try:
-                item = self._queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
-            if item is self._SENTINEL:
-                return
-            if not isinstance(item, bytes):
-                continue
-
-            packet = item
-            while not self._queue.empty():
+        try:
+            while not self._stop_event.is_set():
                 try:
-                    next_item = self._queue.get_nowait()
+                    item = self._queue.get(timeout=1.0)
                 except queue.Empty:
-                    break
-                if next_item is self._SENTINEL:
+                    continue
+                if item is self._SENTINEL:
                     return
-                if isinstance(next_item, bytes):
-                    packet = next_item
-                    self._dropped += 1
-
-            now = time.perf_counter()
-            wait_time = self._min_interval - (now - self._last_send_at)
-            if wait_time > 0:
-                time.sleep(wait_time)
-
-            # Burst only on a real color change; identical repeats send once.
-            repeats = _BURST_REPEATS if packet != self._last_packet_sent else 1
-            for attempt in range(repeats):
-                # A queued newer colour supersedes retransmissions of this one.
-                if attempt and not self._queue.empty():
-                    break
-                if not self._send_raw(packet):
-                    break
-                if attempt + 1 < repeats:
-                    time.sleep(_BURST_GAP)
-            self._last_packet_sent = packet
-            self._sent += 1
-            self._last_send_at = time.perf_counter()
+                if not isinstance(item, bytes):
+                    continue
+                wait_time = self._min_interval - (time.perf_counter() - self._last_send_at)
+                if self._stop_event.wait(max(0.0, wait_time)):
+                    return
+                with self._state_lock:
+                    if not self._running:
+                        return
+                    # Recheck AFTER the rate wait so a newer update wins.
+                    packet = self._drain_latest(item)
+                    self._attempted += 1
+                    repeats = _BURST_REPEATS if packet != self._last_packet_sent else 1
+                sent_any = False
+                for attempt in range(repeats):
+                    with self._state_lock:
+                        if not self._running:
+                            break
+                        # Do not repeat a stale colour once a newer update is
+                        # queued. The next loop iteration will send that update.
+                        if attempt and not self._queue.empty():
+                            break
+                        success = self._send_raw(packet)
+                        if success:
+                            self._datagrams_sent += 1
+                            self._last_error = None
+                        else:
+                            self._send_errors += 1
+                    if not success:
+                        break
+                    sent_any = True
+                    if attempt + 1 < repeats and self._stop_event.wait(_BURST_GAP):
+                        break
+                with self._state_lock:
+                    if sent_any:
+                        self._last_packet_sent = packet
+                        self._sent += 1
+                    self._last_send_at = time.perf_counter()
+        finally:
+            try:
+                self._socket.close()
+            except OSError:
+                pass
 
     def _send_raw(self, packet: bytes) -> bool:
         try:
@@ -203,12 +234,23 @@ class BulbUDPSocket:
                 self._socket = self._connect()
                 self._socket.send(packet)
                 return True
-            except OSError:
+            except OSError as exc:
+                self._last_error = str(exc)
                 return False
 
     @property
-    def stats(self) -> dict[str, int | str]:
-        return {"ip": self.ip, "sent": self._sent, "dropped": self._dropped}
+    def stats(self) -> dict[str, int | str | None]:
+        """Successful socket sends, not acknowledgements from the bulb.
+
+        The legacy sent count remains update groups; datagrams_sent includes
+        burst copies. Failed groups do not count as sent.
+        """
+        with self._state_lock:
+            return {
+                "ip": self.ip, "sent": self._sent, "dropped": self._dropped,
+                "attempted": self._attempted, "datagrams_sent": self._datagrams_sent,
+                "send_errors": self._send_errors, "last_error": self._last_error,
+            }
 
 
 class FastBulbSenderPool:
@@ -222,20 +264,24 @@ class FastBulbSenderPool:
         self.max_send_hz = max_send_hz
         self._senders: dict[str, BulbUDPSocket] = {}
         self._lock = threading.Lock()
+        self._closed = False
         if prewarm_ips:
-            for ip in prewarm_ips:
-                self._get(ip)
+            try:
+                for ip in prewarm_ips:
+                    self._get(ip)
+            except Exception:
+                self.close()
+                raise
 
-    def _get(self, ip: str) -> BulbUDPSocket:
+    def _get(self, ip: str) -> Optional[BulbUDPSocket]:
         with self._lock:
+            if self._closed:
+                return None
             sender = self._senders.get(ip)
             if sender is None:
                 sender = BulbUDPSocket(ip, max_send_hz=self.max_send_hz)
                 self._senders[ip] = sender
             return sender
-
-    def send_payload(self, ip: str, payload: tuple[int, ...], brightness: Optional[int] = None) -> None:
-        self._get(ip).send(encode_set_pilot_payload(payload, brightness))
 
     def send_payload_map(
         self,
@@ -243,16 +289,19 @@ class FastBulbSenderPool:
         brightness: Optional[int] = None,
     ) -> None:
         for ip, payload in payloads_by_ip.items():
-            self._get(ip).send(encode_set_pilot_payload(payload, brightness))
+            sender = self._get(ip)
+            if sender is not None:
+                sender.send(encode_set_pilot_payload(payload, brightness))
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             senders = list(self._senders.values())
             self._senders.clear()
         for sender in senders:
             sender.stop()
 
     @property
-    def stats(self) -> list[dict[str, int | str]]:
+    def stats(self) -> list[dict[str, int | str | None]]:
         with self._lock:
             return [sender.stats for sender in self._senders.values()]

@@ -87,6 +87,16 @@ class ClapDetector:
             return
         
         self._running = True
+        try:
+            self._start_stream()
+        except Exception:
+            self._running = False
+            stream, self._stream = self._stream, None
+            if stream is not None:
+                stream.close()
+            raise
+
+    def _start_stream(self) -> None:
         self._stream = sd.InputStream(
             samplerate=self.config.sample_rate,
             blocksize=self.config.block_size,
@@ -102,9 +112,11 @@ class ClapDetector:
         """Stop clap detection."""
         self._running = False
         if self._stream:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+            stream, self._stream = self._stream, None
+            try:
+                stream.stop()
+            finally:
+                stream.close()
     
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         """Process audio block."""
@@ -231,8 +243,3 @@ def list_audio_devices() -> list[dict]:
             })
     
     return input_devices
-
-
-def set_audio_device(device_index: int) -> None:
-    """Set the default audio input device."""
-    sd.default.device = (device_index, None)

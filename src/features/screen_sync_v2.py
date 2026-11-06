@@ -224,8 +224,14 @@ def _scene_channels(normalized: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 # scene luma below the knee dims the bulb proportionally when brightness-follow
 # is enabled.
 NEUTRAL_SATURATION_THRESHOLD = 0.06
-_BRIGHTNESS_FOLLOW_KNEE = 0.32
 _TRUE_BLACK_LUMA = 0.015
+# Power-law brightness curve for follow-mode dimming, spanning the FULL scene
+# value range 0..1 (no early-saturation knee). A prior version normalized by
+# a 0.32 knee then clamped to 1.0 -- since typical video content averages
+# 0.3-0.6 scene value, that pinned dimming at ~100% for most of a video's
+# runtime, defeating "follow video brightness". gamma<1 still lifts shadows
+# a bit (a dim-but-not-black scene stays visible) without an artificial cap.
+_BRIGHTNESS_FOLLOW_GAMMA = 0.7
 
 
 def _scene_stats(image: np.ndarray, sample_size: int = 24) -> tuple[float, float, float]:
@@ -252,9 +258,9 @@ def _neutral_strength(avg_saturation: float) -> float:
 
 
 def _brightness_factor(avg_value: float) -> float:
-    """Scene value (avg max-channel) → output brightness factor (1.0 at knee)."""
+    """Scene value (avg max-channel) → output brightness factor, full 0..1 span."""
 
-    return max(0.0, min(1.0, avg_value / _BRIGHTNESS_FOLLOW_KNEE)) ** 0.8
+    return max(0.0, min(1.0, avg_value)) ** _BRIGHTNESS_FOLLOW_GAMMA
 
 
 def _apply_content_adaptation(
@@ -477,26 +483,6 @@ def _palette_balance_score(
     return min(1.0, prominence * min(1.0, separation / 170.0))
 
 
-def extract_vibrant_accent(
-    image: np.ndarray,
-    sample_size: int = 48,
-) -> tuple[int, int, int]:
-    """Extract a vivid accent color from the most energetic pixels in the frame."""
-
-    pixels, normalized = _sample_pixels(image, sample_size)
-    saturation, luma = _scene_channels(normalized)
-    return _extract_vibrant_accent_from_sample(pixels, saturation, luma)
-
-
-def extract_palette_anchor(
-    image: np.ndarray,
-    sample_size: int = 48,
-) -> tuple[int, int, int]:
-    """Extract a tighter palette anchor from the most color-rich pixels."""
-
-    pixels, normalized = _sample_pixels(image, sample_size)
-    saturation, luma = _scene_channels(normalized)
-    return _extract_palette_anchor_from_sample(pixels, saturation, luma)
 
 
 def color_saturation(color: tuple[int, int, int]) -> float:
@@ -773,6 +759,8 @@ class GPUCaptureManager:
         self._monitor = monitor
         self._lock = threading.Lock()
         self._last_frame: Optional[np.ndarray] = None
+        self._consecutive_errors = 0
+        self._last_error: Optional[str] = None
 
     def start(self, target_fps: int = 30) -> bool:
         """Initialize GPU capture. target_fps kept for caller compatibility."""
@@ -781,6 +769,9 @@ class GPUCaptureManager:
 
         with self._lock:
             try:
+                self._last_frame = None
+                self._consecutive_errors = 0
+                self._last_error = None
                 # output_color="BGRA" keeps dxcam on the raw DXGI byte order and
                 # avoids its cv2-based color converter entirely — the frozen
                 # (PyInstaller) build excludes OpenCV, where the default "RGB"
@@ -827,8 +818,16 @@ class GPUCaptureManager:
 
         try:
             frame = self._camera.grab()
-        except Exception:
-            return self._last_frame
+        except Exception as exc:
+            self._consecutive_errors += 1
+            self._last_error = str(exc)
+            # None without an exception means unchanged pixels; an exception
+            # is a failed acquisition and must never masquerade as a new frame.
+            if self._consecutive_errors >= 3:
+                self.stop()
+            return None
+        self._consecutive_errors = 0
+        self._last_error = None
         if frame is not None:
             self._last_frame = self._to_rgb(frame)
             return self._last_frame
@@ -852,6 +851,10 @@ class GPUCaptureManager:
     @property
     def is_active(self) -> bool:
         return self._camera is not None
+
+    @property
+    def last_error(self) -> Optional[str]:
+        return self._last_error
 
 
 def should_use_gpu_capture(config: OptimizedCaptureConfig) -> bool:
@@ -1027,8 +1030,9 @@ class MotionDetector:
         )
         self._prev_hist = hist
 
-        if self._last_frame is None:
+        if self._last_frame is None or self._last_frame.shape != small.shape:
             self._last_frame = small
+            self._motion_history.clear()
             self.last_scene_cut = False
             return 0.5  # Default to medium motion on first frame
 
@@ -1172,12 +1176,17 @@ class OptimizedScreenSync:
         """Start optimized screen sync."""
         if self._running:
             return
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("Previous screen-sync worker has not stopped")
         
         self._running = True
         self._motion_detector.reset()
         self._color_predictor.clear()
         self._current_fps = self.config.max_fps if self.config.adaptive_fps else self.config.fps
         with self._stats_lock:
+            self._current_colors.clear()
+            self._last_sent_colors.clear()
+            self._frame_times.clear()
             self._capture_times.clear()
             self._processing_times.clear()
             self._last_target_colors = {}
@@ -1241,7 +1250,11 @@ class OptimizedScreenSync:
         self._running = False
         
         if self._thread:
+            if self._thread is threading.current_thread():
+                raise RuntimeError("Stop screen sync from outside its capture callback")
             self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                raise RuntimeError("Screen-sync worker did not stop; capture resources retained")
             self._thread = None
         
         if self._gpu_capture:
@@ -1259,8 +1272,12 @@ class OptimizedScreenSync:
     def _capture_frame(self) -> Optional[np.ndarray]:
         """Capture a frame using best available method."""
         # Try GPU capture first
+        gpu_error = None
         if self._gpu_capture and self._gpu_capture.is_active:
             frame = self._gpu_capture.grab()
+            gpu_error = self._gpu_capture.last_error
+            if not self._gpu_capture.is_active:
+                self._gpu_capture = None
             recovery_events, _ = _dxcam_recovery_state()
             if recovery_events > self._dxcam_recovery_events_seen:
                 self._dxcam_recovery_events_seen = recovery_events
@@ -1268,6 +1285,7 @@ class OptimizedScreenSync:
                 with self._stats_lock:
                     self._capture_status = "GPU capture recovered"
             if frame is not None:
+                self._capture_method = "dxcam"
                 if time.perf_counter() > self._dxcam_recovery_status_until:
                     with self._stats_lock:
                         self._capture_status = "OK"
@@ -1278,8 +1296,10 @@ class OptimizedScreenSync:
         if self._mss_instance is None and self._running:
             try:
                 self._mss_instance = mss.mss()
-            except Exception:
+            except Exception as exc:
                 self._mss_instance = None
+                with self._stats_lock:
+                    self._last_error = f"MSS initialization failed: {exc}"
         if self._mss_instance:
             try:
                 monitors = self._mss_instance.monitors
@@ -1299,14 +1319,18 @@ class OptimizedScreenSync:
                     screenshot.width,
                     4,
                 )
-                if time.perf_counter() > self._dxcam_recovery_status_until:
-                    with self._stats_lock:
-                        self._capture_status = "OK"
+                self._capture_method = "mss"
+                with self._stats_lock:
+                    self._capture_status = (
+                        f"MSS fallback (GPU error: {gpu_error})" if gpu_error else "OK"
+                    )
                 # Downscale first (view) so the RGB copy is on a small array.
                 raw = _downscale_for_processing(raw)
                 return np.ascontiguousarray(raw[:, :, 2::-1])
-            except Exception:
-                pass
+            except Exception as exc:
+                with self._stats_lock:
+                    self._last_error = f"MSS capture failed: {exc}"
+                    self._capture_status = "Capture failed"
         
         return None
     
@@ -1385,8 +1409,11 @@ class OptimizedScreenSync:
                 self._black_since = now
         else:
             self._black_since = None
-        if is_black and self._black_since is not None and now - self._black_since >= 0.7:
-            if not follow:
+        if is_black and self._black_since is not None:
+            if not follow or now - self._black_since < 0.7:
+                # Hold both hue and brightness until follow-mode black has
+                # persisted; ordinary extraction of exact black would bypass
+                # the persistence guard and turn the lamp off on a scene cut.
                 return {}
             if self._effective_mode == "single":
                 return {"all": (0, 0, 0)}
@@ -1579,6 +1606,12 @@ class OptimizedScreenSync:
                 force_refresh_due = now - self._last_forced_send_at >= 1.5
 
                 for key, target in target_colors.items():
+                    black_off = (
+                        self.config.brightness_mode == "follow"
+                        and self._black_since is not None
+                        and now - self._black_since >= 0.7
+                        and target == (0, 0, 0)
+                    )
                     with self._stats_lock:
                         current = self._current_colors.get(key, target)
                         previous = self._current_colors.get(key)
@@ -1596,7 +1629,7 @@ class OptimizedScreenSync:
                         target = apply_cinematic_palette_hold(target, hold_previous, motion_score)
 
                     # Apply predictive smoothing
-                    if prediction_weight > 0.0:
+                    if prediction_weight > 0.0 and not black_off:
                         predicted = self._color_predictor.predict(key, target)
                         # Blend predicted with target
                         target = tuple(
@@ -1606,7 +1639,7 @@ class OptimizedScreenSync:
 
                     # Smooth transition — perceptually-uniform Oklab lerp with a
                     # hard snap once within ~0.4 JND (kills the EMA's long tail).
-                    if not had_current or smoothing_factor >= 1.0:
+                    if black_off or not had_current or smoothing_factor >= 1.0:
                         smoothed = tuple(int(v) for v in target)
                     else:
                         smoothed = lerp_oklab8(current, target, smoothing_factor)
@@ -1652,17 +1685,18 @@ class OptimizedScreenSync:
                     out_brightness = self._output_brightness
                     last_sent_brightness = self._last_sent_brightness
                 if (
-                    not changed_colors
-                    and target_colors
+                    target_colors
                     and last_sent_brightness is not None
                     and abs(out_brightness - last_sent_brightness) >= 5
                 ):
                     with self._stats_lock:
-                        changed_colors = {
+                        # Dimming is shared by all zones. A hue change in one
+                        # zone must not prevent steady zones receiving it too.
+                        changed_colors.update({
                             key: self._current_colors[key]
                             for key in target_colors
                             if key in self._current_colors
-                        }
+                        })
 
                 # Send changes
                 if changed_colors:
@@ -1785,11 +1819,8 @@ class OptimizedScreenSync:
     def _capture_looks_black_locked(self) -> bool:
         """True when capture has been solid black for >3s while running.
 
-        Persistent black during playback almost always means the video is not
-        capturable: DRM-protected apps/browsers (Netflix, Prime) and some
-        hardware-overlay players present black to Desktop Duplication even
-        though the screen shows video. Callers must hold no assumption that
-        content is dark — 3s of TRUE black in real footage is rare.
+        Black frames may represent dark content or inaccessible protected or
+        overlay video. This signal cannot distinguish between those cases.
         """
 
         return self._running and self._black_since is not None and (
@@ -1821,21 +1852,3 @@ class OptimizedScreenSync:
         if not self._frame_times:
             return 0.0
         return float(np.mean(self._frame_times) * 1000)
-
-
-def is_gpu_capture_available() -> bool:
-    """Check if GPU capture is available on this system."""
-    if not HAS_DXCAM:
-        return False
-    try:
-        cam = dxcam.create()
-        if cam is not None:
-            try:
-                cam.release()
-            except Exception:
-                pass
-            del cam
-            return True
-    except Exception:
-        pass
-    return False

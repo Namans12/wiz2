@@ -656,6 +656,8 @@ def test_gpu_capture_uses_selected_specific_monitor(monkeypatch):
 def test_optimized_screen_sync_debug_snapshot_reports_runtime_stats():
     """Debug snapshot should expose derived cadence and color state."""
     sync = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig())
+    assert sync.debug_snapshot["capture_time_ms"] is None
+    assert sync.debug_snapshot["timing_samples"] == 0
 
     with sync._stats_lock:
         sync._capture_method = "dxcam"
@@ -668,6 +670,8 @@ def test_optimized_screen_sync_debug_snapshot_reports_runtime_stats():
         sync._current_colors = {"all": (10, 20, 30)}
         sync._last_target_colors = {"all": (12, 22, 32)}
         sync._send_intervals.extend([0.05, 0.1])
+        sync._capture_times.extend([0.001, 0.003])
+        sync._processing_times.extend([0.004, 0.006])
         sync._updates_sent = 4
         sync._frames_processed = 8
 
@@ -679,6 +683,11 @@ def test_optimized_screen_sync_debug_snapshot_reports_runtime_stats():
     assert snapshot["current_fps"] == 22
     assert snapshot["currentFps"] == 22
     assert snapshot["frameTimeMs"] == snapshot["average_frame_time_ms"]
+    assert snapshot["timing_samples"] == 2
+    assert snapshot["capture_time_ms"] == pytest.approx(2.0)
+    assert snapshot["capture_time_p95_ms"] == pytest.approx(2.9)
+    assert snapshot["processing_time_ms"] == pytest.approx(5.0)
+    assert snapshot["processing_time_p95_ms"] == pytest.approx(5.9)
     assert snapshot["smoothingFactor"] == 0.18
     assert snapshot["effectiveColorBoost"] == 1.12
     assert snapshot["minBrightness"] == sync.config.min_brightness
@@ -738,8 +747,19 @@ def test_extract_colors_normalizes_and_sets_dimming_follow():
     colors = engine._extract_colors(_frame((128, 0, 0)))
     assert colors["all"][0] >= 250  # red normalized to full drive
     assert colors["all"][1] <= 20 and colors["all"][2] <= 20
-    # value 0.5 is above the brightness knee -> full dimming
-    assert engine.output_brightness == 255
+    # Full-range power curve (no early-saturation knee): value 0.5 lands in
+    # the middle of the range, not pinned to full dimming.
+    assert 140 <= engine.output_brightness <= 190
+
+    # A brighter scene must dim MORE than a dimmer one across the whole
+    # range (the old knee made everything above value=0.32 identical).
+    bright_engine = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="follow", min_brightness=20),
+    )
+    bright_engine._extract_colors(_frame((255, 255, 255)))
+    assert bright_engine.output_brightness == 255
+    assert bright_engine.output_brightness > engine.output_brightness
 
 
 def test_extract_colors_constant_mode_pins_brightness_and_holds_on_black():

@@ -122,24 +122,6 @@ def _resolve_monitor(monitors: list[dict], monitor_index: int) -> dict:
     return monitors[min(max(1, monitor_index), len(monitors) - 1)]
 
 
-def capture_screen(sct: mss.mss, config: CaptureConfig) -> np.ndarray:
-    """Capture screen and return as a numpy RGB image."""
-
-    monitors = sct.monitors
-    if config.region:
-        monitor = {
-            "left": config.region[0],
-            "top": config.region[1],
-            "width": config.region[2],
-            "height": config.region[3],
-        }
-    else:
-        monitor = _resolve_monitor(monitors, config.monitor)
-
-    screenshot = sct.grab(monitor)
-    image = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-    return np.array(image)
-
 
 def detect_content_bounds(
     image: np.ndarray,
