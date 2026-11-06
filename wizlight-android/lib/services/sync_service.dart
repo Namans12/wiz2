@@ -216,6 +216,8 @@ class SyncRuntimeStats {
     this.brightnessFollow = true,
     this.captureLooksBlack = false,
     this.framesProcessed = 0,
+    this.replayedFrames = 0,
+    this.freshFrameAgeMs,
     this.targetColors = const <String, Color>{},
     this.outputColors = const <String, Color>{},
     this.lastError,
@@ -252,6 +254,8 @@ class SyncRuntimeStats {
   final bool brightnessFollow;
   final bool captureLooksBlack;
   final int framesProcessed;
+  final int replayedFrames;
+  final int? freshFrameAgeMs;
   final Map<String, Color> targetColors;
   final Map<String, Color> outputColors;
   final String? lastError;
@@ -304,6 +308,8 @@ class SyncRuntimeStats {
       'brightnessFollow': brightnessFollow,
       'captureLooksBlack': captureLooksBlack,
       'framesProcessed': framesProcessed,
+      'replayedFrames': replayedFrames,
+      'freshFrameAgeMs': freshFrameAgeMs,
       'updatesSent': updatesSent,
       'targetColors': _encodeColorMap(targetColors),
       'outputColors': _encodeColorMap(outputColors),
@@ -349,6 +355,8 @@ class SyncRuntimeStats {
       brightnessFollow: map['brightnessFollow'] as bool? ?? true,
       captureLooksBlack: map['captureLooksBlack'] as bool? ?? false,
       framesProcessed: (map['framesProcessed'] as num?)?.toInt() ?? 0,
+      replayedFrames: (map['replayedFrames'] as num?)?.toInt() ?? 0,
+      freshFrameAgeMs: (map['freshFrameAgeMs'] as num?)?.toInt(),
       targetColors: _decodeColorMap(map['targetColors']),
       outputColors: _decodeColorMap(map['outputColors']),
       lastError: map['lastError'] as String?,

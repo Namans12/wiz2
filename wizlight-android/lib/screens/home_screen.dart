@@ -732,6 +732,8 @@ class _HomeScreenState extends State<HomeScreen> {
             Text(
                 'Scene: ${((stats?.sceneNeutral ?? 0) * 100).toStringAsFixed(0)}% neutral, luma ${(stats?.sceneLuma ?? 0).toStringAsFixed(2)}'),
             Text('Frames: ${stats?.framesProcessed ?? 0}'),
+            Text('Replayed frames: ${stats?.replayedFrames ?? 0}'),
+            Text('Since last new frame: ${stats?.freshFrameAgeMs == null ? '-' : '${stats!.freshFrameAgeMs} ms'}'),
             if (color != null) ...<Widget>[
               const SizedBox(height: 12),
               Row(

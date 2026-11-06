@@ -121,6 +121,9 @@ class ScreenCaptureService : Service() {
     private var cachedContentBoundsAtFrame = -1
     private val frameTimesMs = ArrayDeque<Long>()
     private var framesProcessed = 0
+    private var replayedFrames = 0
+    private var lastFreshFrameAtMs = 0L
+    private var latestGrids: Map<String, IntArray>? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val mediaProjectionCallback =
@@ -253,6 +256,9 @@ class ScreenCaptureService : Service() {
         cachedContentBoundsAtFrame = -1
         frameTimesMs.clear()
         framesProcessed = 0
+        replayedFrames = 0
+        lastFreshFrameAtMs = 0L
+        latestGrids = null
 
         captureThread = HandlerThread("WizLightCaptureThread").also { it.start() }
         captureHandler = Handler(captureThread!!.looper)
@@ -300,9 +306,11 @@ class ScreenCaptureService : Service() {
             // Static screens produce no new frames (VirtualDisplay only pushes
             // on change) — keep the diagnostics heartbeat alive regardless so
             // the UI doesn't look dead.
+            latestGrids?.let { replayedFrames += 1; engine.submitFrame(it, sampleSize) }
             maybePostStatus()
             return
         }
+        lastFreshFrameAtMs = SystemClock.elapsedRealtime()
         var fallbackToSdr = false
         try {
             if (hdrReaderActive) {
@@ -329,6 +337,7 @@ class ScreenCaptureService : Service() {
                 map
             }
 
+            latestGrids = grids
             engine.submitFrame(grids, sampleSize)
             framesProcessed += 1
             if (engine.updatesSent > 0) {
@@ -355,6 +364,7 @@ class ScreenCaptureService : Service() {
             hdrReaderActive = false
             hdrCaptureActive = false
             captureBufferFormat = "rgba8888 (HDR format unavailable)"
+            latestGrids = null
             cachedContentBounds = null
             previous.close()
             maybePostStatus()
@@ -531,6 +541,8 @@ class ScreenCaptureService : Service() {
         val payload = HashMap<String, Any?>(engine.statusExtras())
         payload["frameTimeMs"] = frameTimeMs
         payload["framesProcessed"] = framesProcessed
+        payload["replayedFrames"] = replayedFrames
+        payload["freshFrameAgeMs"] = if (lastFreshFrameAtMs == 0L) null else now - lastFreshFrameAtMs
         payload["captureBackend"] = "mediaprojection"
         payload["hdrCaptureActive"] = hdrCaptureActive
         payload["captureBufferFormat"] = captureBufferFormat
