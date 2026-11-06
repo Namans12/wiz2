@@ -1,8 +1,13 @@
 """Configuration management for WizLight."""
 
 import json
-from dataclasses import asdict, dataclass, field
+import hashlib
+import math
+import os
+import tempfile
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+from threading import RLock
 from typing import Optional
 
 from .device_identity import mac_identity
@@ -36,6 +41,40 @@ COLOR_SOURCE_SPACES = ("auto", "srgb", "display-p3", "rec2020")
 DEVICE_PROFILES = ("auto", "generic", "mac", "bravia", "wide_gamut_hdr")
 SYNC_PROFILES = ("auto", "cinema", "action")
 BRIGHTNESS_MODES = ("follow", "constant")
+MIXING_MODELS = ("heuristic", "physical")
+
+
+def _settings_from_json(settings_type, value):
+    """Keep recognized valid fields while tolerating older/future schemas."""
+    defaults = settings_type()
+    if not isinstance(value, dict):
+        return defaults
+    kwargs = {}
+    for definition in fields(settings_type):
+        key = definition.name
+        if key not in value:
+            continue
+        item, fallback = value[key], getattr(defaults, key)
+        try:
+            if isinstance(fallback, bool):
+                if isinstance(item, str) and item.lower() in ("true", "false"):
+                    item = item.lower() == "true"
+                elif not isinstance(item, bool):
+                    continue
+            elif isinstance(fallback, (int, float)):
+                if isinstance(item, bool) or not math.isfinite(float(item)):
+                    continue
+                item = type(fallback)(item)
+            elif isinstance(fallback, dict):
+                if not isinstance(item, dict):
+                    continue
+                item = {k: v for k, v in item.items() if isinstance(k, str) and isinstance(v, str)}
+            elif item is not None and not isinstance(item, str):
+                continue
+            kwargs[key] = item
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return settings_type(**kwargs)
 
 
 @dataclass
@@ -72,6 +111,12 @@ class ScreenSyncConfig:
     # screen and black frames hold the last color.
     brightness_mode: Optional[str] = None
     sync_brightness: int = 180
+    # "heuristic" (default): channel-gain + saturation-gated white mixing.
+    # "physical" (experimental): solves the bulb's actual LED-primary mixing
+    # equation instead -- see src/core/bulb_physical_model.py for the model
+    # and its stated, unverified spectral assumptions. Try it live; it is
+    # not proven better without a colorimeter.
+    mixing_model: str = "heuristic"
 
     def __post_init__(self) -> None:
         self.mode = self.mode if self.mode in SCREEN_SYNC_MODES else "single"
@@ -120,6 +165,8 @@ class ScreenSyncConfig:
         self.brightness_mode = normalized_mode if normalized_mode in BRIGHTNESS_MODES else "follow"
         self.brightness_follow = self.brightness_mode == "follow"
         self.sync_brightness = max(30, min(255, int(self.sync_brightness)))
+        normalized_mixing_model = str(self.mixing_model).lower()
+        self.mixing_model = normalized_mixing_model if normalized_mixing_model in MIXING_MODELS else "heuristic"
 
 
 @dataclass
@@ -161,6 +208,8 @@ class Config:
     default_brightness: int = 128
     default_color_temp: int = 4000
     _config_path: Path = field(default=None, repr=False)
+    _load_warning: Optional[str] = field(default=None, repr=False)
+    _save_lock: object = field(default_factory=RLock, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self._config_path is None:
@@ -176,12 +225,35 @@ class Config:
             config.save()
             return config
 
-        with open(config_path, encoding="utf-8") as f:
-            data = json.load(f)
+        raw = config_path.read_bytes()
+        try:
+            data = json.loads(raw.decode("utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError("Expected an object")
+        except (ValueError, UnicodeError):
+            backup = config_path.with_name(
+                f"{config_path.stem}.corrupt-{hashlib.sha256(raw).hexdigest()[:16]}{config_path.suffix}"
+            )
+            try:
+                with backup.open("xb") as handle:
+                    handle.write(raw)
+            except FileExistsError:
+                if backup.read_bytes() != raw:
+                    raise OSError("Recovery backup does not match the original settings")
+            return cls(_config_path=config_path, _load_warning=f"Settings could not be read; original saved as {backup.name}")
 
-        bulbs = [BulbConfig(**bulb) for bulb in data.get("bulbs", [])]
-        screen_sync = ScreenSyncConfig(**data.get("screen_sync", {}))
-        clap = ClapConfig(**data.get("clap", {}))
+        bulb_values = data.get("bulbs", [])
+        bulbs = []
+        for bulb in bulb_values if isinstance(bulb_values, list) else []:
+            if not isinstance(bulb, dict) or not isinstance(bulb.get("ip"), str) or not bulb["ip"].strip():
+                continue
+            bulbs.append(BulbConfig(
+                ip=bulb["ip"].strip(),
+                name=bulb.get("name") if isinstance(bulb.get("name"), str) else "WiZ Bulb",
+                mac=bulb.get("mac") if isinstance(bulb.get("mac"), str) else None,
+            ))
+        screen_sync = _settings_from_json(ScreenSyncConfig, data.get("screen_sync", {}))
+        clap = _settings_from_json(ClapConfig, data.get("clap", {}))
 
         return cls(
             bulbs=bulbs,
@@ -204,16 +276,36 @@ class Config:
             "default_color_temp": self.default_color_temp,
         }
 
-        with open(self._config_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        temporary = None
+        with self._save_lock:
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", suffix=".tmp",
+                    dir=self._config_path.parent, delete=False,
+                ) as handle:
+                    temporary = Path(handle.name)
+                    json.dump(data, handle, indent=2, allow_nan=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, self._config_path)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
-    def add_bulb(self, ip: str, name: str, mac: Optional[str] = None) -> None:
+    def add_bulb(self, ip: str, name: str, mac: Optional[str] = None, *, preserve_name: bool = False) -> None:
         """Add a bulb to configuration."""
 
         preserved_region = self.screen_sync.bulb_layout.get(ip)
         normalized_mac = mac.lower() if mac else None
         identity = mac_identity(mac)
         stale_ips = {ip}
+        for bulb in self.bulbs:
+            if bulb.ip == ip or (identity and mac_identity(bulb.mac) == identity):
+                if preserve_name:
+                    name = bulb.name
+                if mac is None:
+                    normalized_mac = bulb.mac
+                    identity = mac_identity(bulb.mac)
         if identity:
             for bulb in self.bulbs:
                 if mac_identity(bulb.mac) == identity:
