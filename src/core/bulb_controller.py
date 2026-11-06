@@ -83,6 +83,7 @@ class BulbController:
         self._screen_sync_source_color_space = "srgb"
         self._screen_sync_device_profile = "generic"
         self._screen_sync_cool_mix_bias = 0.0
+        self._screen_sync_mixing_model = "heuristic"
     
     async def discover(self, broadcast_space: str = "192.168.1.255") -> list[dict]:
         """
@@ -141,9 +142,15 @@ class BulbController:
         bulb = self._get_bulb(ip)
         profile = BulbColorProfile()
 
-        system_result = await self._query_profile_metadata(bulb.getBulbConfig())
-        model_result = await self._query_profile_metadata(bulb.getModelConfig())
-        user_result = await self._query_profile_metadata(bulb.getUserConfig())
+        # Run the three profile queries concurrently instead of sequentially:
+        # each has its own PROFILE_QUERY_TIMEOUT budget, so awaiting them one
+        # at a time let a single slow/unresponsive bulb cost up to 3x the
+        # timeout (~7.5s) before sync could start.
+        system_result, model_result, user_result = await asyncio.gather(
+            self._query_profile_metadata(bulb.getBulbConfig()),
+            self._query_profile_metadata(bulb.getModelConfig()),
+            self._query_profile_metadata(bulb.getUserConfig()),
+        )
 
         hints = parse_wiz_profile_hints(model_result, user_result, profile)
 
@@ -159,6 +166,7 @@ class BulbController:
             source_color_space=self._screen_sync_source_color_space,
             device_profile=self._screen_sync_device_profile,
             cool_mix_bias=self._screen_sync_cool_mix_bias,
+            mixing_model=self._screen_sync_mixing_model,
         )
         calibration = self._load_calibration(profile.mac, ip)
         tone_lut = self._load_tone_lut(profile.mac, ip)
@@ -175,6 +183,7 @@ class BulbController:
                 source_color_space=profile.source_color_space,
                 device_profile=profile.device_profile,
                 cool_mix_bias=profile.cool_mix_bias,
+                mixing_model=profile.mixing_model,
             )
         self._color_profiles[ip] = profile
         self._gamut_mappers[ip] = BulbGamutMapper(
@@ -283,6 +292,7 @@ class BulbController:
         source_color_space: str = "srgb",
         device_profile: str = "generic",
         cool_mix_bias: float = 0.0,
+        mixing_model: str = "heuristic",
     ) -> None:
         """Preload per-bulb screen-sync mappers for synchronous real-time sends."""
 
@@ -291,16 +301,21 @@ class BulbController:
         if normalized_profile not in {"generic", "mac", "bravia", "wide_gamut_hdr"}:
             normalized_profile = "generic"
         bias = float(cool_mix_bias)
+        normalized_mixing_model = str(mixing_model).lower()
+        if normalized_mixing_model not in {"heuristic", "physical"}:
+            normalized_mixing_model = "heuristic"
 
         rebuild = (
             normalized_space != self._screen_sync_source_color_space
             or normalized_profile != self._screen_sync_device_profile
             or abs(bias - self._screen_sync_cool_mix_bias) > 1e-6
+            or normalized_mixing_model != self._screen_sync_mixing_model
         )
         if rebuild:
             self._screen_sync_source_color_space = normalized_space
             self._screen_sync_device_profile = normalized_profile
             self._screen_sync_cool_mix_bias = bias
+            self._screen_sync_mixing_model = normalized_mixing_model
             self.invalidate_screen_sync_mapping(ips)
 
         await asyncio.gather(
@@ -373,6 +388,8 @@ class BulbController:
 
         flags = [self.get_screen_sync_mapping_flags(ip) for ip in ips]
         parts: list[str] = []
+        if self._screen_sync_mixing_model == "physical":
+            parts.append("physical mixing (experimental)")
         if self._screen_sync_source_color_space != "srgb":
             parts.append(self._screen_sync_source_color_space)
         if any(bool(flag["camera_calibration"]) for flag in flags):
@@ -422,12 +439,6 @@ class BulbController:
             await self.turn_on(ip)
             return True
     
-    async def set_brightness(self, ip: str, brightness: int) -> None:
-        """Set bulb brightness (0-255)."""
-        bulb = self._get_bulb(ip)
-        brightness = max(0, min(255, brightness))
-        await bulb.turn_on(PilotBuilder(brightness=brightness))
-
     def _build_exact_rgb_builder(
         self,
         r: int,
@@ -540,11 +551,6 @@ class BulbController:
         
         await bulb.turn_on(builder)
     
-    async def set_scene(self, ip: str, scene_id: int) -> None:
-        """Set bulb to a WiZ scene by ID."""
-        bulb = self._get_bulb(ip)
-        await bulb.turn_on(PilotBuilder(scene=scene_id))
-    
     # Bulk operations for multiple bulbs
     
     async def turn_on_all(self, ips: list[str], brightness: Optional[int] = None) -> None:
@@ -562,6 +568,17 @@ class BulbController:
     async def set_rgb_all(self, ips: list[str], r: int, g: int, b: int, brightness: Optional[int] = None) -> None:
         """Set multiple bulbs to same RGB color."""
         await asyncio.gather(*[self.set_rgb(ip, r, g, b, brightness) for ip in ips])
+
+    async def set_brightness(self, ip: str, brightness: int) -> None:
+        """Set bulb brightness (0-255)."""
+        bulb = self._get_bulb(ip)
+        brightness = max(0, min(255, brightness))
+        await bulb.turn_on(PilotBuilder(brightness=brightness))
+
+    async def set_scene(self, ip: str, scene_id: int) -> None:
+        """Set bulb to a WiZ scene by ID."""
+        bulb = self._get_bulb(ip)
+        await bulb.turn_on(PilotBuilder(scene=scene_id))
 
     async def set_rgb_all_exact(
         self,
