@@ -197,4 +197,3 @@ class AnimationMixin:
             self._active_animations["status"] = label.after(
                 fade_after_ms, lambda: label.configure(text_color="gray")
             )
-    

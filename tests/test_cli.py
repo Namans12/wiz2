@@ -19,6 +19,9 @@ class FakeController:
     async def close_async(self):
         self.closed = True
 
+    async def discover(self, broadcast):
+        return [{"ip": "192.168.1.20", "mac": "aa:bb:cc:dd:ee:ff"}]
+
 
 def test_get_bulb_ips_returns_all_configured_bulbs(tmp_path):
     config = Config(
@@ -31,6 +34,19 @@ def test_get_bulb_ips_returns_all_configured_bulbs(tmp_path):
 
     assert get_bulb_ips(config) == ["192.168.1.10", "192.168.1.11"]
     assert get_bulb_ips(config, "192.168.1.20") == ["192.168.1.20"]
+
+
+def test_discovery_keeps_custom_name_after_address_change(monkeypatch, tmp_path):
+    config = Config(
+        bulbs=[BulbConfig(ip="192.168.1.10", name="Desk", mac="aa:bb:cc:dd:ee:ff")],
+        _config_path=tmp_path / "config.json",
+    )
+    controller = FakeController()
+    monkeypatch.setattr("src.cli.commands.Config.load", lambda: config)
+    monkeypatch.setattr("src.cli.commands.BulbController", lambda: controller)
+    result = CliRunner().invoke(cli, ["discover"])
+    assert result.exit_code == 0, result.output
+    assert [(bulb.ip, bulb.name) for bulb in config.bulbs] == [("192.168.1.20", "Desk")]
 
 
 def test_brightness_command_uses_bulk_turn_on(monkeypatch, tmp_path):
