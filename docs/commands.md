@@ -67,18 +67,6 @@ wizlight sync-screen
 python scripts\sync_screen.py
 ```
 
-WebSocket server for Android/external clients:
-
-```powershell
-wizlight serve --host 0.0.0.0 --port 38901
-```
-
-Alexa bridge:
-
-```powershell
-wizlight alexa
-```
-
 ## Scripts
 
 ```powershell

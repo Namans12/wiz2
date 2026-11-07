@@ -9,7 +9,6 @@
 ├── tests/                       # Python tests and hardware-gated tests
 ├── docs/                        # Project documentation
 ├── packaging/                   # Windows EXE and installer build scripts
-├── skills/wiz_config/           # Local WiZ docs/config helper scripts
 ├── wizlight-android/            # Flutter + native Android sync app
 ├── hardware_targets.example.json
 ├── pyproject.toml
@@ -29,15 +28,16 @@ src/
 │   ├── bulb_controller.py       # pywizlight wrapper and bulb operations
 │   ├── calibration.py           # Calibration data and LUT persistence
 │   ├── color_mapping.py         # WiZ gamut, white-channel, and RGB mapping
-│   └── config.py                # Desktop config schema and persistence
+│   ├── color_science.py         # Oklab/CCT helpers, gamut-compression math
+│   ├── config.py                # Desktop config schema and persistence
+│   ├── diagnostics.py           # Diagnostics report export
+│   └── display_detection.py     # Auto gamut/HDR display detection
 ├── features/
-│   ├── alexa_bridge.py          # fauxmo Alexa bridge
 │   ├── clap_detector.py         # Adaptive microphone clap detection
 │   ├── fast_udp_sender.py       # Low-latency latest-wins UDP sender
 │   ├── screen_sync.py           # Base screen-sync helpers
 │   ├── screen_sync_v2.py        # Optimized DXCam/MSS screen sync
-│   ├── sync_dispatcher.py       # Coalesced async fallback dispatcher
-│   └── websocket_server.py      # Optional external WebSocket bridge
+│   └── sync_dispatcher.py       # Coalesced async fallback dispatcher
 └── gui/
     ├── __main__.py              # `python -m src.gui`
     ├── ctk_compat.py            # CustomTkinter compatibility patch

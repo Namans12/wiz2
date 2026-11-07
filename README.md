@@ -1,6 +1,6 @@
 # WizLight
 
-Production-ready WiZ smart bulb controller for Windows desktop and Android. It focuses on local control, low-latency screen sync, clap detection, bulb calibration, and a clean GUI for daily use.
+WiZ smart bulb controller for Windows desktop and Android, with macOS packaging and Android TV launcher support under development. It focuses on local control, low-latency screen sync, clap detection, bulb calibration, and a clean GUI for daily use.
 
 WiZ bulbs are controlled locally over UDP. Your bulbs and controlling device must be on the same trusted LAN, and local communication must be enabled in the WiZ app.
 
@@ -12,7 +12,7 @@ WiZ bulbs are controlled locally over UDP. Your bulbs and controlling device mus
 - [Production Validation](docs/production-validation.md): automated, manual, packaging, and hardware gates.
 - [Latency And Accuracy Testing](docs/latency-and-accuracy-testing.md): synthetic benchmarks, fake UDP bulb, control-effect checks, and real hardware measurement.
 - [Hardware Color Accuracy](docs/hardware-color-accuracy.md): real-bulb camera verification flow.
-- [macOS And iOS Platform Notes](docs/apple-platform-notes.md): second-milestone Apple support direction.
+- [macOS Platform Notes](docs/apple-platform-notes.md): platform limitations and earlier Apple research. Current targets are Windows, Android, macOS, and Android TV.
 - [Android App README](wizlight-android/README.md): Android screen-sync usage and build notes.
 
 ## Highlights
@@ -78,13 +78,13 @@ The GUI includes:
 - Power, brightness, color, color temperature, and presets.
 - Screen sync with monitor selection, responsiveness, smoothing, color punch, dark-scene floor, GPU capture toggle, and built-in control explanations.
 - Sync debug panel showing capture method, FPS, send cadence, motion score, target color, output color, and last error.
+- Zone layout with saved bulb assignments for screen sync.
 - Clap detection toggle.
 - Dashboard with per-bulb state.
 - Tray controls for lights, screen sync, clap detection, brightness, color temperature, monitor selection, presets, and exit.
 
 Removed from the desktop GUI:
 
-- Zone/region controls for screen sync. The backend still contains reusable zone helpers, but the GUI now exposes the reliable single ambient workflow for Chrome/YouTube/video use.
 - Manual algorithm selector. The GUI uses the tuned `auto` cinematic extractor.
 - Manual min-FPS and predictive toggles. Adaptive FPS and predictive smoothing remain internal.
 - Separate tray Turn On and Turn Off entries. Tray uses Toggle Lights plus direct brightness and temperature presets.
@@ -216,3 +216,26 @@ flutter build apk --debug
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+## Reliability fixes (2026-10-26)
+
+Screen capture runs in the native application; a Chrome extension is unnecessary.
+Desktop GUI and the standalone sync script now share mapping and brightness transport.
+Shutdown closes the transport before its event loop, GPU acquisition errors fall back
+instead of replaying stale frames, and short black frames hold the previous output.
+Discovery preserves custom bulb names and layouts. Desktop configuration saves are
+atomic; corrupt desktop and Android settings are preserved for recovery.
+
+Android screen capture and USB playback have one native session owner, with explicit
+starting/running/stopping/error feedback. Settings changed during playback require
+**Apply / restart**. Screen capture supports the configured zones and crop/HDR path;
+USB playback currently samples one full-frame SDR image and does not implement those
+capture options. Android TV has a launcher entry and banner; remote-control navigation
+and physical-device behavior still require testing. Protected content and external HDMI
+capture remain platform limitations.
+
+UDP diagnostics count successful socket writes, not acknowledgements from a bulb.
+Synthetic benchmarks measure software processing and exclude capture, network, and bulb
+latency. Hardware scripts require explicit execution. The experimental physical mixing
+model remains opt-in and needs measurements from real bulbs before it should be preferred.
