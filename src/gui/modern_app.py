@@ -278,6 +278,10 @@ class WizLightModernGUI(AnimationMixin):
             "bulbs": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
             "tools": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
         }
+        self._view_host.grid_rowconfigure(0, weight=1)
+        self._view_host.grid_columnconfigure(0, weight=1)
+        for frame in self._view_frames.values():
+            frame.grid(row=0, column=0, sticky="nsew")
         self._controls_frame = self._view_frames["sync"]
         self._dashboard_frame = ctk.CTkFrame(self._view_frames["bulbs"], fg_color="transparent")
 
@@ -1678,8 +1682,6 @@ class WizLightModernGUI(AnimationMixin):
         if view == self._current_view:
             return
 
-        for frame in self._view_frames.values():
-            frame.pack_forget()
         self._current_view = view
         title, subtitle = self._page_labels[view]
         self._page_title_var.set(title)
@@ -1692,7 +1694,7 @@ class WizLightModernGUI(AnimationMixin):
                 text_color="#FFFFFF" if active else "#A5B7CF",
                 border_width=0,
             )
-        self._view_frames[view].pack(fill="both", expand=True)
+        self._view_frames[view]._parent_frame.tkraise()
 
         if view == "bulbs":
             self._update_dashboard()

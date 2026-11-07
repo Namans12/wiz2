@@ -153,11 +153,12 @@ def test_desktop_navigation_keeps_primary_action_and_status_visible(gui, size):
     assert gui.sync_primary_button.winfo_viewable()
     assert gui.status_label.winfo_viewable()
     assert gui.sync_primary_button.winfo_rooty() + gui.sync_primary_button.winfo_height() <= gui.status_label.winfo_rooty()
-    for view in ("lights", "tools", "sync"):
+    for view in ("lights", "bulbs", "tools", "sync"):
         gui._view_buttons[view].invoke()
         gui.root.update()
         assert gui._current_view == view
         assert gui._page_title_var.get() == gui._page_labels[view][0]
+        assert gui._view_host.winfo_children()[-1] == gui._view_frames[view]._parent_frame
         assert gui.status_label.winfo_viewable()
         assert all(button.winfo_viewable() for button in gui._view_buttons.values())
 
