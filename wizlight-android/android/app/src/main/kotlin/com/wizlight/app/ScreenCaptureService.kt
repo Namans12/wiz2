@@ -331,7 +331,13 @@ class ScreenCaptureService : Service() {
     }
 
     private fun captureFrame() {
-        val image = imageReader?.acquireLatestImage() ?: run {
+        val wasHdrReader = hdrReaderActive
+        val image = CaptureFormatPolicy.acquire(
+            wasHdrReader,
+            { imageReader?.acquireLatestImage() },
+            { switchToSdrCapture() },
+        ) ?: run {
+            if (wasHdrReader && !hdrReaderActive) return
             // Static screens produce no new frames (VirtualDisplay only pushes
             // on change) — keep the diagnostics heartbeat alive regardless so
             // the UI doesn't look dead.
@@ -398,6 +404,7 @@ class ScreenCaptureService : Service() {
             hdrCaptureActive = false
             engine.capturedPixelsAreSrgb = false
             captureBufferFormat = "rgba8888 (HDR format unavailable)"
+            lastError = null
             latestGrids = null
             cachedContentBounds = null
             previous.close()
