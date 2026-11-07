@@ -7,6 +7,19 @@ from src.core.bulb_controller import BulbController, BulbState, PRESETS, apply_p
 from src.core.color_mapping import BulbColorProfile, BulbGamutMapper
 
 
+@pytest.mark.parametrize("model", ["heuristic", "physical"])
+def test_rgb_only_fixture_uses_rgb_for_neutral_colours(model):
+    mapper = BulbGamutMapper(BulbColorProfile(white_channels=0, mixing_model=model))
+    black = mapper.map_rgb((0, 0, 0))
+    white = mapper.map_rgb((255, 255, 255))
+    gray = mapper.map_rgb((128, 128, 128))
+    assert black == (0, 0, 0, 0)
+    assert white[3] == gray[3] == 0
+    assert all(channel > 0 for channel in white[:3])
+    assert all(channel > 0 for channel in gray[:3])
+    assert all(white[i] > gray[i] for i in range(3))
+
+
 class RecordingController:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
@@ -340,3 +353,93 @@ async def test_get_color_profile_times_out_slow_metadata_queries(monkeypatch):
     assert profile.mac == "aa:bb"
     assert profile.model_name is None
     assert profile.white_channels == BulbColorProfile().white_channels
+
+
+@pytest.mark.asyncio
+async def test_get_color_profile_runs_metadata_queries_concurrently(monkeypatch):
+    """The 3 profile queries must run concurrently, not sequentially.
+
+    A slow bulb previously cost up to 3x PROFILE_QUERY_TIMEOUT (~7.5s) because
+    getBulbConfig/getModelConfig/getUserConfig were each awaited one at a time.
+    """
+
+    started = 0
+    all_started = asyncio.Event()
+
+    async def rendezvous():
+        nonlocal started
+        started += 1
+        if started == 3:
+            all_started.set()
+        await asyncio.wait_for(all_started.wait(), 1)
+
+    class FakeBulb:
+        mac = "aa:bb"
+
+        async def getBulbConfig(self):
+            await rendezvous()
+            return {"result": {"moduleName": "concurrent"}}
+
+        async def getModelConfig(self):
+            await rendezvous()
+            return {"result": {"nowc": 2, "wcr": 90}}
+
+        async def getUserConfig(self):
+            await rendezvous()
+            return {"result": {"fadeIn": 400}}
+
+    controller = BulbController()
+    monkeypatch.setattr(controller, "_get_bulb", lambda ip: FakeBulb())
+
+    profile = await controller.get_color_profile("192.168.1.56")
+
+    assert profile.model_name == "concurrent"
+    assert started == 3
+
+
+@pytest.mark.asyncio
+async def test_prepare_screen_sync_mappers_wires_mixing_model(monkeypatch):
+    """mixing_model must reach the built BulbGamutMapper's profile."""
+
+    class FakeBulb:
+        mac = "aa:bb:cc"
+
+        async def getBulbConfig(self):
+            return {"result": {"moduleName": "test"}}
+
+        async def getModelConfig(self):
+            return {"result": {"nowc": 2, "wcr": 20}}
+
+        async def getUserConfig(self):
+            return {"result": {}}
+
+    controller = BulbController()
+    monkeypatch.setattr(controller, "_get_bulb", lambda ip: FakeBulb())
+
+    await controller.prepare_screen_sync_mappers(["192.168.1.60"], mixing_model="physical")
+    assert controller._gamut_mappers["192.168.1.60"].profile.mixing_model == "physical"
+
+    # Switching back to heuristic must invalidate the cached mapper and rebuild.
+    await controller.prepare_screen_sync_mappers(["192.168.1.60"], mixing_model="heuristic")
+    assert controller._gamut_mappers["192.168.1.60"].profile.mixing_model == "heuristic"
+
+
+@pytest.mark.asyncio
+async def test_prepare_screen_sync_mappers_rejects_unknown_mixing_model(monkeypatch):
+    class FakeBulb:
+        mac = "dd:ee:ff"
+
+        async def getBulbConfig(self):
+            return {"result": {}}
+
+        async def getModelConfig(self):
+            return {"result": {}}
+
+        async def getUserConfig(self):
+            return {"result": {}}
+
+    controller = BulbController()
+    monkeypatch.setattr(controller, "_get_bulb", lambda ip: FakeBulb())
+
+    await controller.prepare_screen_sync_mappers(["192.168.1.61"], mixing_model="not-a-real-model")
+    assert controller._gamut_mappers["192.168.1.61"].profile.mixing_model == "heuristic"

@@ -132,6 +132,16 @@ def test_load_old_config_applies_new_screen_sync_defaults(tmp_path):
     assert config.screen_sync.color_boost == 1.18
     assert config.screen_sync.color_algorithm == "auto"
     assert config.screen_sync.bulb_layout == {}
+    assert config.screen_sync.mixing_model == "heuristic"
+
+
+def test_mixing_model_defaults_to_heuristic_and_accepts_physical():
+    from src.core.config import ScreenSyncConfig
+
+    assert ScreenSyncConfig().mixing_model == "heuristic"
+    assert ScreenSyncConfig(mixing_model="physical").mixing_model == "physical"
+    assert ScreenSyncConfig(mixing_model="Physical").mixing_model == "physical"
+    assert ScreenSyncConfig(mixing_model="not-a-real-model").mixing_model == "heuristic"
 
 
 def test_load_old_config_applies_new_clap_defaults(tmp_path):

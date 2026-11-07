@@ -66,7 +66,7 @@ def discover(ctx, broadcast, save):
     for i, bulb in enumerate(bulbs, 1):
         click.echo(f"  {i}. IP: {bulb['ip']}, MAC: {bulb['mac']}")
         if save:
-            config.add_bulb(bulb['ip'], f"Bulb {i}", bulb['mac'])
+            config.add_bulb(bulb['ip'], f"Bulb {i}", bulb['mac'], preserve_name=True)
     
     if save:
         click.echo(f"Saved to config: {config._config_path}")
