@@ -60,6 +60,20 @@ True latency must include screen, app, WiFi, bulb firmware, and the bulb LED res
 
 Report median, p95, and worst-case latency. Do not rely only on Python timing for product claims.
 
+For a constant-frame-rate recording of alternating red and blue cuts, choose
+separate rectangles for the screen and lamp, then run:
+
+```powershell
+python scripts\analyze_screen_light_latency.py recording.mp4 --screen-roi 20,20,200,150 --light-roi 300,20,80,80 --fps 60
+```
+
+Replace the ROI coordinates and FPS with the values for the actual recording.
+The tool reports matched and unmatched cuts as well as the frame interval.
+Its estimates are threshold-based camera observations: dropped frames, rolling
+shutter, changing exposure and variable frame rate can bias them. Inspect the
+video and verify that both ROIs show the intended changes; collect enough cuts
+before comparing latency distributions.
+
 ## Real Color Accuracy
 
 Use the hardware gate:
