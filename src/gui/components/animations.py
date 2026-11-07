@@ -106,31 +106,21 @@ class AnimationMixin:
     
     def __init__(self):
         self._active_animations = {}
-    
-    def animate_brightness(
-        self,
-        slider: ctk.CTkSlider,
-        label: ctk.CTkLabel,
-        target: int,
-        duration_ms: int = 300,
-    ) -> None:
-        """Animate brightness slider to target value."""
-        # Cancel existing animation
+
+    def animate_brightness(self, slider, label, target: int, duration_ms: int = 300) -> None:
+        """Animate a brightness slider while keeping its label in sync."""
         if "brightness" in self._active_animations:
             try:
                 slider.after_cancel(self._active_animations["brightness"])
             except Exception:
                 pass
-        
-        start = slider.get()
-        
-        def update(value: float):
+
+        def update(value):
             slider.set(value)
-            pct = int((value / 255) * 100)
-            label.configure(text=f"Brightness: {pct}%")
-        
+            label.configure(text=f"Brightness: {int(value / 255 * 100)}%")
+
         self._active_animations["brightness"] = animate_value(
-            slider, start, target, duration_ms, update
+            slider, slider.get(), target, duration_ms, update
         )
     
     def animate_color_preview(
@@ -177,47 +167,34 @@ class AnimationMixin:
                 self._active_animations["color"] = preview.after(step_time, step)
         
         self._active_animations["color"] = preview.after(step_time, step)
-    
-    def pulse_widget(
-        self,
-        widget: ctk.CTkBaseClass,
-        color: str = "#4CAF50",
-        duration_ms: int = 400,
-    ) -> None:
-        """Briefly pulse a widget's border color to indicate action."""
+
+    def pulse_widget(self, widget, color: str = "#4CAF50", duration_ms: int = 400) -> None:
+        """Briefly highlight a widget's border."""
         try:
             original = widget.cget("border_color")
+            original_width = widget.cget("border_width")
         except Exception:
             return
-        
         widget.configure(border_color=color, border_width=2)
-        
+
         def restore():
             try:
-                widget.configure(border_color=original, border_width=0)
+                widget.configure(border_color=original, border_width=original_width)
             except Exception:
                 pass
-        
+
         widget.after(duration_ms, restore)
-    
-    def animate_status(
-        self,
-        label: ctk.CTkLabel,
-        message: str,
-        color: str = "gray",
-        fade_after_ms: int = 3000,
-    ) -> None:
-        """Show status message with fade-out after delay."""
+
+    def animate_status(self, label, message: str, color: str = "gray", fade_after_ms: int = 3000) -> None:
+        """Show a temporary status message."""
         if "status" in self._active_animations:
             try:
                 label.after_cancel(self._active_animations["status"])
             except Exception:
                 pass
-        
         label.configure(text=message, text_color=color)
-        
-        def fade():
-            label.configure(text_color="gray")
-        
         if fade_after_ms > 0:
-            self._active_animations["status"] = label.after(fade_after_ms, fade)
+            self._active_animations["status"] = label.after(
+                fade_after_ms, lambda: label.configure(text_color="gray")
+            )
+    

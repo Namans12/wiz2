@@ -229,14 +229,9 @@ class SystemTrayManager:
         """Update the tray icon color to reflect bulb state."""
         if not self._icon:
             return
-        
-        if color:
-            self._image = create_default_icon(color=color)
-        else:
-            self._image = create_default_icon()
-        
+        self._image = create_default_icon(color=color) if color else create_default_icon()
         self._icon.icon = self._image
-    
+
     def show_notification(self, title: str, message: str):
         """Show a system notification."""
         if self._icon:

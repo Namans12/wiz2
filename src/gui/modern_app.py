@@ -1144,10 +1144,9 @@ class WizLightModernGUI(AnimationMixin):
             self.header_runtime_var.set(
                 f"{snapshot['capture_method'].upper()} | {snapshot['current_fps']} FPS | {snapshot['send_rate_hz']:.1f} Hz"
             )
-        if status != "OK":
-            indicator_color = self._sync_status_color(status)
-            if self.status_indicator.cget("fg_color") != indicator_color:
-                self.status_indicator.configure(fg_color=indicator_color)
+        indicator_color = self._sync_status_color(status)
+        if self.status_indicator.cget("fg_color") != indicator_color:
+            self.status_indicator.configure(fg_color=indicator_color)
         if not self.advanced_debug_var.get():
             self._screen_sync_debug_id = self.root.after(350, self._refresh_screen_sync_debug)
             return
