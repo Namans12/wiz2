@@ -57,3 +57,24 @@ def test_dashboard_preserves_cards_and_live_state_when_reopened():
     BulbDashboard.set_bulbs(dashboard, [renamed])
     assert dashboard._bulbs == [renamed]
     dashboard._rebuild_cards.assert_called_once()
+
+
+def test_hidden_diagnostics_do_not_update_detail_widgets():
+    snapshot = {
+        "target_colors": {}, "current_colors": {}, "capture_status": "OK",
+        "currentFps": 10, "requestedFps": 24, "current_fps": 10,
+        "average_frame_time_ms": 5.0, "send_rate_hz": 2.0,
+        "motion_score": 0.0, "capture_method": "mss",
+    }
+    gui = SimpleNamespace(
+        _screen_sync_debug_id=None,
+        screen_sync=SimpleNamespace(is_running=True, debug_snapshot=snapshot),
+        sync_target_preview=Mock(), sync_output_preview=Mock(),
+        _set_color_panel=Mock(), _set_metric=Mock(), _set_sync_running_ui=Mock(),
+        header_runtime_var=Mock(), advanced_debug_var=Mock(), root=Mock(),
+        screen_sync_debug_runtime=Mock(), _refresh_screen_sync_debug=Mock(),
+    )
+    gui.advanced_debug_var.get.return_value = False
+    WizLightModernGUI._refresh_screen_sync_debug(gui)
+    gui.screen_sync_debug_runtime.set.assert_not_called()
+    gui.root.after.assert_called_once_with(350, gui._refresh_screen_sync_debug)
