@@ -1120,6 +1120,8 @@ class WizLightModernGUI(AnimationMixin):
         output = current_colors.get("all") or (
             average_colors(tuple(current_colors.values())) if current_colors else None
         )
+        if output is not None:
+            self._update_sync_preview(self.screen_sync, output)
 
         status = snapshot.get("capture_status") or "OK"
         # A dark scene and an inaccessible surface can both produce black.
@@ -1420,11 +1422,6 @@ class WizLightModernGUI(AnimationMixin):
                 # the engine); read it at send time from the engine.
                 brightness = engine.output_brightness if engine else None
                 transport.send(bulb_colors, brightness)
-            preview = average_colors(tuple(colors_by_target.values()))
-            self.root.after(
-                0,
-                lambda: self._update_sync_preview(engine, preview),
-            )
 
         try:
             transport = ScreenSyncTransport(
@@ -1573,9 +1570,9 @@ class WizLightModernGUI(AnimationMixin):
 
     def _update_sync_preview(self, engine, preview):
         if not self._closing and self.screen_sync is engine:
-            self.color_preview.configure(
-                fg_color=f"#{preview[0]:02x}{preview[1]:02x}{preview[2]:02x}"
-            )
+            color = f"#{preview[0]:02x}{preview[1]:02x}{preview[2]:02x}"
+            if self.color_preview.cget("fg_color") != color:
+                self.color_preview.configure(fg_color=color)
 
     def _stop_screen_sync(self, update_status: bool = True):
         self._bulb_recovery_token = None
