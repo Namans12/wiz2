@@ -7,12 +7,12 @@ prints exactly which one dies when frozen. Build via packaging/FrozenDiag.spec.
 
 from __future__ import annotations
 
+import argparse
+import ipaddress
 import socket
 import sys
 import time
 import traceback
-
-BULB = "192.168.1.6"
 
 
 def stage(name):
@@ -20,6 +20,20 @@ def stage(name):
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--execute', action='store_true', help='Allow screen capture and bulb queries')
+    parser.add_argument('--bulb', help='Explicit IPv4 address of the bulb to query')
+    args = parser.parse_args()
+    if not args.execute:
+        parser.print_help()
+        return 0
+    if not args.bulb:
+        parser.error('--execute requires --bulb')
+    try:
+        bulb = str(ipaddress.IPv4Address(args.bulb))
+    except ipaddress.AddressValueError:
+        parser.error('--bulb must be an IPv4 address')
+    failures = 0
     print("frozen:", getattr(sys, "frozen", False), "| exe:", sys.executable, flush=True)
 
     stage("1. imports")
@@ -27,6 +41,7 @@ def main() -> int:
         from src.features import screen_sync_v2 as v2
         print("screen_sync_v2 import OK | HAS_DXCAM =", v2.HAS_DXCAM, flush=True)
     except Exception:
+        failures += 1
         traceback.print_exc()
         return 1
 
@@ -43,6 +58,7 @@ def main() -> int:
         else:
             print("dxcam not importable in frozen app", flush=True)
     except Exception:
+        failures += 1
         traceback.print_exc()
     finally:
         if cam is not None:
@@ -59,9 +75,11 @@ def main() -> int:
             shot = s.grab(s.monitors[1] if len(s.monitors) > 1 else s.monitors[0])
             print("grab:", shot.size, flush=True)
     except Exception:
+        failures += 1
         traceback.print_exc()
 
     stage("4. engine 3s with persisted config")
+    sync = None
     try:
         from src.core.config import Config
         cfg = Config.load()
@@ -72,26 +90,37 @@ def main() -> int:
         sync.start()
         time.sleep(3.0)
         snap = sync.debug_snapshot
-        sync.stop()
+        if not snap.get("frames_processed", 0):
+            raise RuntimeError("Engine did not process any frames")
         for key in (
             "capture_method", "capture_status", "frames_processed", "frameTimeMs",
             "targetColors", "updates_sent", "last_error",
         ):
             print(f"{key} = {snap.get(key)}", flush=True)
     except Exception:
+        failures += 1
         traceback.print_exc()
 
+    finally:
+        if sync is not None:
+            sync.stop()
+
     stage("5. bulb reachability (raw getPilot)")
+    s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(2.0)
-        s.connect((BULB, 38899))
+        s.connect((bulb, 38899))
         s.send(b'{"method":"getPilot","params":{}}')
         reply = s.recv(2048)
         print("reply:", reply.decode()[:160], flush=True)
-        s.close()
     except Exception:
+        failures += 1
         traceback.print_exc()
+
+    finally:
+        if s is not None:
+            s.close()
 
     stage("6. pywizlight preflight (what the GUI uses)")
     try:
@@ -101,7 +130,7 @@ def main() -> int:
         async def preflight():
             controller = BulbController()
             try:
-                return await controller.resolve_screen_sync_targets([BULB])
+                return await controller.resolve_screen_sync_targets([bulb])
             finally:
                 await controller.close_async()
 
@@ -109,11 +138,14 @@ def main() -> int:
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         result = asyncio.run(preflight())
         print("resolve_screen_sync_targets ->", result, flush=True)
+        if not result:
+            raise RuntimeError("Preflight found no reachable bulb")
     except Exception:
+        failures += 1
         traceback.print_exc()
 
     print("\nDIAG COMPLETE", flush=True)
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

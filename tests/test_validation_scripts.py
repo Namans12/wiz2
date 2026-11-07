@@ -26,12 +26,13 @@ def test_fake_udp_bulb_receives_and_validates_screen_sync_packet():
     assert receiver.summary()["packetCount"] == 1
 
 
-def test_fake_udp_validation_rejects_white_channel_bleed():
+def test_fake_udp_validation_can_require_pure_rgb():
     payload = json.loads(encode_set_pilot_payload((255, 0, 0, 32)).decode("utf-8"))
 
-    errors = validate_screen_sync_packet(payload)
+    assert validate_screen_sync_packet(payload) == []
+    errors = validate_screen_sync_packet(payload, rgb_only=True)
 
-    assert any("warm white" in error for error in errors)
+    assert any("white channels" in error for error in errors)
 
 
 def test_screen_sync_benchmark_reports_stage_timings():
@@ -39,7 +40,7 @@ def test_screen_sync_benchmark_reports_stage_timings():
 
     assert report["iterations"] == 3
     assert report["stages"]["processingTotalMs"]["meanMs"] > 0
-    assert "extractMs" in report["stages"]
+    assert "frameProcessingMs" in report["stages"]
 
 
 def test_control_effect_measurement_passes_visible_controls():

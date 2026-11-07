@@ -30,6 +30,9 @@ MANIFEST
 # PyInstaller
 *.manifest
 *.spec
+!packaging/WizLight.spec
+!packaging/WizLight.macos.spec
+!packaging/FrozenDiag.spec
 
 # Installer logs
 pip-log.txt

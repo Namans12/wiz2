@@ -15,17 +15,21 @@
 #   dist/WizLight-macOS.dmg   (only if create-dmg is on PATH)
 
 set -euo pipefail
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    echo "ERROR: Build the macOS app on a macOS host." >&2
+    exit 1
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 PYTHON="${PYTHON:-python3}"
 
-echo "==> Cleaning previous build outputs"
-rm -rf build dist
+build_marker="$(mktemp)"
+trap 'rm -f "$build_marker"' EXIT
 
 echo "==> Ensuring icon assets exist"
-"$PYTHON" packaging/make_icon.py || true
+"$PYTHON" packaging/make_icon.py
 
 # If wizlight.icns is missing but a PNG is present, attempt to synthesise one
 # using iconutil + sips. Skip silently if either tool is unavailable.
@@ -50,7 +54,7 @@ echo "==> Building app bundle via PyInstaller"
 "$PYTHON" -m PyInstaller --clean --noconfirm packaging/WizLight.macos.spec
 
 APP_PATH="dist/WizLight.app"
-if [[ ! -d "$APP_PATH" ]]; then
+if [[ ! -f "$APP_PATH/Contents/MacOS/WizLight" ]] || [[ ! "$APP_PATH/Contents/MacOS/WizLight" -nt "$build_marker" ]]; then
     echo "ERROR: $APP_PATH was not produced. Check PyInstaller log above." >&2
     exit 1
 fi
@@ -76,4 +80,4 @@ else
     echo "==> Skipping DMG step (install with: brew install create-dmg)"
 fi
 
-echo "==> Done."
+echo "==> Done (unsigned; signing and notarization are separate release steps)."

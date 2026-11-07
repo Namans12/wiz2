@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import math
 import re
 import subprocess
 import sys
@@ -85,14 +85,14 @@ def _manifest_path(value: str | Path) -> Path:
 
 def _read_float(data: dict[str, Any], key: str, default: float) -> float:
     value = data.get(key, default)
-    if not isinstance(value, (int, float)):
+    if type(value) not in (int, float) or not math.isfinite(value):
         raise ValueError(f"{key} must be a number")
     return float(value)
 
 
 def _read_int(data: dict[str, Any], key: str, default: int) -> int:
     value = data.get(key, default)
-    if not isinstance(value, int):
+    if type(value) is not int:
         raise ValueError(f"{key} must be an integer")
     return value
 
@@ -244,13 +244,13 @@ def evaluate_report(
     mean_error = summary.get("mean_error")
     max_error = summary.get("max_error")
     scene_count = summary.get("scene_count")
-    if not isinstance(mean_error, (int, float)) or not isinstance(max_error, (int, float)):
-        return False, "report does not contain numeric mean/max errors"
-    if not isinstance(scene_count, int) or scene_count <= 0:
+    if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in (mean_error, max_error)):
+        return False, "report does not contain finite nonnegative mean/max errors"
+    if type(scene_count) is not int or scene_count <= 0:
         return False, "report has no measured scenes"
 
-    mean_limit = target.mean_error_threshold or manifest.mean_error_threshold
-    max_limit = target.max_error_threshold or manifest.max_error_threshold
+    mean_limit = manifest.mean_error_threshold if target.mean_error_threshold is None else target.mean_error_threshold
+    max_limit = manifest.max_error_threshold if target.max_error_threshold is None else target.max_error_threshold
     if mean_error > mean_limit:
         return False, f"mean error {mean_error:.1f} exceeded threshold {mean_limit:.1f}"
     if max_error > max_limit:
@@ -325,10 +325,9 @@ def run_manifest(
 def main() -> int:
     args = parse_args()
     manifest = load_manifest(args.manifest)
-    execute = args.execute or os.environ.get("RUN_HARDWARE_TESTS") == "1"
     return run_manifest(
         manifest,
-        execute=execute,
+        execute=args.execute,
         target_names=args.target,
         output_dir_override=args.output_dir,
     )

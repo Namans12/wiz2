@@ -28,10 +28,12 @@ def decode_wiz_packet(packet: bytes) -> dict[str, Any]:
     return data
 
 
-def validate_screen_sync_packet(payload: dict[str, Any]) -> list[str]:
-    """Return validation errors for a screen-sync setPilot packet."""
+def validate_screen_sync_packet(payload: dict[str, Any], *, rgb_only: bool = False) -> list[str]:
+    """Validate the sender's RGBW/RGBCW contract; white channels are legal."""
 
     errors: list[str] = []
+    if not isinstance(payload, dict):
+        return ["packet is not an object"]
     if payload.get("method") != "setPilot":
         errors.append("method is not setPilot")
     params = payload.get("params")
@@ -40,19 +42,27 @@ def validate_screen_sync_packet(payload: dict[str, Any]) -> list[str]:
     for channel in ("r", "g", "b", "c", "w"):
         if channel not in params:
             errors.append(f"missing channel {channel}")
-    if params.get("c") != 0:
-        errors.append("cold white channel c must be 0 for RGB screen sync")
-    if params.get("w") not in (0, None):
-        errors.append("warm white channel w should be 0 for RGB screen sync")
+        elif type(params[channel]) is not int or not 0 <= params[channel] <= 255:
+            errors.append(f"channel {channel} must be an integer from 0 to 255")
+    if type(params.get("state")) is not bool:
+        errors.append("state must be a boolean")
+    elif all(type(params.get(ch)) is int for ch in ("r", "g", "b", "c", "w")):
+        if params["state"] != any(params[ch] for ch in ("r", "g", "b", "c", "w")):
+            errors.append("state must match whether the output channels contain light")
+    if "dimming" in params and (type(params["dimming"]) is not int or not 10 <= params["dimming"] <= 100):
+        errors.append("dimming must be an integer from 10 to 100")
+    if rgb_only and (params.get("c") != 0 or params.get("w") != 0):
+        errors.append("white channels must be zero when explicitly checking pure RGB")
     return errors
 
 
 class FakeWizBulbUDP:
     """Threaded UDP receiver that records WiZ packets for local tests."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 38899):
+    def __init__(self, host: str = "127.0.0.1", port: int = 38899, *, rgb_only: bool = False):
         self.host = host
         self.port = port
+        self.rgb_only = rgb_only
         self.records: list[PacketRecord] = []
         self.errors: list[str] = []
         self._bound_address = (host, port)
@@ -98,7 +108,7 @@ class FakeWizBulbUDP:
                 return
             try:
                 payload = decode_wiz_packet(packet)
-                self.errors.extend(validate_screen_sync_packet(payload))
+                self.errors.extend(validate_screen_sync_packet(payload, rgb_only=self.rgb_only))
             except Exception as exc:
                 payload = {"decode_error": str(exc)}
                 self.errors.append(str(exc))
@@ -131,6 +141,7 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=38899)
     parser.add_argument("--seconds", type=float, default=20.0)
+    parser.add_argument("--rgb-only", action="store_true", help="Require zero white channels for an intentional pure-RGB test.")
     parser.add_argument(
         "--require-packets",
         action="store_true",
@@ -138,7 +149,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    receiver = FakeWizBulbUDP(args.host, args.port)
+    receiver = FakeWizBulbUDP(args.host, args.port, rgb_only=args.rgb_only)
     receiver.start()
     print(f"Listening on {receiver.address[0]}:{receiver.address[1]} for {args.seconds:.1f}s")
     try:
