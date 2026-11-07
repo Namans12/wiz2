@@ -1684,8 +1684,8 @@ class WizLightModernGUI(AnimationMixin):
                 BulbInfo(ip=b.ip, name=b.name)
                 for b in self.config.bulbs
             ]
-            self._dashboard.set_bulbs(bulbs)
             self._dashboard.start_auto_refresh(interval_ms=5000)
+            self._dashboard.set_bulbs(bulbs)
     
     def _on_bulb_select(self, ip: str):
         """Handle bulb selection from dashboard."""

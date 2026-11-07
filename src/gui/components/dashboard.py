@@ -298,8 +298,14 @@ class BulbDashboard(ctk.CTkFrame):
     
     def set_bulbs(self, bulbs: List[BulbInfo]):
         """Update the dashboard with new bulb list."""
-        self._bulbs = bulbs
-        self._rebuild_cards()
+        old_identity = [(bulb.ip, bulb.name) for bulb in self._bulbs]
+        new_identity = [(bulb.ip, bulb.name) for bulb in bulbs]
+        if old_identity != new_identity:
+            self._bulbs = bulbs
+            self._rebuild_cards()
+        elif not bulbs and not self._cards:
+            # Ensure the empty state is visible on the first visit.
+            self._rebuild_cards()
         
         if self._auto_refresh:
             self.refresh_status()

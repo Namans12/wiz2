@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from src.gui.modern_app import WizLightModernGUI
+from src.gui.components.dashboard import BulbDashboard, BulbInfo
 
 
 def test_unchanged_metric_and_preview_do_not_redraw():
@@ -39,3 +40,20 @@ def test_running_button_is_updated_only_on_transitions():
     WizLightModernGUI._set_sync_running_ui(gui, False)
     assert button.configure.call_count == 2
     header.set.assert_called_with("Sync: idle")
+
+
+def test_dashboard_preserves_cards_and_live_state_when_reopened():
+    current = BulbInfo(ip="10.0.0.1", name="Desk", is_on=True, brightness=80)
+    dashboard = SimpleNamespace(
+        _bulbs=[current], _cards={current.ip: object()}, _auto_refresh=True,
+        _rebuild_cards=Mock(), refresh_status=Mock(),
+    )
+    BulbDashboard.set_bulbs(dashboard, [BulbInfo(ip=current.ip, name=current.name)])
+    assert dashboard._bulbs[0] is current
+    dashboard._rebuild_cards.assert_not_called()
+    dashboard.refresh_status.assert_called_once()
+
+    renamed = BulbInfo(ip=current.ip, name="Renamed")
+    BulbDashboard.set_bulbs(dashboard, [renamed])
+    assert dashboard._bulbs == [renamed]
+    dashboard._rebuild_cards.assert_called_once()
