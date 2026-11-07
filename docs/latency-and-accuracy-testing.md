@@ -46,7 +46,9 @@ Run a local receiver:
 python scripts\fake_wiz_bulb_udp.py --host 127.0.0.1 --port 38899 --seconds 20
 ```
 
-Point a test sender at `127.0.0.1`. The receiver validates that packets are JSON `setPilot` messages and that RGB screen-sync packets explicitly include `c:0` and `w:0`.
+Point a test sender at `127.0.0.1`. The receiver validates the `setPilot`
+packet and its RGB and white-channel values. Add `--rgb-only` when a specific
+test should require both white channels to be zero.
 
 ## Real End-To-End Latency
 
