@@ -320,6 +320,32 @@ class Config:
         self.bulbs.append(BulbConfig(ip=ip, name=name, mac=normalized_mac or mac))
         self.save()
 
+    def reassign_bulb_addresses(self, moves: list[tuple[str, str, str]]) -> int:
+        """Apply a verified batch of address changes without losing identities or zones."""
+        if not moves:
+            return 0
+        old_ips = [old for old, _, _ in moves]
+        new_ips = [new for _, new, _ in moves]
+        if len(set(old_ips)) != len(moves) or len(set(new_ips)) != len(moves):
+            return 0
+        by_ip = {bulb.ip: bulb for bulb in self.bulbs}
+        if len(by_ip) != len(self.bulbs):
+            return 0
+        for old, new, mac in moves:
+            bulb = by_ip.get(old)
+            if (bulb is None or not mac_identity(mac) or mac_identity(bulb.mac) != mac_identity(mac)
+                    or not new or old == new or (new in by_ip and new not in old_ips)):
+                return 0
+        mapping = dict(zip(old_ips, new_ips))
+        self.bulbs = [BulbConfig(ip=mapping.get(bulb.ip, bulb.ip), name=bulb.name, mac=bulb.mac)
+                      for bulb in self.bulbs]
+        self.screen_sync.bulb_layout = {
+            mapping.get(ip, ip): region for ip, region in self.screen_sync.bulb_layout.items()
+            if ip not in new_ips or ip in old_ips
+        }
+        self.save()
+        return len(moves)
+
     def remove_bulb(self, ip: str) -> bool:
         """Remove a bulb from configuration."""
 

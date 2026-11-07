@@ -1500,14 +1500,9 @@ class WizLightModernGUI(AnimationMixin):
             return
         if engine is not None and self.screen_sync is not engine:
             return
-        moved = 0
-        for item in recovered:
-            existing = next((bulb for bulb in self.config.bulbs if bulb.ip == item.old_ip
-                             and mac_identity(bulb.mac) == mac_identity(item.mac)), None)
-            if existing is None or any(bulb.ip == item.new_ip for bulb in self.config.bulbs):
-                continue
-            self.config.add_bulb(item.new_ip, existing.name, existing.mac)
-            moved += 1
+        moved = self.config.reassign_bulb_addresses(
+            [(item.old_ip, item.new_ip, item.mac) for item in recovered]
+        )
         if moved:
             self._update_bulb_status()
             if engine is not None:

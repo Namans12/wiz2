@@ -79,7 +79,6 @@ async def test_ambiguous_occupied_or_mismatched_addresses_are_never_used():
         {"ip": "other", "mac": bulb.mac},
     ], {"other": SimpleNamespace(mac=bulb.mac)})
     assert await recover_saved_bulbs(controller, [bulb, occupied]) == []
-    assert controller.lookups == []
     controller.discovered = [{"ip": "new", "mac": bulb.mac}]
     controller.states = {"new": SimpleNamespace(mac=occupied.mac)}
     assert await recover_saved_bulbs(controller, [bulb]) == []
@@ -99,6 +98,32 @@ async def test_recovery_targets_only_missing_lights():
     result = await recover_saved_bulbs(controller, [missing, active], target_ips={"old"})
     assert [item.new_ip for item in result] == ["new"]
     assert controller.lookups == ["new"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_accepts_only_fully_verified_address_swap():
+    left = BulbConfig("one", "Left", "aa:bb:cc:dd:ee:ff")
+    right = BulbConfig("two", "Right", "11:22:33:44:55:66")
+    controller = FakeController([
+        {"ip": "two", "mac": left.mac}, {"ip": "one", "mac": right.mac},
+    ], {"two": SimpleNamespace(mac=left.mac), "one": SimpleNamespace(mac=right.mac)})
+    result = await recover_saved_bulbs(controller, [left, right])
+    assert {(item.old_ip, item.new_ip) for item in result} == {("one", "two"), ("two", "one")}
+    controller.states["one"] = SimpleNamespace(mac="00:00:00:00:00:01")
+    assert await recover_saved_bulbs(controller, [left, right]) == []
+
+
+def test_verified_swap_preserves_names_and_zone_assignments(tmp_path):
+    config = Config.load(tmp_path / "config.json")
+    config.add_bulb("one", "Left", "aa:bb:cc:dd:ee:ff")
+    config.add_bulb("two", "Right", "11:22:33:44:55:66")
+    config.screen_sync.bulb_layout = {"one": "left", "two": "right"}
+    moves = [("one", "two", "aa:bb:cc:dd:ee:ff"), ("two", "one", "11:22:33:44:55:66")]
+    assert config.reassign_bulb_addresses(moves[:1]) == 0
+    assert config.reassign_bulb_addresses(moves) == 2
+    reloaded = Config.load(tmp_path / "config.json")
+    assert [(bulb.ip, bulb.name) for bulb in reloaded.bulbs] == [("two", "Left"), ("one", "Right")]
+    assert reloaded.screen_sync.bulb_layout == {"two": "left", "one": "right"}
 
 
 def test_recovery_updates_layout_and_ignores_cancelled_callback(tmp_path):

@@ -46,8 +46,9 @@ async def refresh_verified_targets(controller, bulbs):
 async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6.0, target_ips=None):
     """Find and verify changed addresses without modifying the saved config.
 
-    Ambiguous identities, already configured addresses and unverified replies
-    are ignored, so discovery alone never redirects commands to another device.
+    Ambiguous identities and unverified replies are ignored. An occupied address
+    is accepted only when its saved occupant is also verified to move in the
+    same batch, so swaps do not redirect commands to another device.
     """
     saved = list(bulbs)
     identities = defaultdict(list)
@@ -68,7 +69,6 @@ async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6
         address = device.get("ip")
         if identity in identities and isinstance(address, str) and address:
             candidates[identity].add(address)
-    occupied = {bulb.ip for bulb in saved}
     requests = []
     for identity, entries in identities.items():
         addresses = candidates.get(identity, set())
@@ -78,7 +78,7 @@ async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6
         if target_ips is not None and bulb.ip not in target_ips:
             continue
         address = next(iter(addresses))
-        if address == bulb.ip or address in occupied:
+        if address == bulb.ip:
             continue
         requests.append((bulb, identity, address))
     states = await asyncio.gather(
@@ -90,4 +90,17 @@ async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6
         if not isinstance(actual_identity, str) or actual_identity != identity:
             continue
         recovered.append(RecoveredBulb(bulb.ip, address, bulb.name, bulb.mac))
-    return recovered
+    # Occupied addresses are allowed only when their current saved occupant is
+    # also verified to move in this same batch. Recheck until stable so a
+    # failed verification cannot leave part of a chain or swap accepted.
+    occupied = {bulb.ip for bulb in saved}
+    counts = defaultdict(int)
+    for item in recovered:
+        counts[item.new_ip] += 1
+    recovered = [item for item in recovered if counts[item.new_ip] == 1]
+    while True:
+        moving = {item.old_ip for item in recovered}
+        safe = [item for item in recovered if item.new_ip not in occupied or item.new_ip in moving]
+        if len(safe) == len(recovered):
+            return safe
+        recovered = safe
