@@ -1045,24 +1045,27 @@ class WizLightModernGUI(AnimationMixin):
         return f"RGB({color[0]}, {color[1]}, {color[2]})"
 
     def _set_color_panel(self, panel, color: Optional[tuple[int, int, int]]):
-        if color is None:
-            panel._swatch.configure(fg_color="#000000")
-            panel._label_var.set("RGB(-)")
-            return
-        panel._swatch.configure(fg_color=f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}")
-        panel._label_var.set(self._format_debug_color(color))
+        swatch = "#000000" if color is None else f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
+        label = "RGB(-)" if color is None else self._format_debug_color(color)
+        if panel._swatch.cget("fg_color") != swatch:
+            panel._swatch.configure(fg_color=swatch)
+        if panel._label_var.get() != label:
+            panel._label_var.set(label)
 
     def _set_metric(self, key: str, value: str):
         variable = getattr(self, "_sync_metric_vars", {}).get(key)
-        if variable is not None:
+        if variable is not None and variable.get() != value:
             variable.set(value)
 
     def _set_sync_running_ui(self, running: bool):
+        if getattr(self, "_displayed_sync_running", None) == running:
+            return
         if hasattr(self, "sync_primary_button"):
             self.sync_primary_button.configure(
                 text="Stop Screen Sync" if running else "Start Screen Sync",
                 fg_color="#B91C1C" if running else ("#3B8ED0", "#1F6AA5"),
             )
+        self._displayed_sync_running = running
         if hasattr(self, "header_runtime_var"):
             self.header_runtime_var.set("Sync: running" if running else "Sync: idle")
 
@@ -1119,7 +1122,9 @@ class WizLightModernGUI(AnimationMixin):
                 f"{snapshot['capture_method'].upper()} | {snapshot['current_fps']} FPS | {snapshot['send_rate_hz']:.1f} Hz"
             )
         if status != "OK":
-            self.status_indicator.configure(fg_color=self._sync_status_color(status))
+            indicator_color = self._sync_status_color(status)
+            if self.status_indicator.cget("fg_color") != indicator_color:
+                self.status_indicator.configure(fg_color=indicator_color)
         self.screen_sync_debug_runtime.set(
             f"Runtime: {snapshot['capture_method'].upper()} | {snapshot['mode']}{status_part}"
         )
@@ -1152,9 +1157,9 @@ class WizLightModernGUI(AnimationMixin):
             f"Error: {snapshot['last_error']}" if snapshot["last_error"] else ""
         )
         if output is not None:
-            self.screen_sync_debug_preview.configure(
-                fg_color=f"#{output[0]:02x}{output[1]:02x}{output[2]:02x}"
-            )
+            preview_color = f"#{output[0]:02x}{output[1]:02x}{output[2]:02x}"
+            if self.screen_sync_debug_preview.cget("fg_color") != preview_color:
+                self.screen_sync_debug_preview.configure(fg_color=preview_color)
 
         self._screen_sync_debug_id = self.root.after(350, self._refresh_screen_sync_debug)
 
