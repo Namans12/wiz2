@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 from src.gui.modern_app import WizLightModernGUI
 from src.gui.components.dashboard import BulbDashboard, BulbInfo
+from src.gui.components.smooth_scrollable_frame import SmoothScrollableFrame
 
 
 def test_unchanged_metric_and_preview_do_not_redraw():
@@ -78,3 +79,12 @@ def test_hidden_diagnostics_do_not_update_detail_widgets():
     WizLightModernGUI._refresh_screen_sync_debug(gui)
     gui.screen_sync_debug_runtime.set.assert_not_called()
     gui.root.after.assert_called_once_with(350, gui._refresh_screen_sync_debug)
+
+
+def test_scroll_repaint_requests_are_coalesced():
+    frame = SimpleNamespace(_repaint_after_id=None, after_idle=Mock(return_value="paint"),
+                            _force_canvas_repaint=Mock())
+    for _ in range(30):
+        SmoothScrollableFrame._queue_canvas_repaint(frame)
+    frame.after_idle.assert_called_once_with(frame._force_canvas_repaint)
+    assert frame._repaint_after_id == "paint"
