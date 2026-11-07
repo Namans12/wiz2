@@ -170,3 +170,17 @@ def test_picture_settings_jump_scrolls_to_controls(gui):
     assert gui._controls_frame._parent_canvas.yview()[0] > 0
     assert gui._sync_settings_card.winfo_rooty() < gui.status_label.winfo_rooty()
     gui._controls_frame._parent_canvas.yview_moveto(0)
+
+
+def test_live_details_expand_and_collapse_without_hiding_controls(gui):
+    gui._switch_view("sync")
+    gui.root.update()
+    assert not gui._live_details.winfo_ismapped()
+    gui._live_details_button.invoke()
+    gui.root.update()
+    assert gui._live_details.winfo_ismapped()
+    assert gui.sync_primary_button.winfo_viewable()
+    gui._live_details_button.invoke()
+    gui.root.update()
+    assert not gui._live_details.winfo_ismapped()
+    assert gui.sync_primary_button.winfo_viewable()

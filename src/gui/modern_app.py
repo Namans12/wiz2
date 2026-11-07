@@ -328,7 +328,16 @@ class WizLightModernGUI(AnimationMixin):
             border_width=1, command=self._scroll_to_sync_settings,
         ).pack(anchor="w", padx=14, pady=(0, 12))
 
-        preview_grid = ctk.CTkFrame(cockpit, fg_color=self._surface_color(cockpit))
+        self._live_details_open = False
+        self._live_details_button = ctk.CTkButton(
+            cockpit, text="Show live details  ▾", height=32, anchor="w",
+            fg_color="transparent", hover_color="#263C58",
+            command=self._toggle_live_details,
+        )
+        self._live_details_button.pack(fill="x", padx=14, pady=(0, 8))
+        self._live_details = ctk.CTkFrame(cockpit, fg_color=self._surface_color(cockpit))
+
+        preview_grid = ctk.CTkFrame(self._live_details, fg_color=self._surface_color(cockpit))
         preview_grid.pack(fill="x", padx=14, pady=(0, 12))
         preview_grid.columnconfigure((0, 1), weight=1, uniform="preview")
         self.sync_target_preview = self._color_panel(preview_grid, "Target", "RGB(-)")
@@ -337,7 +346,7 @@ class WizLightModernGUI(AnimationMixin):
         self.sync_output_preview.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
         self._sync_metric_vars: dict[str, ctk.StringVar] = {}
-        metric_grid = ctk.CTkFrame(cockpit, fg_color=self._surface_color(cockpit))
+        metric_grid = ctk.CTkFrame(self._live_details, fg_color=self._surface_color(cockpit))
         metric_grid.pack(fill="x", padx=14, pady=(0, 12))
         for column in range(3):
             metric_grid.columnconfigure(column, weight=1, uniform="metric")
@@ -721,6 +730,16 @@ class WizLightModernGUI(AnimationMixin):
             wraplength=620,
             justify="left",
         ).pack(anchor="w", padx=14, pady=(0, 14))
+
+    def _toggle_live_details(self):
+        """Keep the primary controls compact while retaining live diagnostics."""
+        self._live_details_open = not self._live_details_open
+        if self._live_details_open:
+            self._live_details.pack(fill="x")
+            self._live_details_button.configure(text="Hide live details  ▴")
+        else:
+            self._live_details.pack_forget()
+            self._live_details_button.configure(text="Show live details  ▾")
 
     def _color_panel(self, parent, title: str, rgb_text: str):
         panel = ctk.CTkFrame(parent, corner_radius=10, border_width=1,
@@ -1111,14 +1130,15 @@ class WizLightModernGUI(AnimationMixin):
             )
         status_part = f" | {status}" if status != "OK" else ""
         status_display = "Running" if status == "OK" else status
-        self._set_color_panel(self.sync_target_preview, target)
-        self._set_color_panel(self.sync_output_preview, output)
-        self._set_metric("fps", f"{snapshot['currentFps']}/{snapshot['requestedFps']}")
-        self._set_metric("frame", f"{snapshot['average_frame_time_ms']:.1f}")
-        self._set_metric("send", f"{snapshot['send_rate_hz']:.1f}" if snapshot["send_rate_hz"] > 0 else "warm")
-        self._set_metric("motion", f"{snapshot['motion_score']:.3f}")
-        self._set_metric("capture", snapshot["capture_method"].upper())
-        self._set_metric("status", status_display)
+        if getattr(self, "_live_details_open", True):
+            self._set_color_panel(self.sync_target_preview, target)
+            self._set_color_panel(self.sync_output_preview, output)
+            self._set_metric("fps", f"{snapshot['currentFps']}/{snapshot['requestedFps']}")
+            self._set_metric("frame", f"{snapshot['average_frame_time_ms']:.1f}")
+            self._set_metric("send", f"{snapshot['send_rate_hz']:.1f}" if snapshot["send_rate_hz"] > 0 else "warm")
+            self._set_metric("motion", f"{snapshot['motion_score']:.3f}")
+            self._set_metric("capture", snapshot["capture_method"].upper())
+            self._set_metric("status", status_display)
         self._set_sync_running_ui(True)
         if hasattr(self, "header_runtime_var"):
             self.header_runtime_var.set(
