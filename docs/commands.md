@@ -80,9 +80,13 @@ python scripts\color_preset.py
 python scripts\calibrate_bulb_camera.py
 python scripts\run_hardware_color_accuracy.py
 python scripts\benchmark_screen_sync.py --iterations 200 --width 1920 --height 1080
+python scripts\benchmark_desktop_navigation.py --iterations 60
 python scripts\measure_control_effects.py
 python scripts\fake_wiz_bulb_udp.py --host 127.0.0.1 --port 38899 --seconds 20
 ```
+
+The desktop navigation benchmark opens a temporary test window and reports
+synthetic page-switch timing. It does not capture the screen or control lights.
 
 Hardware color verification:
 
