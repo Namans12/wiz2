@@ -263,9 +263,12 @@ class WizLightModernGUI(AnimationMixin):
         summary_row = ctk.CTkFrame(workspace, fg_color="transparent")
         summary_row.pack(fill="x", pady=(0, 10))
         for variable in (self.header_bulbs_var, self.header_monitor_var, self.header_runtime_var):
-            ctk.CTkLabel(summary_row, textvariable=variable, text_color=("gray35", "gray70")).pack(
-                side="left", padx=(0, 20), pady=0
-            )
+            badge = ctk.CTkFrame(summary_row, fg_color="#18283D", corner_radius=9)
+            badge.pack(side="left", padx=(0, 8))
+            ctk.CTkLabel(
+                badge, textvariable=variable, text_color="#CBD9EA",
+                font=("Segoe UI", 11), height=28,
+            ).pack(padx=10)
 
         self._view_host = ctk.CTkFrame(workspace, fg_color="transparent")
         self._view_host.pack(fill="both", expand=True)
