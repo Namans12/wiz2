@@ -17,13 +17,16 @@ class RecoveredBulb:
 
 async def fetch_fresh_identity(controller, ip, *, timeout: float = 1.8):
     """Read the MAC from a fresh response, not pywizlight's cached attribute."""
-    try:
-        response = await asyncio.wait_for(controller._get_bulb(ip).getBulbConfig(), timeout)
-    except (OSError, asyncio.TimeoutError):
-        return None
-    if not isinstance(response, dict) or not isinstance(response.get("result"), dict):
-        return None
-    return mac_identity(response["result"].get("mac"))
+    for _ in range(2):
+        try:
+            response = await asyncio.wait_for(controller._get_bulb(ip).getBulbConfig(), timeout)
+        except (OSError, asyncio.TimeoutError):
+            continue
+        if isinstance(response, dict) and isinstance(response.get("result"), dict):
+            identity = mac_identity(response["result"].get("mac"))
+            if identity:
+                return identity
+    return None
 
 
 async def refresh_verified_targets(controller, bulbs):
@@ -57,18 +60,23 @@ async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6
             identities[identity].append(bulb)
     if not identities:
         return []
-    try:
-        found = await asyncio.wait_for(controller.discover("255.255.255.255"), timeout=discovery_timeout)
-    except (OSError, asyncio.TimeoutError):
-        return []
     candidates = defaultdict(set)
-    for device in found:
-        if not isinstance(device, dict):
+    expected = {identity for identity, entries in identities.items()
+                if target_ips is None or any(bulb.ip in target_ips for bulb in entries)}
+    for _ in range(2):
+        try:
+            found = await asyncio.wait_for(controller.discover("255.255.255.255"), timeout=discovery_timeout)
+        except (OSError, asyncio.TimeoutError):
             continue
-        identity = mac_identity(device.get("mac"))
-        address = device.get("ip")
-        if identity in identities and isinstance(address, str) and address:
-            candidates[identity].add(address)
+        for device in found:
+            if not isinstance(device, dict):
+                continue
+            identity = mac_identity(device.get("mac"))
+            address = device.get("ip")
+            if identity in identities and isinstance(address, str) and address:
+                candidates[identity].add(address)
+        if expected.issubset(candidates):
+            break
     requests = []
     for identity, entries in identities.items():
         addresses = candidates.get(identity, set())

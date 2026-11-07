@@ -1,5 +1,6 @@
 """Address recovery uses verified identities and never touches hardware."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import Mock
 import threading
@@ -111,6 +112,29 @@ async def test_recovery_accepts_only_fully_verified_address_swap():
     assert {(item.old_ip, item.new_ip) for item in result} == {("one", "two"), ("two", "one")}
     controller.states["one"] = SimpleNamespace(mac="00:00:00:00:00:01")
     assert await recover_saved_bulbs(controller, [left, right]) == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_retries_incomplete_discovery_and_identity_timeout():
+    bulb = BulbConfig("old", "Lamp", "aa:bb:cc:dd:ee:ff")
+    controller = FakeController([], {})
+    calls = []
+
+    async def discover(_broadcast):
+        calls.append("discover")
+        return [] if calls.count("discover") == 1 else [{"ip": "new", "mac": bulb.mac}]
+
+    async def read_config():
+        calls.append("identity")
+        if calls.count("identity") == 1:
+            raise asyncio.TimeoutError()
+        return {"result": {"mac": bulb.mac}}
+
+    controller.discover = discover
+    controller._get_bulb = lambda ip: SimpleNamespace(getBulbConfig=read_config)
+    result = await recover_saved_bulbs(controller, [bulb])
+    assert [(item.old_ip, item.new_ip) for item in result] == [("old", "new")]
+    assert calls.count("discover") == calls.count("identity") == 2
 
 
 def test_verified_swap_preserves_names_and_zone_assignments(tmp_path):
