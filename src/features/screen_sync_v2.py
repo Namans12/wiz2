@@ -753,10 +753,11 @@ class GPUCaptureManager:
     which is pixel-identical by definition.
     """
 
-    def __init__(self, device: int = 0, monitor: int = 0):
+    def __init__(self, device: int = 0, monitor: int = 0, backend: str = "dxgi"):
         self._camera = None
         self._device = device
         self._monitor = monitor
+        self.backend = backend
         self._lock = threading.Lock()
         self._last_frame: Optional[np.ndarray] = None
         self._consecutive_errors = 0
@@ -777,10 +778,12 @@ class GPUCaptureManager:
                 # (PyInstaller) build excludes OpenCV, where the default "RGB"
                 # mode made every grab() raise ModuleNotFoundError('cv2').
                 # We slice BGRA -> RGB ourselves in grab().
+                backend_options = {"backend": self.backend} if self.backend != "dxgi" else {}
                 self._camera = dxcam.create(
                     device_idx=self._device,
                     output_idx=self._monitor,
                     output_color="BGRA",
+                    **backend_options,
                 )
                 if self._camera is None:
                     return False

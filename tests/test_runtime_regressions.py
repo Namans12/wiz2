@@ -241,6 +241,20 @@ def test_gpu_failure_never_replays_cached_pixels_and_releases_after_three_errors
     assert not gpu.is_active
     assert camera.released
     assert gpu.last_error == "acquisition failed"
+
+
+def test_gpu_manager_can_select_windows_graphics_capture(monkeypatch):
+    from unittest.mock import Mock
+    camera = Mock()
+    camera.grab.return_value = np.full((8, 8, 4), 100, dtype=np.uint8)
+    factory = Mock(return_value=camera)
+    monkeypatch.setattr(sync_module, "HAS_DXCAM", True)
+    monkeypatch.setattr(sync_module, "dxcam", type("Backend", (), {"create": factory}))
+    capture = sync_module.GPUCaptureManager(device=0, monitor=1, backend="winrt")
+    assert capture.start()
+    factory.assert_called_once_with(device_idx=0, output_idx=1, output_color="BGRA", backend="winrt")
+    capture.stop()
+    camera.release.assert_called_once()
 def test_mss_is_closed_on_its_own_capture_thread():
     import threading
     from src.features.screen_sync_v2 import OptimizedCaptureConfig, OptimizedScreenSync
