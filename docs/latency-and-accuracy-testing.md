@@ -76,6 +76,17 @@ shutter, changing exposure and variable frame rate can bias them. Inspect the
 video and verify that both ROIs show the intended changes; collect enough cuts
 before comparing latency distributions.
 
+For a live camera that does not report a trustworthy frame rate, use frame
+arrival timestamps instead. With the separate red/blue test pattern running:
+
+```powershell
+python scripts\measure_screen_light_camera.py --camera 2 --screen-roi 500,210,190,100 --light-roi 510,15,100,65 --seconds 45
+```
+
+Set the camera index and rectangles for the current setup. This records only
+region scores in memory, not video. Virtual-camera buffering and exposure can
+still distort the result; the reported frame intervals are not sensor timestamps.
+
 ## Real Color Accuracy
 
 Use the hardware gate:

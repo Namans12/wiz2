@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from scripts.analyze_screen_light_latency import overlaps, pair_transitions, parse_roi, score, transitions
+from scripts.measure_screen_light_camera import summarize
 
 
 def test_hysteresis_requires_stable_frames_and_dates_the_first_frame():
@@ -56,3 +57,16 @@ def test_video_analysis_reports_known_frame_delay(tmp_path):
     report = json.loads(result.stdout)
     assert report["matched_transitions"] == 5
     assert report["median_ms"] == pytest.approx(200.0)
+
+
+def test_timestamped_measurement_uses_real_frame_intervals():
+    samples = [
+        (0.00, 1, 1), (0.03, 1, 1), (0.08, -1, 1), (0.11, -1, 1),
+        (0.18, -1, -1), (0.22, -1, -1),
+    ]
+    report = summarize(samples)
+    assert report["matched_transitions"] == 1
+    assert report["median_ms"] == pytest.approx(100)
+    assert report["frame_interval_max_ms"] == pytest.approx(70)
+    with pytest.raises(ValueError):
+        summarize([(0.0, 1, 1), (0.0, -1, -1)])
