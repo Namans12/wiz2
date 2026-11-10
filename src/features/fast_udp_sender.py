@@ -17,12 +17,6 @@ _CACHE_LOCK = threading.Lock()
 _MAX_CACHE_SIZE = 4096
 _CACHE_EVICT_SIZE = 512
 
-# Round each channel to the nearest multiple of this before caching AND sending.
-# 8 -> 32 levels/channel: max 4/255 error (imperceptible for ambient light) while
-# collapsing jittered, near-identical frames onto shared cache entries so the
-# hot path skips JSON re-encoding far more often. Set to 1 to disable.
-_QUANTIZE_STEP = 8
-
 # UDP has no retransmit; on lossy Wi-Fi an occasional setPilot is dropped and
 # the bulb keeps the wrong color until the next change. When the color actually
 # CHANGES we fire the packet _BURST_REPEATS times ~_BURST_GAP apart (Hue-style
@@ -45,23 +39,6 @@ def _clamp_channel(value: int) -> int:
     return max(0, min(255, int(value)))
 
 
-def _quantize_channels(channels: tuple[int, ...]) -> tuple[int, ...]:
-    """Round channels to the nearest _QUANTIZE_STEP for cache-friendly reuse.
-
-    The quantized values are what actually get sent, so the cache stays correct
-    (no near-color ever reuses another color's packet).
-    """
-    if _QUANTIZE_STEP <= 1:
-        return channels
-    step = _QUANTIZE_STEP
-    half = step // 2
-    quant = tuple(min(255, ((c + half) // step) * step) for c in channels)
-    # Never let a lit color collapse to all-zero (that would flip state to off).
-    if any(channels) and not any(quant):
-        return channels
-    return quant
-
-
 def encode_set_pilot_payload(
     payload: tuple[int, ...],
     brightness: Optional[int] = None,
@@ -71,7 +48,8 @@ def encode_set_pilot_payload(
     if len(payload) not in {4, 5}:
         raise ValueError("WiZ payload must be RGBW or RGBWW")
 
-    channels = _quantize_channels(tuple(_clamp_channel(value) for value in payload))
+    # Preserve the mapper's channel values: cache reuse must never change hue.
+    channels = tuple(_clamp_channel(value) for value in payload)
     dimming = None if brightness is None else max(10, min(100, round(int(brightness) / 255 * 100)))
     key = (channels, dimming)
 

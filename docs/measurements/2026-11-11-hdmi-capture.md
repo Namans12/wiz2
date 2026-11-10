@@ -40,6 +40,16 @@ balance, screen color profile and wall reflectance were not calibrated.
 
 ## Color observations
 
+The desktop UDP encoder previously rounded channels to steps of eight before
+sending. A direct device test with exact RGBW values `(123, 5, 0, 17)` was
+accepted and `getPilot` reported those same values; the previous lamp state
+was then restored successfully. Channel rounding has been removed. This
+confirms payload preservation, not measured emitted color accuracy. A local
+20,000-payload random-input timing experiment before the change measured
+about 5.6 microseconds per encoding with rounding and 5.2 microseconds with
+rounding disabled on this machine; this is a microbenchmark, not an
+end-to-end latency comparison or a measurement of Wi-Fi traffic.
+
 In a later capture investigation, GDI/MSS returned black on both displays
 while Windows Graphics Capture returned the changing animation seen on the
 HDMI monitor through the camera. A source-engine probe recovered to Windows

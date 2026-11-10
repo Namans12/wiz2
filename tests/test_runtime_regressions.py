@@ -45,6 +45,16 @@ def test_packet_cache_keeps_rgbw_brightness_separate_from_rgbcw(reverse):
     assert "dimming" not in decoded[5]
 
 
+@pytest.mark.parametrize("channels", [(123, 5, 0, 17), (1, 2, 3, 4, 5), (0, 0, 0, 0)])
+def test_fast_sender_preserves_mapper_channel_values(channels):
+    params = json.loads(udp.encode_set_pilot_payload(channels))["params"]
+    actual = ((params["r"], params["g"], params["b"], params["w"])
+              if len(channels) == 4 else
+              (params["r"], params["g"], params["b"], params["c"], params["w"]))
+    assert actual == channels
+    assert params["state"] == any(channels)
+
+
 def test_shutdown_cancels_tasks_and_runs_finally_without_separate_cancel():
     runner = BackgroundAsyncLoop()
     entered, cleaned = threading.Event(), threading.Event()
