@@ -61,6 +61,17 @@ balance, screen color profile and wall reflectance were not calibrated.
   handle that busy result, and discard stale completed frames. Simply skipping
   a busy map without retaining its pending copy could lose every frame; such a
   change needs real-device freshness and latency testing.
+- A local, experimental three-buffer Direct3D readback prototype used
+  `D3D11_MAP_FLAG_DO_NOT_WAIT` with the full 1920×1080 HDMI frame. In one
+  12-second run it completed 222 readbacks, with an average pending-copy age
+  of 74.4 ms and p95 201.5 ms. The average polling-loop time was 0.86 ms
+  (p95 3.23 ms), but this does **not** mean frames were ready in that time.
+  A first run had a COM cleanup error; a second completed without the error.
+  These runs used private capture-library interfaces and did not establish
+  an optical latency improvement. The prototype was not integrated. A safe
+  implementation would also need to validate pixel correctness, frame
+  freshness, GPU resource ownership, display recovery, and shutdown under
+  load across supported machines.
 
 ## Color observations
 
