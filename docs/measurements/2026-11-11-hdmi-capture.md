@@ -43,6 +43,24 @@ balance, screen color profile and wall reflectance were not calibrated.
   not screen-to-lamp measurements. A small isolated WinRT capture experiment
   using copied versus reusable frames did not establish that removing the
   buffer copy improved capture time, so that optimization was not adopted.
+- An eight-second profile of one-shot Windows Graphics Capture calls spent
+  approximately 7.38 seconds of 8.03 seconds in the library's staging-surface
+  `map` operation (118 returned frames). This points to GPU readback waiting
+  on this setup; it does not identify the driver-level cause. An exploratory
+  45-call comparison measured mean acquisition times of 45.9 and 57.1 ms for
+  full-screen batches versus 29.7 ms for a 480×270 cropped batch. The batches
+  had different numbers of new frames and different screen content, so this
+  is not a controlled estimate of the benefit of resizing. Cropping was not
+  adopted because it omits most of the display. GPU-side downsampling or
+  asynchronous readback could be investigated while retaining the entire
+  screen, but neither has been implemented or measured here.
+  Microsoft documents that Direct3D's
+  [`D3D11_MAP_FLAG_DO_NOT_WAIT`](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map_flag)
+  returns a busy error instead of blocking when the GPU still uses a resource.
+  A future asynchronous readback would need to retain pending staging buffers,
+  handle that busy result, and discard stale completed frames. Simply skipping
+  a busy map without retaining its pending copy could lose every frame; such a
+  change needs real-device freshness and latency testing.
 
 ## Color observations
 
