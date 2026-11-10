@@ -24,6 +24,8 @@ for package in (
 
 optional_hiddenimports = [
     "dxcam",
+    "winrt.windows.graphics.capture.interop",
+    "winrt.windows.graphics.directx.direct3d11.interop",
     "mss",
     "sounddevice",
     "numpy",

@@ -255,6 +255,24 @@ def test_gpu_manager_can_select_windows_graphics_capture(monkeypatch):
     factory.assert_called_once_with(device_idx=0, output_idx=1, output_color="BGRA", backend="winrt")
     capture.stop()
     camera.release.assert_called_once()
+
+
+@pytest.mark.parametrize("value,accepted", [(120, True), (240, False)])
+def test_windows_capture_requires_matching_display(monkeypatch, value, accepted):
+    from unittest.mock import Mock
+    candidate = Mock()
+    candidate.start.return_value = True
+    candidate.grab.return_value = np.full((8, 8, 3), value, dtype=np.uint8)
+    monkeypatch.setattr(sync_module, "GPUCaptureManager", lambda **kwargs: candidate)
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=True))
+    frame = engine._try_windows_capture(np.full((8, 8, 3), 120, dtype=np.uint8))
+    assert (frame is not None) is accepted
+    if accepted:
+        assert engine._gpu_capture is candidate
+        assert engine._capture_method == "winrt"
+        candidate.stop.assert_not_called()
+    else:
+        candidate.stop.assert_called_once()
 def test_mss_is_closed_on_its_own_capture_thread():
     import threading
     from src.features.screen_sync_v2 import OptimizedCaptureConfig, OptimizedScreenSync
@@ -294,6 +312,7 @@ def test_black_gpu_falls_back_only_if_cpu_sees_bright_screen(monkeypatch, cpu_br
                                "grab": lambda self: np.zeros((24, 24, 3), dtype=np.uint8)})()
     engine._gpu_capture = gpu
     engine._running = True
+    monkeypatch.setattr(engine, "_try_windows_capture", lambda comparison: None)
     monkeypatch.setattr(engine, "_capture_mss_frame", lambda: np.full((24, 24, 3), cpu_brightness, dtype=np.uint8))
     now = [10.0]
     monkeypatch.setattr(sync_module.time, "perf_counter", lambda: now[0])

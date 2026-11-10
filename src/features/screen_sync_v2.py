@@ -1294,7 +1294,7 @@ class OptimizedScreenSync:
                 with self._stats_lock:
                     self._capture_status = "GPU capture recovered"
             if frame is not None:
-                self._capture_method = "dxcam"
+                self._capture_method = "winrt" if getattr(self._gpu_capture, "backend", "dxgi") == "winrt" else "dxcam"
                 if time.perf_counter() > self._dxcam_recovery_status_until:
                     with self._stats_lock:
                         self._capture_status = "OK"
@@ -1310,7 +1310,14 @@ class OptimizedScreenSync:
                             pixels = comparison[::max(1, comparison.shape[0] // 48),
                                                 ::max(1, comparison.shape[1] // 48)]
                             if float(np.mean(pixels)) > 12 and float(np.mean(np.max(pixels, axis=2) > 24)) > 0.15:
-                                self._rejected_gpu_capture, self._gpu_capture = self._gpu_capture, None
+                                rejected, self._gpu_capture = self._gpu_capture, None
+                                if getattr(rejected, "backend", "dxgi") == "winrt":
+                                    rejected.stop()
+                                else:
+                                    self._rejected_gpu_capture = rejected
+                                    alternative = self._try_windows_capture(comparison)
+                                    if alternative is not None:
+                                        return alternative
                                 self._gpu_fallback_reason = "GPU returned black while CPU capture showed a picture"
                                 self._capture_method = "mss"
                                 with self._stats_lock:
@@ -1327,6 +1334,26 @@ class OptimizedScreenSync:
                 reason = self._gpu_fallback_reason or (f"GPU error: {gpu_error}" if gpu_error else None)
                 self._capture_status = f"MSS fallback ({reason})" if reason else "OK"
         return frame
+
+    def _try_windows_capture(self, comparison: np.ndarray) -> Optional[np.ndarray]:
+        """Try a second GPU backend and confirm it observes the same display."""
+        candidate = GPUCaptureManager(device=self.config.gpu_device,
+                                      monitor=max(0, self.config.monitor - 1), backend="winrt")
+        if not candidate.start(target_fps=self.config.max_fps):
+            return None
+        frame = candidate.grab()
+        if frame is not None:
+            reference_mean = comparison.mean(axis=(0, 1))
+            candidate_mean = frame.mean(axis=(0, 1))
+            if np.max(frame) >= 8 and float(np.max(np.abs(reference_mean - candidate_mean))) < 55:
+                self._gpu_capture = candidate
+                self._gpu_black_since = None
+                self._capture_method = "winrt"
+                with self._stats_lock:
+                    self._capture_status = "GPU recovered (Windows Graphics Capture)"
+                return frame
+        candidate.stop()
+        return None
 
     def _capture_mss_frame(self) -> Optional[np.ndarray]:
         """Capture on the calling worker; this also supports a GPU comparison."""
@@ -1594,6 +1621,9 @@ class OptimizedScreenSync:
         try:
             self._sync_loop_inner()
         finally:
+            if self._gpu_capture and getattr(self._gpu_capture, "backend", "dxgi") == "winrt":
+                capture_gpu, self._gpu_capture = self._gpu_capture, None
+                capture_gpu.stop()
             capture, self._mss_instance = self._mss_instance, None
             if capture is not None:
                 try:

@@ -21,7 +21,7 @@ dependencies = [
     "sounddevice>=0.4",
     "numpy>=1.24",
     "pystray>=0.19",
-    "dxcam>=0.0.5; sys_platform == 'win32'",
+    "dxcam[winrt]>=0.3.0; sys_platform == 'win32'",
     "pyobjc-core>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
