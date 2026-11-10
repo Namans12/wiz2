@@ -37,6 +37,12 @@ balance, screen color profile and wall reflectance were not calibrated.
   run, but the observed median was 313 ms with 14 of 18 cuts matched (earlier:
   312.5 ms with 18 of 18). These small, different samples do not establish a
   latency improvement. The user's settings were not changed.
+- A later 25-second animated-content run reported mean capture time 73.4 ms,
+  p95 205.7 ms, and mean processing time 7.6 ms (p95 11.4 ms), based on the
+  engine's rolling samples. These are application timings on this setup,
+  not screen-to-lamp measurements. A small isolated WinRT capture experiment
+  using copied versus reusable frames did not establish that removing the
+  buffer copy improved capture time, so that optimization was not adopted.
 
 ## Color observations
 

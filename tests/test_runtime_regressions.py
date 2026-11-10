@@ -240,6 +240,29 @@ def test_sync_retries_steady_color_after_sender_callback_fails(monkeypatch):
     assert engine.debug_snapshot["updates_sent"] == 1
 
 
+def test_equal_luminance_color_cut_bypasses_sync_smoothing(monkeypatch):
+    frames = iter([np.full((64, 64, 3), (255, 0, 0), dtype=np.uint8),
+                   np.full((64, 64, 3), (0, 76, 0), dtype=np.uint8)])
+    updates = []
+
+    def send(colors):
+        updates.append(dict(colors))
+        if len(updates) == 2:
+            engine._running = False
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        use_gpu=False, parallel_regions=False, adaptive_fps=False,
+        predictive_smoothing=False, smoothing=0.85))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: next(frames))
+    monkeypatch.setattr(engine, "_extract_colors", lambda frame: {"all": tuple(map(int, frame[0, 0]))})
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: None)
+    engine._running = True
+    engine._sync_loop()
+
+    assert updates == [{"all": (255, 0, 0)}, {"all": (0, 76, 0)}]
+    assert engine.debug_snapshot["cuts_detected"] == 1
+
+
 def test_sync_refreshes_unchanged_scene_after_udp_delivery_may_be_lost(monkeypatch):
     updates = []
     clock = [10.0]

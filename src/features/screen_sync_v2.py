@@ -983,15 +983,15 @@ def extract_dominant_kmeans(
 class MotionDetector:
     """Detects motion between frames for adaptive FPS, plus hard scene cuts.
 
-    Scene cuts are detected via luma-histogram total-variation distance
-    (PySceneDetect-style): panning/motion shifts the histogram slowly, a cut
-    replaces it. Callers use ``last_scene_cut`` to bypass smoothing/gating for
-    one frame so cuts land instantly instead of smearing through the EMA.
+    Scene cuts use luma-histogram distance plus a large change in the frame's
+    mean color. The latter also catches cuts between equally bright hues.
+    Callers use ``last_scene_cut`` to bypass smoothing and gating for one frame.
     """
 
     _CUT_HIST_BINS = 32
     _CUT_HIST_THRESHOLD = 0.30  # total-variation distance (0..1) that counts as a cut
     _CUT_DIFF_THRESHOLD = 0.10  # instantaneous frame diff required alongside it
+    _CUT_COLOR_THRESHOLD = 0.12  # mean absolute RGB change, normalized to 0..1
 
     def __init__(self, threshold: float = 0.015):
         self._threshold = threshold
@@ -1041,11 +1041,20 @@ class MotionDetector:
 
         # Calculate frame difference
         diff = np.abs(small - self._last_frame).mean() / 255.0
+        # Sample spatially before averaging to keep this inexpensive. Comparing
+        # means (rather than pixels) avoids treating a pan of the same colors
+        # as a global ambient-color change.
+        color_change = 0.0
+        if diff > self._CUT_DIFF_THRESHOLD and hist_tv <= self._CUT_HIST_THRESHOLD:
+            mean_rgb = small[::4, ::4].mean(axis=(0, 1))
+            previous_rgb = self._last_frame[::4, ::4].mean(axis=(0, 1))
+            color_change = float(np.abs(mean_rgb - previous_rgb).mean() / 255.0)
         self._last_frame = small
         self._motion_history.append(diff)
 
         self.last_scene_cut = (
-            hist_tv > self._CUT_HIST_THRESHOLD and diff > self._CUT_DIFF_THRESHOLD
+            diff > self._CUT_DIFF_THRESHOLD
+            and (hist_tv > self._CUT_HIST_THRESHOLD or color_change > self._CUT_COLOR_THRESHOLD)
         )
 
         return float(np.mean(self._motion_history))

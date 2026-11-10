@@ -454,6 +454,25 @@ def test_motion_detector_detects_static():
     assert not detector.is_high_motion()
 
 
+def test_motion_detector_detects_equal_luminance_color_cut():
+    detector = MotionDetector()
+    red = np.full((64, 64, 3), (255, 0, 0), dtype=np.uint8)
+    green = np.full((64, 64, 3), (0, 76, 0), dtype=np.uint8)
+    detector.update(red)
+    detector.update(green)
+    assert detector.last_scene_cut
+
+
+def test_motion_detector_does_not_call_color_preserving_pan_a_cut():
+    detector = MotionDetector()
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    frame[:, :32] = (255, 0, 0)
+    frame[:, 32:] = (0, 76, 0)
+    detector.update(frame)
+    detector.update(np.roll(frame, 32, axis=1))
+    assert not detector.last_scene_cut
+
+
 def test_gpu_capture_manager_preserves_dxcam_rgb_channel_order():
     class FakeCamera:
         def grab(self):
