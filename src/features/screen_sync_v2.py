@@ -1149,6 +1149,10 @@ class OptimizedScreenSync:
 
         # Optimization components
         self._gpu_capture: Optional[GPUCaptureManager] = None
+        self._rejected_gpu_capture: Optional[GPUCaptureManager] = None
+        self._gpu_black_since: Optional[float] = None
+        self._gpu_probe_after = 0.0
+        self._gpu_fallback_reason: Optional[str] = None
         self._motion_detector = MotionDetector(self.config.motion_threshold)
         self._color_predictor = ColorPredictor(
             self.config.prediction_frames,
@@ -1180,6 +1184,9 @@ class OptimizedScreenSync:
             raise RuntimeError("Previous screen-sync worker has not stopped")
         
         self._running = True
+        self._gpu_black_since = None
+        self._gpu_probe_after = 0.0
+        self._gpu_fallback_reason = None
         self._motion_detector.reset()
         self._color_predictor.clear()
         self._current_fps = self.config.max_fps if self.config.adaptive_fps else self.config.fps
@@ -1260,6 +1267,9 @@ class OptimizedScreenSync:
         if self._gpu_capture:
             self._gpu_capture.stop()
             self._gpu_capture = None
+        if self._rejected_gpu_capture:
+            self._rejected_gpu_capture.stop()
+            self._rejected_gpu_capture = None
         
         if self._executor:
             self._executor.shutdown(wait=False)
@@ -1285,8 +1295,38 @@ class OptimizedScreenSync:
                 if time.perf_counter() > self._dxcam_recovery_status_until:
                     with self._stats_lock:
                         self._capture_status = "OK"
+                now = time.perf_counter()
+                sample = frame[::max(1, frame.shape[0] // 48), ::max(1, frame.shape[1] // 48)]
+                if np.max(sample) < 8:
+                    if self._gpu_black_since is None:
+                        self._gpu_black_since = now
+                    if now - self._gpu_black_since >= 1.0 and now >= self._gpu_probe_after:
+                        self._gpu_probe_after = now + 2.0
+                        comparison = self._capture_mss_frame()
+                        if comparison is not None:
+                            pixels = comparison[::max(1, comparison.shape[0] // 48),
+                                                ::max(1, comparison.shape[1] // 48)]
+                            if float(np.mean(pixels)) > 12 and float(np.mean(np.max(pixels, axis=2) > 24)) > 0.15:
+                                self._rejected_gpu_capture, self._gpu_capture = self._gpu_capture, None
+                                self._gpu_fallback_reason = "GPU returned black while CPU capture showed a picture"
+                                self._capture_method = "mss"
+                                with self._stats_lock:
+                                    self._capture_status = f"MSS fallback ({self._gpu_fallback_reason})"
+                                return comparison
+                else:
+                    self._gpu_black_since = None
                 return frame
-        
+
+        frame = self._capture_mss_frame()
+        if frame is not None:
+            self._capture_method = "mss"
+            with self._stats_lock:
+                reason = self._gpu_fallback_reason or (f"GPU error: {gpu_error}" if gpu_error else None)
+                self._capture_status = f"MSS fallback ({reason})" if reason else "OK"
+        return frame
+
+    def _capture_mss_frame(self) -> Optional[np.ndarray]:
+        """Capture on the calling worker; this also supports a GPU comparison."""
         # Fallback to mss (created here so the instance is owned by the sync
         # thread — GDI handles are thread-affine on Windows).
         if self._mss_instance is None and self._running:
@@ -1315,11 +1355,6 @@ class OptimizedScreenSync:
                     screenshot.width,
                     4,
                 )
-                self._capture_method = "mss"
-                with self._stats_lock:
-                    self._capture_status = (
-                        f"MSS fallback (GPU error: {gpu_error})" if gpu_error else "OK"
-                    )
                 # Downscale first (view) so the RGB copy is on a small array.
                 raw = _downscale_for_processing(raw)
                 return np.ascontiguousarray(raw[:, :, 2::-1])

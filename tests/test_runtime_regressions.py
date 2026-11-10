@@ -271,3 +271,31 @@ def test_mss_is_closed_on_its_own_capture_thread():
     engine.stop()
     assert ownership["created"] == ownership["closed"]
     assert engine._mss_instance is None
+
+
+@pytest.mark.parametrize("cpu_brightness,expected", [(0, "dxcam"), (180, "mss")])
+def test_black_gpu_falls_back_only_if_cpu_sees_bright_screen(monkeypatch, cpu_brightness, expected):
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=True))
+    gpu = type("FakeGPU", (), {"is_active": True, "last_error": None,
+                               "grab": lambda self: np.zeros((24, 24, 3), dtype=np.uint8)})()
+    engine._gpu_capture = gpu
+    engine._running = True
+    monkeypatch.setattr(engine, "_capture_mss_frame", lambda: np.full((24, 24, 3), cpu_brightness, dtype=np.uint8))
+    now = [10.0]
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: now[0])
+    engine._capture_frame()
+    now[0] += 1.1
+    output = engine._capture_frame()
+    assert engine._capture_method == expected
+    assert int(output.mean()) == (cpu_brightness if expected == "mss" else 0)
+    if expected == "mss":
+        assert engine._rejected_gpu_capture is gpu
+        assert "GPU returned black" in engine._capture_status
+        gpu.stop = lambda: setattr(gpu, "released", True)
+        now[0] += 0.1
+        engine._capture_frame()
+        assert "GPU returned black" in engine._capture_status
+        engine.stop()
+        assert gpu.released
+    else:
+        assert engine._gpu_capture is gpu
