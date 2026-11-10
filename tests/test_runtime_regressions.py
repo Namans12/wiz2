@@ -241,3 +241,33 @@ def test_gpu_failure_never_replays_cached_pixels_and_releases_after_three_errors
     assert not gpu.is_active
     assert camera.released
     assert gpu.last_error == "acquisition failed"
+def test_mss_is_closed_on_its_own_capture_thread():
+    import threading
+    from src.features.screen_sync_v2 import OptimizedCaptureConfig, OptimizedScreenSync
+
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=False))
+    started = threading.Event()
+    stopped = threading.Event()
+    ownership = {}
+
+    class ThreadBoundCapture:
+        def __init__(self):
+            ownership["created"] = threading.get_ident()
+
+        def close(self):
+            ownership["closed"] = threading.get_ident()
+
+    def work():
+        engine._mss_instance = ThreadBoundCapture()
+        started.set()
+        stopped.wait(3)
+
+    engine._sync_loop_inner = work
+    engine._running = True
+    engine._thread = threading.Thread(target=engine._sync_loop)
+    engine._thread.start()
+    assert started.wait(2)
+    stopped.set()
+    engine.stop()
+    assert ownership["created"] == ownership["closed"]
+    assert engine._mss_instance is None

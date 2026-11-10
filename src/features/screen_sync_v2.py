@@ -1265,10 +1265,6 @@ class OptimizedScreenSync:
             self._executor.shutdown(wait=False)
             self._executor = None
         
-        if self._mss_instance:
-            self._mss_instance.close()
-            self._mss_instance = None
-    
     def _capture_frame(self) -> Optional[np.ndarray]:
         """Capture a frame using best available method."""
         # Try GPU capture first
@@ -1556,6 +1552,19 @@ class OptimizedScreenSync:
         return max(base, base + static_extra)
     
     def _sync_loop(self) -> None:
+        """Own and release thread-affine capture resources on this worker."""
+        try:
+            self._sync_loop_inner()
+        finally:
+            capture, self._mss_instance = self._mss_instance, None
+            if capture is not None:
+                try:
+                    capture.close()
+                except Exception as exc:
+                    with self._stats_lock:
+                        self._last_error = f"MSS cleanup failed: {exc}"
+
+    def _sync_loop_inner(self) -> None:
         """Main sync loop with all optimizations."""
         while self._running:
             frame_start = time.perf_counter()
