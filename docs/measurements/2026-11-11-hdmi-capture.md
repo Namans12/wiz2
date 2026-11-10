@@ -40,6 +40,19 @@ balance, screen color profile and wall reflectance were not calibrated.
 
 ## Color observations
 
+In a later capture investigation, GDI/MSS returned black on both displays
+while Windows Graphics Capture returned the changing animation seen on the
+HDMI monitor through the camera. A source-engine probe recovered to Windows
+Graphics Capture and emitted changing color targets without capture errors.
+A 25-second GUI run with the lamp configured also reported Windows Graphics
+Capture, 189 processed frames, 98 submitted color updates and no capture
+error; the previous lamp state was restored with a successful response.
+Submitted updates do not prove UDP delivery or optical color accuracy, and
+this animation run did not produce a valid camera latency measurement.
+When the CPU reference is black, recovery cannot independently verify the
+candidate against that reference; selection still relies on the configured
+GPU output index corresponding to the intended monitor.
+
 Seven static scenes (red, green, blue, cyan, magenta, yellow and white)
 produced the corresponding application color targets through Windows Graphics
 Capture. This verifies the basic scene path, not absolute color accuracy.

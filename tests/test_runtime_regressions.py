@@ -351,6 +351,33 @@ def test_windows_capture_requires_matching_display(monkeypatch, value, accepted)
         candidate.stop.assert_not_called()
     else:
         candidate.stop.assert_called_once()
+
+
+def test_windows_capture_recovers_when_cpu_and_dxgi_both_return_black(monkeypatch):
+    from unittest.mock import Mock
+    candidate = Mock()
+    candidate.start.return_value = True
+    candidate.grab.return_value = np.full((8, 8, 3), 120, dtype=np.uint8)
+    monkeypatch.setattr(sync_module, "GPUCaptureManager", lambda **kwargs: candidate)
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=True))
+    rejected = Mock()
+    engine._gpu_capture = rejected
+    result = engine._try_windows_capture(np.zeros((8, 8, 3), dtype=np.uint8))
+    assert result is not None
+    assert engine._gpu_capture is candidate
+    assert engine._rejected_gpu_capture is rejected
+
+
+def test_cpu_fallback_attempts_windows_capture_after_gpu_start_failure(monkeypatch):
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=True, monitor=1))
+    cpu = np.zeros((8, 8, 3), dtype=np.uint8)
+    recovered = np.full((8, 8, 3), 120, dtype=np.uint8)
+    monkeypatch.setattr(sync_module, "HAS_DXCAM", True)
+    monkeypatch.setattr(engine, "_capture_mss_frame", lambda: cpu)
+    monkeypatch.setattr(engine, "_try_windows_capture", lambda reference: recovered)
+    assert engine._capture_frame() is recovered
+
+
 def test_mss_is_closed_on_its_own_capture_thread():
     import threading
     from src.features.screen_sync_v2 import OptimizedCaptureConfig, OptimizedScreenSync

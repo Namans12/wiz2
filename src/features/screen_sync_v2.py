@@ -1309,15 +1309,17 @@ class OptimizedScreenSync:
                         if comparison is not None:
                             pixels = comparison[::max(1, comparison.shape[0] // 48),
                                                 ::max(1, comparison.shape[1] // 48)]
-                            if float(np.mean(pixels)) > 12 and float(np.mean(np.max(pixels, axis=2) > 24)) > 0.15:
+                            cpu_bright = float(np.mean(pixels)) > 12 and float(np.mean(np.max(pixels, axis=2) > 24)) > 0.15
+                            if getattr(self._gpu_capture, "backend", "dxgi") != "winrt":
+                                alternative = self._try_windows_capture(comparison)
+                                if alternative is not None:
+                                    return alternative
+                            if cpu_bright:
                                 rejected, self._gpu_capture = self._gpu_capture, None
                                 if getattr(rejected, "backend", "dxgi") == "winrt":
                                     rejected.stop()
                                 else:
                                     self._rejected_gpu_capture = rejected
-                                    alternative = self._try_windows_capture(comparison)
-                                    if alternative is not None:
-                                        return alternative
                                 self._gpu_fallback_reason = "GPU returned black while CPU capture showed a picture"
                                 self._capture_method = "mss"
                                 with self._stats_lock:
@@ -1329,6 +1331,12 @@ class OptimizedScreenSync:
 
         frame = self._capture_mss_frame()
         if frame is not None:
+            now = time.perf_counter()
+            if self._gpu_capture is None and should_use_gpu_capture(self.config) and now >= self._gpu_probe_after:
+                self._gpu_probe_after = now + 2.0
+                alternative = self._try_windows_capture(frame)
+                if alternative is not None:
+                    return alternative
             self._capture_method = "mss"
             with self._stats_lock:
                 reason = self._gpu_fallback_reason or (f"GPU error: {gpu_error}" if gpu_error else None)
@@ -1345,8 +1353,13 @@ class OptimizedScreenSync:
         if frame is not None:
             reference_mean = comparison.mean(axis=(0, 1))
             candidate_mean = frame.mean(axis=(0, 1))
-            if np.max(frame) >= 8 and float(np.max(np.abs(reference_mean - candidate_mean))) < 55:
+            cpu_black = float(np.max(comparison)) < 8
+            candidate_bright = float(np.mean(frame)) > 12 and float(np.mean(np.max(frame, axis=2) > 24)) > 0.15
+            if candidate_bright and (cpu_black or float(np.max(np.abs(reference_mean - candidate_mean))) < 55):
+                rejected = self._gpu_capture
                 self._gpu_capture = candidate
+                if rejected is not None and rejected is not candidate:
+                    self._rejected_gpu_capture = rejected
                 self._gpu_black_since = None
                 self._capture_method = "winrt"
                 with self._stats_lock:
