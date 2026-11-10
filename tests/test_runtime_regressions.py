@@ -263,6 +263,29 @@ def test_equal_luminance_color_cut_bypasses_sync_smoothing(monkeypatch):
     assert engine.debug_snapshot["cuts_detected"] == 1
 
 
+def test_predictor_history_tracks_scene_targets_not_smoothed_lamp_output(monkeypatch):
+    targets = iter([(60, 0, 0), (100, 0, 0), (140, 0, 0)])
+    processed = []
+    engine = OptimizedScreenSync(lambda colors: None, OptimizedCaptureConfig(
+        use_gpu=False, parallel_regions=False, adaptive_fps=False,
+        predictive_smoothing=True, smoothing=0.85))
+
+    def extract(frame):
+        target = next(targets)
+        processed.append(target)
+        if len(processed) == 3:
+            engine._running = False
+        return {"all": target}
+
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", extract)
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: None)
+    engine._running = True
+    engine._sync_loop()
+    assert list(engine._color_predictor._history["all"]) == processed
+
+
 def test_sync_refreshes_unchanged_scene_after_udp_delivery_may_be_lost(monkeypatch):
     updates = []
     clock = [10.0]

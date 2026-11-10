@@ -1105,13 +1105,19 @@ class ColorPredictor:
         # Average velocity
         avg_vel = tuple(int(np.mean([v[c] for v in velocities])) for c in range(3))
         
-        # Predict next color
-        predicted = tuple(
-            int(np.clip(current[c] + avg_vel[c] * self._weight, 0, 255))
-            for c in range(3)
-        )
+        # Predict only along a trend the latest observed target still follows.
+        # A pause or reversal must not carry stale momentum past the scene.
+        predicted = []
+        for c in range(3):
+            latest_delta = current[c] - history[-1][c]
+            velocity = avg_vel[c]
+            if velocity * latest_delta <= 0:
+                predicted.append(current[c])
+                continue
+            step = min(abs(velocity), abs(latest_delta)) * self._weight
+            predicted.append(int(np.clip(current[c] + (step if velocity > 0 else -step), 0, 255)))
         
-        return predicted
+        return tuple(predicted)
     
     def clear(self) -> None:
         """Clear all history."""
@@ -1718,6 +1724,7 @@ class OptimizedScreenSync:
                         previous = self._current_colors.get(key)
                         had_current = key in self._current_colors
 
+                    observed_target = target
                     if self._effective_mode == "single" and key == "all":
                         # No hold on cuts, in action profile (kills responsiveness),
                         # or on neutral scenes (holding tints B&W content).
@@ -1729,6 +1736,9 @@ class OptimizedScreenSync:
                         hold_previous = None if skip_hold else previous
                         target = apply_cinematic_palette_hold(target, hold_previous, motion_score)
 
+                    # Remember the unpredicted scene target; feeding the
+                    # smoothed output back into prediction creates momentum
+                    # even after the scene has stopped or reversed.
                     # Apply predictive smoothing
                     if prediction_weight > 0.0 and not black_off:
                         predicted = self._color_predictor.predict(key, target)
@@ -1749,7 +1759,7 @@ class OptimizedScreenSync:
 
                     with self._stats_lock:
                         self._current_colors[key] = smoothed
-                    self._color_predictor.add_sample(key, smoothed)
+                    self._color_predictor.add_sample(key, observed_target)
 
                     # Send gate: perceptual delta, bypassed on scene cuts, with a
                     # periodic force-refresh so slow drifts still reach the bulb.

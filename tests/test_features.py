@@ -581,6 +581,18 @@ def test_color_predictor_handles_missing_key():
     assert predicted == current
 
 
+def test_color_predictor_stops_at_a_pause_or_reversal():
+    predictor = ColorPredictor(history_size=3, weight=0.5)
+    for value in (80, 100, 120):
+        predictor.add_sample("all", (value, 50, 20))
+
+    assert predictor.predict("all", (120, 50, 20)) == (120, 50, 20)
+    assert predictor.predict("all", (110, 50, 20)) == (110, 50, 20)
+    assert predictor.predict("all", (140, 50, 20)) == (150, 50, 20)
+    # A nearly stopped trend cannot carry its old larger velocity forward.
+    assert predictor.predict("all", (121, 50, 20)) == (121, 50, 20)
+
+
 def test_optimized_config_validates_ranges():
     """OptimizedCaptureConfig should clamp values to valid ranges."""
     config = OptimizedCaptureConfig(
