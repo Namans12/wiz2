@@ -208,6 +208,84 @@ def test_brightness_change_updates_steady_zone_when_other_zone_changes_hue(monke
     assert snapshot["processing_time_ms"] >= 0
 
 
+def test_sync_retries_steady_color_after_sender_callback_fails(monkeypatch):
+    attempts = []
+
+    def send(colors):
+        attempts.append(dict(colors))
+        if len(attempts) == 1:
+            raise OSError("sender unavailable")
+        engine._running = False
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        use_gpu=False, parallel_regions=False, adaptive_fps=False))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", lambda frame: {"all": (255, 0, 0)})
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: None)
+    engine._running = True
+    engine._sync_loop()
+
+    assert attempts == [{"all": (255, 0, 0)}, {"all": (255, 0, 0)}]
+    assert engine.debug_snapshot["updates_sent"] == 1
+
+
+def test_sync_refreshes_unchanged_scene_after_udp_delivery_may_be_lost(monkeypatch):
+    updates = []
+    clock = [10.0]
+
+    def send(colors):
+        updates.append((clock[0], dict(colors)))
+        if len(updates) == 2:
+            engine._running = False
+
+    def advance(_duration):
+        clock[0] += 0.5
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        use_gpu=False, parallel_regions=False, adaptive_fps=False))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", lambda frame: {"all": (255, 0, 0)})
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(sync_module.time, "sleep", advance)
+    engine._running = True
+    engine._sync_loop()
+
+    assert updates == [(10.0, {"all": (255, 0, 0)}),
+                       (11.5, {"all": (255, 0, 0)})]
+
+
+def test_steady_zone_refreshes_while_another_zone_keeps_changing(monkeypatch):
+    updates = []
+    clock = [10.0]
+
+    def send(colors):
+        updates.append((clock[0], dict(colors)))
+        if clock[0] >= 11.5:
+            engine._running = False
+
+    def extract(_frame):
+        left = (255, 0, 0) if int((clock[0] - 10.0) * 2) % 2 == 0 else (0, 255, 0)
+        return {"left": left, "right": (0, 0, 255)}
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        mode="zones", active_regions=("left", "right"), use_gpu=False,
+        parallel_regions=False, adaptive_fps=False, predictive_smoothing=False,
+        smoothing=0.05))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", extract)
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: clock.__setitem__(0, clock[0] + 0.5))
+    engine._running = True
+    engine._sync_loop()
+
+    assert "right" in updates[0][1]
+    assert any("left" in colors and "right" not in colors for _, colors in updates[1:-1])
+    assert updates[-1][0] == 11.5 and updates[-1][1]["right"] == (0, 0, 255)
+
+
 @pytest.mark.parametrize("mode", ["follow", "constant"])
 def test_true_black_holds_until_deadline_and_constant_never_turns_off(monkeypatch, mode):
     engine = OptimizedScreenSync(lambda colors: None, OptimizedCaptureConfig(

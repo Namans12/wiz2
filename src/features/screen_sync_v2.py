@@ -1137,7 +1137,7 @@ class OptimizedScreenSync:
         self._frames_processed = 0
         self._last_error: Optional[str] = None
         self._last_loop_time: Optional[float] = None
-        self._last_forced_send_at = 0.0
+        self._last_color_send_at: dict[str, float] = {}
         self._cuts_detected = 0
         self._last_scene_cut = False
         self._last_neutral = 0.0
@@ -1211,7 +1211,7 @@ class OptimizedScreenSync:
             self._frames_processed = 0
             self._last_error = None
             self._last_loop_time = None
-            self._last_forced_send_at = 0.0
+            self._last_color_send_at.clear()
             self._cuts_detected = 0
             self._last_scene_cut = False
             self._last_neutral = 0.0
@@ -1680,8 +1680,6 @@ class OptimizedScreenSync:
                 send_threshold = self._send_delta_threshold(motion_score)
                 with self._stats_lock:
                     self._send_delta_threshold_value = send_threshold
-                force_refresh_due = now - self._last_forced_send_at >= 1.5
-
                 for key, target in target_colors.items():
                     black_off = (
                         self.config.brightness_mode == "follow"
@@ -1731,18 +1729,16 @@ class OptimizedScreenSync:
                     # periodic force-refresh so slow drifts still reach the bulb.
                     with self._stats_lock:
                         last_sent = self._last_sent_colors.get(key)
+                        last_sent_at = self._last_color_send_at.get(key)
                     if last_sent is None or scene_cut:
                         delta = float("inf")
                     else:
                         delta = oklab_distance8(smoothed, last_sent) * OKLAB_DELTA_SCALE
-                    needs_forced = (
-                        force_refresh_due
-                        and last_sent is not None
-                        and delta >= max(2.0, send_threshold / 2.0)
-                    )
+                    # UDP has no delivery acknowledgement. Refresh even an
+                    # unchanged scene so a lost burst or a reconnected bulb
+                    # does not remain on the wrong color indefinitely.
+                    needs_forced = last_sent_at is not None and now - last_sent_at >= 1.5
                     if delta >= send_threshold or needs_forced:
-                        with self._stats_lock:
-                            self._last_sent_colors[key] = smoothed
                         changed_colors[key] = smoothed
                 
                 # Clean up stale keys — but NOT when target_colors is empty on
@@ -1754,6 +1750,7 @@ class OptimizedScreenSync:
                         for key in stale_keys:
                             self._current_colors.pop(key, None)
                             self._last_sent_colors.pop(key, None)
+                            self._last_color_send_at.pop(key, None)
 
                 # Brightness rides the dimming field: when it moves >=5 while
                 # the color holds steady (e.g. a slow fade in follow mode), the
@@ -1780,15 +1777,16 @@ class OptimizedScreenSync:
                     self.on_color_change(changed_colors)
                     now = time.perf_counter()
                     with self._stats_lock:
+                        # Only advance the send gate once the callback accepts
+                        # the update; a synchronous failure must be retried.
+                        self._last_sent_colors.update(changed_colors)
+                        self._last_color_send_at.update(dict.fromkeys(changed_colors, now))
                         if self._last_send_time is not None:
                             self._send_intervals.append(now - self._last_send_time)
                         self._last_send_time = now
                         self._updates_sent += 1
                         self._last_error = None
                         self._last_sent_brightness = out_brightness
-                if changed_colors or self._last_forced_send_at == 0.0:
-                    self._last_forced_send_at = time.perf_counter()
-                
             except Exception as exc:
                 print(f"Screen sync error: {exc}")
                 with self._stats_lock:
