@@ -102,7 +102,7 @@ def pq_decode(e_prime: np.ndarray) -> np.ndarray:
     """ST.2084 (PQ) EOTF: encoded signal [0,1] → linear light [0,1] at 10 000 nits.
 
     The returned value is normalised: 1.0 = 10 000 nits.
-    Divide by ``_PQ_PEAK_NITS`` to get absolute luminance in nits.
+    Multiply by ``_PQ_PEAK_NITS`` to get absolute luminance in nits.
 
     Parameters
     ----------
@@ -160,12 +160,15 @@ def aces_tone_map(
     linear:
         Linear-light signal in [0, 1] where 1.0 = 10 000 nits (PQ reference).
     peak_nits:
-        HDR content peak brightness in nits (e.g. 1000 for HDR10, 2000 for Sony BRAVIA peak).
+        HDR content peak metadata in nits; this approximation does not adapt
+        its curve to the content peak.
     target_nits:
         Effective display output range for the ambient bulb (≈200 nits for strong LED).
     """
-    # Re-scale from PQ nit-reference to target nit-range
-    scale  = peak_nits / _PQ_PEAK_NITS / (target_nits / _PQ_PEAK_NITS)
+    # PQ values are absolute, normalized to 10,000 nits. Content peak is
+    # metadata, not their normalization factor; multiplying by it would
+    # underexpose the same PQ value by 10x for a 1,000-nit source.
+    scale = _PQ_PEAK_NITS / max(float(target_nits), 1e-6)
     x = np.clip(linear.astype(np.float32) * scale, 0.0, None)
 
     # ACES Narkowicz parametric
@@ -358,6 +361,10 @@ class WideGamutFrameProcessor:
     def _tone_map(self, linear: np.ndarray) -> np.ndarray:
         if self.tone_mapper == "reinhard":
             return reinhard_tone_map(linear, white_nits=self.peak_nits)
+        if self.hdr_curve == HDRCurve.HLG:
+            # The existing HLG decoder returns a relative value; preserve its
+            # prior ACES scaling until HLG luminance handling is calibrated.
+            linear = linear * (self.peak_nits / _PQ_PEAK_NITS)
         return aces_tone_map(linear, peak_nits=self.peak_nits, target_nits=self.target_nits)
 
 

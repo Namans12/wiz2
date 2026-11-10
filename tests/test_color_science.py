@@ -1,7 +1,8 @@
 import numpy as np
 
 from src.core.color_mapping import BulbColorProfile, BulbGamutMapper
-from src.core.color_science import ColorSpace, HDRCurve, WideGamutFrameProcessor, compress_to_srgb, detect_hdr_content
+from src.core.color_science import (ColorSpace, HDRCurve, WideGamutFrameProcessor,
+                                    aces_tone_map, compress_to_srgb, detect_hdr_content, pq_decode)
 
 
 def test_gamut_compression_preserves_in_gamut_highlights_and_white():
@@ -47,6 +48,34 @@ def test_hdr_processor_tone_maps_bright_signal():
 
     assert all(0 <= channel <= 255 for channel in mapped)
     assert max(mapped) > 0
+
+
+def test_pq_tone_mapping_uses_absolute_10000_nit_reference():
+    # ST 2084 code value 0.508078 corresponds to approximately 100 nits.
+    linear = pq_decode(np.array([0.508078], dtype=np.float64))
+    np.testing.assert_allclose(linear[0], 0.01, atol=2e-7)
+    result = aces_tone_map(linear, peak_nits=1000, target_nits=200)
+    # 100 nits / 200 nits = 0.5 before the ACES fit.
+    expected = (0.5 * (2.51 * 0.5 + 0.03)) / (0.5 * (2.43 * 0.5 + 0.59) + 0.14)
+    np.testing.assert_allclose(result, [expected], atol=1e-4)
+    np.testing.assert_allclose(result, aces_tone_map(linear, peak_nits=4000, target_nits=200))
+
+
+def test_pq_processor_keeps_reference_white_visible():
+    processor = WideGamutFrameProcessor(source_color_space=ColorSpace.REC2020,
+                                        hdr_curve=HDRCurve.PQ, peak_nits=1000,
+                                        target_nits=200)
+    mapped = processor.process_single((130, 130, 130))
+    assert all(195 <= channel <= 215 for channel in mapped)
+
+
+def test_hlg_aces_scaling_remains_relative_to_its_peak():
+    processor = WideGamutFrameProcessor(source_color_space=ColorSpace.REC2020,
+                                        hdr_curve=HDRCurve.HLG, peak_nits=1000,
+                                        target_nits=200)
+    relative = np.array([0.05, 0.1, 0.2], dtype=np.float32)
+    expected = aces_tone_map(relative * (1000 / 10000), target_nits=200)
+    np.testing.assert_allclose(processor._tone_map(relative), expected)
 
 
 def test_bulb_mapper_source_color_space_changes_payload_for_wide_gamut_input():
