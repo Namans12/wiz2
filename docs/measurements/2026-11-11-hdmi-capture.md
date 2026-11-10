@@ -23,6 +23,14 @@ balance, screen color profile and wall reflectance were not calibrated.
   265.5 ms and 374.5 ms. These are camera threshold-crossing estimates,
   not calibrated display-to-photon latency. Virtual-camera buffering,
   rolling shutter, auto exposure, and screen spill on the wall can bias them.
+- After the tablet feed was resumed, a repeat using the same 55-second pattern
+  observed 18 screen changes and 16 matching wall changes. The median was
+  312.5 ms and the slowest matched change was 500 ms at the same 0.15
+  threshold. The camera interval median was 31 ms (maximum 78 ms). Windows
+  Graphics Capture processed 837 frames and reported no capture error. Two
+  unmatched camera transitions do not by themselves establish whether the
+  bulb, network, or image measurement missed the change. The original lamp
+  settings were restored with a successful device response.
 - A separate exploratory run disabled adaptive FPS and prediction, set
   smoothing to zero, requested 30 FPS, and reduced the color delta threshold
   to 1. It processed 1,553 frames in 55 seconds versus 836 in the earlier

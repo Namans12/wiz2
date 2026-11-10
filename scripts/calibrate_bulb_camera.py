@@ -147,10 +147,18 @@ def open_camera(
         if not ok:
             print("WARNING: camera refused to lock white balance (auto-WB still "
                   "on). Calibration accuracy will suffer — use a UVC webcam.")
+    else:
+        print("WARNING: automatic white balance may change during measurements; "
+              "the resulting calibration may be inaccurate.")
     if exposure is not None:
-        camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # manual mode (DSHOW)
+        if not camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25):  # manual mode (DSHOW)
+            print("WARNING: camera refused manual exposure mode; exposure may "
+                  "change during measurements.")
         if not camera.set(cv2.CAP_PROP_EXPOSURE, float(exposure)):
             print(f"WARNING: camera refused manual exposure {exposure}.")
+    else:
+        print("WARNING: exposure was not locked; automatic exposure may change "
+              "during measurements. Specify --exposure for a supported camera.")
     return camera
 
 
