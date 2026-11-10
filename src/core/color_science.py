@@ -211,11 +211,11 @@ def compress_to_srgb(
     linear_wide: np.ndarray,
     soft_clip_start: float = 0.82,
 ) -> np.ndarray:
-    """Hue-preserving gamut compression from wide-gamut to sRGB.
+    """Fit wide-gamut linear RGB values into the sRGB range.
 
-    Out-of-gamut values (< 0 or > 1 after the gamut matrix) are compressed
-    using a smooth sigmoid so that hue and relative lightness are preserved
-    better than hard clipping.
+    Colors already in gamut pass through. Out-of-gamut colors use the
+    existing per-channel clipping and highlight roll-off heuristic; it does
+    not guarantee hue preservation or a perceptual color match.
 
     Parameters
     ----------
@@ -225,8 +225,15 @@ def compress_to_srgb(
     soft_clip_start:
         Fraction of the [0,1] range at which soft compression begins.
     """
-    # First: hard-clip negative values (below-black, not recoverable)
-    x = np.maximum(linear_wide.astype(np.float64), 0.0)
+    original = linear_wide.astype(np.float64)
+    # Preserve in-gamut colors exactly and blend smoothly into the existing
+    # out-of-gamut heuristic; a hard switch causes visible color jumps near
+    # the gamut boundary (including rounded white-point matrix values).
+    excursion = np.max(np.maximum(np.maximum(-original, original - 1.0), 0.0), axis=-1, keepdims=True)
+    amount = np.clip(excursion / 0.05, 0.0, 1.0)
+    amount = amount * amount * (3.0 - 2.0 * amount)
+    # For out-of-gamut colors retain the existing clipping/roll-off behavior.
+    x = np.maximum(original, 0.0)
 
     # Soft-clip the over-ranged positive values (out-of-gamut high saturation)
     above = x > soft_clip_start
@@ -236,7 +243,8 @@ def compress_to_srgb(
         rolled = soft_clip_start + (1.0 - soft_clip_start) * (1.0 - np.exp(-excess * 2.5))
         x      = np.where(above, rolled, x)
 
-    return np.clip(x, 0.0, 1.0).astype(np.float32)
+    clipped = np.clip(original, 0.0, 1.0)
+    return (clipped + (np.clip(x, 0.0, 1.0) - clipped) * amount).astype(np.float32)
 
 
 # ─── High-level frame processor ─────────────────────────────────────────────────
