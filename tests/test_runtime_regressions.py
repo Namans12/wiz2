@@ -319,6 +319,61 @@ def test_steady_zone_refreshes_while_another_zone_keeps_changing(monkeypatch):
     assert updates[-1][0] == 11.5 and updates[-1][1]["right"] == (0, 0, 255)
 
 
+def test_zone_frame_uses_one_shared_deadline_and_cancels_queued_work(monkeypatch):
+    from concurrent.futures import TimeoutError
+    clock = [10.0]
+    waits = []
+
+    class SlowFuture:
+        cancelled = False
+
+        def result(self, timeout):
+            waits.append(timeout)
+            clock[0] += timeout
+            raise TimeoutError()
+
+        def cancel(self):
+            self.cancelled = True
+
+    futures = [SlowFuture(), SlowFuture()]
+
+    class Executor:
+        def submit(self, *args):
+            return futures.pop(0)
+
+    pending = list(futures)
+    engine = OptimizedScreenSync(lambda colors: None, OptimizedCaptureConfig(
+        mode="zones", active_regions=("left", "right"), parallel_regions=True))
+    engine._executor = Executor()
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: clock[0])
+    assert engine._extract_colors(np.full((64, 64, 3), 128, dtype=np.uint8)) == {}
+    assert sum(waits) == pytest.approx(0.1)
+    assert all(future.cancelled for future in pending)
+
+
+def test_missing_zone_keeps_last_color_until_it_can_be_processed(monkeypatch):
+    updates = []
+    frames = iter([{"left": (255, 0, 0), "right": (0, 0, 255)},
+                   {"left": (0, 255, 0)}])
+
+    def send(colors):
+        updates.append(dict(colors))
+        if len(updates) == 2:
+            engine._running = False
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        mode="zones", active_regions=("left", "right"), parallel_regions=False,
+        adaptive_fps=False, predictive_smoothing=False, smoothing=0.05))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", lambda frame: next(frames))
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: None)
+    engine._running = True
+    engine._sync_loop()
+    assert engine._current_colors["right"] == (0, 0, 255)
+    assert engine._last_sent_colors["right"] == (0, 0, 255)
+
+
 @pytest.mark.parametrize("mode", ["follow", "constant"])
 def test_true_black_holds_until_deadline_and_constant_never_turns_off(monkeypatch, mode):
     engine = OptimizedScreenSync(lambda colors: None, OptimizedCaptureConfig(

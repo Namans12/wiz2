@@ -1530,13 +1530,17 @@ class OptimizedScreenSync:
                 for region in self.config.active_regions
             ]
             boosts: list[float] = []
+            # Bound the whole frame, not each zone independently. Cancel work
+            # that has not started so slow workers cannot accumulate stale
+            # frames in the executor queue.
+            deadline = time.perf_counter() + 0.1
             for future in futures:
                 try:
-                    region, color, effective_boost = future.result(timeout=0.1)
+                    region, color, effective_boost = future.result(timeout=max(0.0, deadline - time.perf_counter()))
                     colors[region] = color
                     boosts.append(effective_boost)
                 except Exception:
-                    pass
+                    future.cancel()
             if boosts:
                 with self._stats_lock:
                     self._effective_color_boost = float(np.mean(boosts))
@@ -1768,7 +1772,11 @@ class OptimizedScreenSync:
                 # force a resend/snap on every un-black transition.
                 if target_colors:
                     with self._stats_lock:
-                        stale_keys = set(self._current_colors) - set(target_colors)
+                        # A slow/failed zone may be absent from this frame;
+                        # keep its previous color until it can be computed.
+                        valid_keys = (set(self.config.active_regions) if self._effective_mode == "zones"
+                                      else set(target_colors))
+                        stale_keys = set(self._current_colors) - valid_keys
                         for key in stale_keys:
                             self._current_colors.pop(key, None)
                             self._last_sent_colors.pop(key, None)
