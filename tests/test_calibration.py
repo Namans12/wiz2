@@ -158,6 +158,18 @@ def test_camera_feed_has_signal_rejects_black_frames():
     assert not camera_feed_has_signal(FakeCamera(frame), frame_count=3)
 
 
+def test_camera_feed_rejects_sparse_centered_loading_spinner():
+    from scripts.calibrate_bulb_camera import frame_has_signal
+
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    yy, xx = np.ogrid[:720, :1280]
+    radius = (xx - 640) ** 2 + (yy - 360) ** 2
+    frame[(radius >= 62 ** 2) & (radius <= 70 ** 2)] = 255
+    assert not frame_has_signal(frame)
+    frame[:] = 32
+    assert frame_has_signal(frame)
+
+
 def test_camera_feed_has_signal_accepts_visible_roi():
     class FakeCamera:
         def __init__(self, frame):

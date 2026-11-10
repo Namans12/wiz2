@@ -179,7 +179,19 @@ def frame_has_signal(
 
     region = region.astype(np.float32)
     mean_value = float(region.mean())
-    nonzero_ratio = float((region > 8.0).any(axis=2).mean())
+    visible = (region > 8.0).any(axis=2)
+    nonzero_ratio = float(visible.mean())
+    if roi is None and 0 < nonzero_ratio < 0.015:
+        # Windows' phone-as-webcam placeholder can be a small white spinner
+        # on a black background, which otherwise looks like a valid image.
+        ys, xs = np.nonzero(visible)
+        height, width = region.shape[:2]
+        centered = (xs.min() >= width * 0.30 and xs.max() < width * 0.70
+                    and ys.min() >= height * 0.30 and ys.max() < height * 0.70)
+        colors = region[visible]
+        nearly_gray = float((colors.max(axis=1) - colors.min(axis=1)).mean()) < 8.0
+        if centered and nearly_gray:
+            return False
     return mean_value >= mean_threshold or nonzero_ratio >= nonzero_threshold
 
 
