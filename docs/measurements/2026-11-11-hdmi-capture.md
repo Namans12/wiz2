@@ -38,3 +38,11 @@ changed the observed balance. Camera auto processing and wall reflectance make
 these observations insufficient to select a calibrated correction or a new
 default. Repeat with fixed camera settings and a measured reference before
 claiming color accuracy or modifying the default white mix.
+
+In a follow-up exploratory sweep with RGB drive fixed at 180, white drive at
+96, and green drive varied, the camera's wall-to-screen relative RGB ratios
+changed from approximately `(1.073, 0.833, 1.094)` at green 180 to
+`(1.029, 0.925, 1.047)` at green 255. Repeating the first setting gave
+`(1.081, 0.833, 1.086)`. This suggests a possible device-specific correction,
+but is not a calibration: the tablet virtual camera rejected requests to lock
+both automatic white balance and manual exposure. No correction was applied.
