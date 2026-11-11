@@ -341,3 +341,19 @@ the delay to individual pipeline stages from these data alone. The initial
 restore attempts timed out; a separate retry succeeded, and `getPilot`
 confirmed the original lamp channels and dimming. No color calibration was
 inferred from the automatically processed camera feed.
+
+An exploratory 81-second A/B run alternated two color changes with the
+current three-send burst plus 150/450 ms settled retries and two with a
+single send and no settled retries. The normal sender's later unchanged-color
+refresh remained enabled for both groups. With 13 camera-paired transitions
+per group, the burst group had a 500 ms median and 1,156 ms maximum; the
+single-send group had a 375 ms median and 2,000 ms maximum. Three single-send
+transitions appeared after 1,500 ms, compared with none in the burst group.
+The lamp's prior state was restored successfully.
+
+This is a small, unblinded test on one bulb and network, using thresholded
+camera observations. It suggests a speed/reliability trade-off, not proof
+that any particular packet was lost or that burst retries cause delay. The
+single-send median includes all 13 paired changes, including the three slow
+ones; excluding them would make the single-send result misleadingly favorable.
+The current retry policy was retained pending broader controlled tests.
