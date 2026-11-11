@@ -180,14 +180,33 @@ def blend_colors(
     )
 
 
+@lru_cache(maxsize=32)
+def _analysis_sample_indices(height: int, width: int, sample_size: int) -> tuple[np.ndarray, np.ndarray]:
+    """Choose a stable, spatially distributed point inside each grid cell."""
+    grid_y = np.arange(sample_size, dtype=np.uint32)[:, None]
+    grid_x = np.arange(sample_size, dtype=np.uint32)[None, :]
+    hashed = grid_x * np.uint32(0x9E3779B9) + grid_y * np.uint32(0x85EBCA6B)
+    hashed ^= hashed >> np.uint32(16)
+    hashed *= np.uint32(0x7FEB352D)
+    hashed ^= hashed >> np.uint32(15)
+    hashed *= np.uint32(0x846CA68B)
+    hashed ^= hashed >> np.uint32(16)
+    y0 = (grid_y * height) // sample_size
+    x0 = (grid_x * width) // sample_size
+    y_span = np.maximum(((grid_y + 1) * height) // sample_size - y0, 1)
+    x_span = np.maximum(((grid_x + 1) * width) // sample_size - x0, 1)
+    rows = np.minimum(y0 + hashed % y_span, height - 1)
+    cols = np.minimum(x0 + (hashed // y_span) % x_span, width - 1)
+    return rows, cols
+
+
 def _sample_even_rgb(image: np.ndarray, sample_size: int) -> np.ndarray:
-    """Sample the centers of an even grid spanning the entire image."""
+    """Sample one point per grid cell without a fixed sampling phase."""
     height, width = image.shape[:2]
     if height <= 0 or width <= 0:
         return np.zeros((sample_size, sample_size, 3), dtype=image.dtype)
-    rows = ((2 * np.arange(sample_size) + 1) * height) // (2 * sample_size)
-    cols = ((2 * np.arange(sample_size) + 1) * width) // (2 * sample_size)
-    return image[rows[:, None], cols[None, :], :3]
+    rows, cols = _analysis_sample_indices(height, width, sample_size)
+    return image[rows, cols, :3]
 
 
 def _sample_pixels(

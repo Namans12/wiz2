@@ -120,6 +120,28 @@ def test_downsample_retains_fine_repeating_colors_for_single_bulb():
     np.testing.assert_array_equal(sampled, GPUCaptureManager._to_rgb(frame))
 
 
+@pytest.mark.parametrize("axis", [0, 1])
+def test_final_analysis_samples_both_colors_in_repeating_grid_pattern(axis):
+    from src.features.screen_sync_v2 import _sample_even_rgb
+
+    image = np.zeros((640, 640, 3), dtype=np.uint8)
+    stripes = np.arange(640) % 20 < 10
+    if axis == 0:
+        image[stripes, :, 0] = 255
+        image[~stripes, :, 2] = 255
+    else:
+        image[:, stripes, 0] = 255
+        image[:, ~stripes, 2] = 255
+    sampled = _sample_even_rgb(image, 32)
+    red, green, blue = sampled.mean(axis=(0, 1))
+    assert 110 < red < 145
+    assert green == 0
+    assert 110 < blue < 145
+    red, green, blue = extract_cinematic_single_color(image)
+    assert red > 100 and blue > 100 and green < 10
+    np.testing.assert_array_equal(sampled, _sample_even_rgb(image, 32))
+
+
 @pytest.mark.parametrize("width", [1280, 1920, 2560, 3840])
 @pytest.mark.parametrize("axis", [0, 1])
 def test_downsample_represents_alternating_pixel_lines(width, axis):

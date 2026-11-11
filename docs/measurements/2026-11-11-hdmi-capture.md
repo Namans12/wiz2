@@ -293,3 +293,14 @@ Its prior state was restored. This confirms the screen-to-command path, not
 the optical result. A separate warmed 1080p conversion benchmark on this PC
 measured a 2.21 ms median over 150 calls; it is not a controlled before/after
 latency measurement.
+
+The final scene-analysis grid had a similar independent aliasing issue: for a
+synthetic image with equal red and blue stripes repeating every 20 pixels,
+the former 32-by-32 cell-center sample saw only blue. Stable distributed
+sampling within each cell now retains both colors in horizontal and vertical
+tests. A live HDMI run with alternating 30-pixel red and blue bands produced
+target `(255, 5, 248)`, mapped to RGBW `(235, 5, 241, 0)`, which the lamp
+reported receiving; its prior state was restored. This is not an optical
+measurement or proof that all spatial patterns are alias-free. A warmed
+32-by-32 analysis sample took a 17.8 µs median over 3,000 calls on this PC;
+that standalone measurement does not establish an end-to-end latency change.
