@@ -401,3 +401,20 @@ median 398.5 ms, range 125–641 ms. Capture reported no errors and the lamp
 state was restored. This separate run is not a controlled before/after
 comparison; the camera, single bulb, network, colors, and thresholds limit
 the conclusion. Automated tests also cover cancellation with three retries.
+
+After that sender change, a 72-second live sequence held each of twelve
+full-screen colors for six seconds: red, green, blue, cyan, magenta, yellow,
+white, mid-gray, orange, violet, teal and pink. Capture reported 1,077 frames
+and no error; the connected camera recorded 2,187 frames. The last successful
+locally sent payload in each interval had the expected active RGB channels;
+white and gray used the user's device-specific neutral-white mix, with gray
+using lower dimming. The camera showed corresponding changes in wall color.
+The initial lamp state was restored and acknowledged.
+
+These observations are a broad functional check, not an accuracy calibration
+or a delivery confirmation for every datagram. The camera's automatic
+processing and clipping were substantial: for example, its median screen
+sample of the nominal pure-blue scene was approximately RGB `(18, 198, 249)`.
+Monitor color, camera white balance/exposure, wall reflectance and screen
+spill have not been independently characterized, so no per-color accuracy
+or precise latency claims follow from this sequence.
