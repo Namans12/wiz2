@@ -469,3 +469,9 @@ in this trace, so they cannot be assigned reliably to individual color
 changes. No optical latency or packet-loss rate can be inferred from this
 run. The lamp's prior state was restored and acknowledged. A valid retest
 requires the normal desktop and the test pattern visible to the camera.
+
+The analysis report now also includes a per-transition timeline, the
+observation window before the next screen change or recording end, and a
+95th percentile across all observed responses including late ones. Reanalysis
+located the earlier 1,922 ms red response at 35.875 seconds in that trace.
+These are camera-arrival timestamps, not light sensor exposure timestamps.

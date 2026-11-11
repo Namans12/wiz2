@@ -66,7 +66,23 @@ def summarize_transition_delays(screen, light, times, max_latency_ms):
     all_delays = sorted((times[b] - times[a]) * 1000 for a, b, _ in pairs)
     delays = [delay for delay in all_delays if delay <= max_latency_ms]
     late = [delay for delay in all_delays if delay > max_latency_ms]
+    paired_frames = {screen_frame: light_frame for screen_frame, light_frame, _ in pairs}
+    timeline = []
+    for index, (screen_frame, state) in enumerate(screen):
+        light_frame = paired_frames.get(screen_frame)
+        delay = None if light_frame is None else (times[light_frame] - times[screen_frame]) * 1000
+        end = screen[index + 1][0] if index + 1 < len(screen) else len(times) - 1
+        timeline.append({
+            "screen_frame": screen_frame,
+            "screen_time_s": times[screen_frame] - times[0],
+            "color": "red" if state == 1 else "blue",
+            "light_frame": light_frame,
+            "delay_ms": delay,
+            "status": "unobserved" if delay is None else "late" if delay > max_latency_ms else "within_limit",
+            "observation_window_ms": (times[end] - times[screen_frame]) * 1000,
+        })
     return {
+        "latency_limit_ms": max_latency_ms,
         "matched_transitions": len(delays),
         # Kept for compatibility: includes late and entirely unobserved changes.
         "unmatched_screen_transitions": len(screen) - len(delays),
@@ -75,7 +91,9 @@ def summarize_transition_delays(screen, light, times, max_latency_ms):
         "unobserved_before_next_transition_or_end": len(screen) - len(pairs),
         "all_observed_transitions": len(all_delays),
         "all_observed_median_ms": statistics.median(all_delays) if all_delays else None,
+        "all_observed_p95_ms": all_delays[math.ceil(len(all_delays) * .95) - 1] if all_delays else None,
         "all_observed_max_ms": max(all_delays) if all_delays else None,
+        "transition_timeline": timeline,
         "median_ms": statistics.median(delays) if delays else None,
         "p95_ms": delays[math.ceil(len(delays) * .95) - 1] if delays else None,
         "max_ms": max(delays) if delays else None,

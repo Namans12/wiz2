@@ -36,6 +36,12 @@ def test_reports_late_and_missing_transitions_separately():
     assert result["unmatched_screen_transitions"] == 2
     assert result["all_observed_median_ms"] == pytest.approx(1050)
     assert result["all_observed_max_ms"] == pytest.approx(1900)
+    assert result["all_observed_p95_ms"] == pytest.approx(1900)
+    assert [event["status"] for event in result["transition_timeline"]] == ["within_limit", "late", "unobserved"]
+    assert result["transition_timeline"][1]["color"] == "red"
+    assert result["transition_timeline"][1]["screen_frame"] == 30
+    assert result["transition_timeline"][1]["light_frame"] == 49
+    assert result["transition_timeline"][2]["observation_window_ms"] == pytest.approx(1900)
 
 
 def test_roi_score_and_bounds():
