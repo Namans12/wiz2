@@ -25,7 +25,9 @@ _BURST_REPEATS = 3
 _BURST_GAP = 0.003
 # A short burst can be lost as a group during Wi-Fi contention. Repeat a
 # settled update later, but cancel these retries as soon as a newer one queues.
-_SETTLED_RETRY_DELAYS = (0.15, 0.45)
+# The earlier retry is an additional recovery opportunity; the later retry
+# still covers longer loss bursts. Each adds one datagram per settled change.
+_SETTLED_RETRY_DELAYS = (0.06, 0.15, 0.45)
 
 _FMT_5 = (
     b'{"method":"setPilot","params":{"state":%s,'

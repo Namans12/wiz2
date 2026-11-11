@@ -252,11 +252,11 @@ def test_new_udp_color_cancels_previous_settled_retries(monkeypatch):
         def send(self, packet):
             self.packets.append(packet)
             self.times.append((packet, time.monotonic()))
-            if self.packets.count(b"new") >= 5:
+            if self.packets.count(b"new") >= 6:
                 self.completed.set()
 
     socket = Socket()
-    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.08, 0.18))
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.04, 0.08, 0.18))
     monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
     sender = udp.BulbUDPSocket("synthetic", max_send_hz=1000)
     try:

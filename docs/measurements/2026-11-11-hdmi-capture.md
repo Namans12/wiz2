@@ -384,3 +384,20 @@ with a 469 ms median and 828 ms maximum. The lamp state was restored. The
 extra packet increases network traffic, and this single small run cannot
 establish a general improvement or characterize multiple bulbs under load.
 No production timing was changed based on this experiment.
+
+A reverse-order repeat of the extra-retry comparison paired all 13 screen
+transitions in each group: the existing schedule had a 469 ms median and
+796 ms maximum, while the extra-retry schedule had a 422 ms median and
+656 ms maximum. Across both runs, 25 of 26 existing-schedule transitions
+were paired (469 ms median, 1,031 ms maximum), versus 26 of 26 extra-retry
+transitions (429.5 ms median, 828 ms maximum). These modest samples justify
+trying the additional retry, not a claim of guaranteed improvement.
+
+The desktop sender now uses 60/150/450 ms settled retries, cancelling older
+retries on a new update. It sends one additional datagram for a settled color
+change, increasing traffic. In a subsequent 55-second live test of the actual
+updated sender, all 18 screen transitions were paired with wall transitions:
+median 398.5 ms, range 125–641 ms. Capture reported no errors and the lamp
+state was restored. This separate run is not a controlled before/after
+comparison; the camera, single bulb, network, colors, and thresholds limit
+the conclusion. Automated tests also cover cancellation with three retries.
