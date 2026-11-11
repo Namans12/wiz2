@@ -34,6 +34,19 @@ balance, screen color profile and wall reflectance were not calibrated.
   These small sequential samples with polling timeouts do not establish an
   optical latency improvement. A new camera recording is needed to compare
   visible response under similar conditions.
+- A second tablet recording after the retry change was analyzed using the same
+  0.15 red/blue threshold and video frame timestamps. For both recordings,
+  the first two setup cuts and the final incomplete interval were excluded;
+  the known three-second pattern cadence also excluded two short false screen
+  detections in the second recording. Before: 39 of 41 cuts matched, median
+  333 ms, p95 1,899 ms, maximum 1,933 ms, and four matched delays exceeded one
+  second. After: 57 of 57 cuts matched, median 400 ms, p95 900 ms, maximum
+  1,033 ms, and one matched delay exceeded one second. Both recordings were
+  sampled at about 30 fps and the camera position changed slightly; automatic
+  shutter/exposure and wall spill remain possible. These sequential runs
+  suggest fewer missed changes and shorter long delays, but do not prove the
+  retry change caused the difference. The median was higher in the later run,
+  and no broad color-accuracy claim follows from red/blue tests.
 
 - DXGI capture returned black while CPU capture saw a picture. Windows
   Graphics Capture followed full-screen red and blue test patterns. The app
