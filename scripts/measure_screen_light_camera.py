@@ -21,32 +21,29 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.analyze_screen_light_latency import overlaps, pair_transitions, parse_roi, score, transitions  # noqa: E402
+from scripts.analyze_screen_light_latency import overlaps, parse_roi, score, summarize_transition_delays, transitions  # noqa: E402
 
 
 def summarize(samples, threshold=0.15, stable_frames=2, max_latency_ms=1500):
     """Use actual frame-arrival timestamps rather than an assumed video FPS."""
     times = [sample[0] for sample in samples]
-    if any(not math.isfinite(t) for t in times) or any(b <= a for a, b in zip(times, times[1:])):
-        raise ValueError("frame timestamps must be finite and strictly increasing")
+    # Frame arrival timestamps can be identical when the platform clock has
+    # coarser resolution than the camera read loop; only time reversal is invalid.
+    if any(not math.isfinite(t) for t in times) or any(b < a for a, b in zip(times, times[1:])):
+        raise ValueError("frame timestamps must be finite and nondecreasing")
     screen = transitions([sample[1] for sample in samples], threshold, stable_frames)
     light = transitions([sample[2] for sample in samples], threshold, stable_frames)
-    pairs = pair_transitions(screen, light, len(samples))
-    delays = sorted((times[b] - times[a]) * 1000 for a, b, _ in pairs
-                    if (times[b] - times[a]) * 1000 <= max_latency_ms)
+    timing = summarize_transition_delays(screen, light, times, max_latency_ms)
     intervals = [(b - a) * 1000 for a, b in zip(times, times[1:])]
     return {
         "scope": "camera-visible threshold crossing; timestamps are frame arrivals, not sensor exposure times",
         "frames": len(samples), "screen_transitions": len(screen),
-        "matched_transitions": len(delays), "unmatched_screen_transitions": len(screen) - len(delays),
-        "median_ms": statistics.median(delays) if delays else None,
-        "p95_ms": delays[math.ceil(len(delays) * .95) - 1] if delays else None,
-        "max_ms": max(delays) if delays else None,
+        **timing,
         "frame_interval_median_ms": statistics.median(intervals) if intervals else None,
         "frame_interval_max_ms": max(intervals) if intervals else None,
+        "equal_timestamp_intervals": sum(interval == 0 for interval in intervals),
         "threshold": threshold, "stable_frames": stable_frames,
-        "samples_ms": delays,
-        "limitations": "Camera exposure, rolling shutter, virtual-camera buffering and screen spill may bias results. Camera color accuracy is not calibrated.",
+        "limitations": "Camera exposure, rolling shutter, virtual-camera buffering, timestamp resolution and screen spill may bias results. Camera color accuracy is not calibrated.",
     }
 
 

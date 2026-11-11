@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pytest
 
-from scripts.analyze_screen_light_latency import overlaps, pair_transitions, parse_roi, score, transitions
+from scripts.analyze_screen_light_latency import overlaps, pair_transitions, parse_roi, score, summarize_transition_delays, transitions
 from scripts.measure_screen_light_camera import summarize
 
 
@@ -22,6 +22,20 @@ def test_pairs_only_matching_changes_before_the_next_screen_cut():
     screen = [(10, -1), (30, 1), (50, -1)]
     light = [(8, 1), (13, -1), (33, 1), (80, -1)]
     assert pair_transitions(screen, light, max_frames=20) == [(10, 13, -1), (30, 33, 1)]
+
+
+def test_reports_late_and_missing_transitions_separately():
+    times = [i * .1 for i in range(80)]
+    screen = [(10, -1), (30, 1), (60, -1)]
+    light = [(12, -1), (49, 1)]
+    result = summarize_transition_delays(screen, light, times, 1500)
+    assert result["matched_transitions"] == 1
+    assert result["late_transitions"] == 1
+    assert result["late_samples_ms"] == pytest.approx([1900])
+    assert result["unobserved_before_next_transition_or_end"] == 1
+    assert result["unmatched_screen_transitions"] == 2
+    assert result["all_observed_median_ms"] == pytest.approx(1050)
+    assert result["all_observed_max_ms"] == pytest.approx(1900)
 
 
 def test_roi_score_and_bounds():
@@ -57,6 +71,14 @@ def test_video_analysis_reports_known_frame_delay(tmp_path):
     report = json.loads(result.stdout)
     assert report["matched_transitions"] == 5
     assert report["median_ms"] == pytest.approx(200.0)
+    late = subprocess.run([sys.executable, str(script), str(video),
+                           "--screen-roi", "0,0,32,32", "--light-roi", "32,0,32,32",
+                           "--max-latency-ms", "100"], capture_output=True, text=True, timeout=20)
+    assert late.returncode == 1
+    late_report = json.loads(late.stdout)
+    assert late_report["late_transitions"] == 5
+    assert late_report["all_observed_max_ms"] == pytest.approx(200)
+    assert late_report["unobserved_before_next_transition_or_end"] == 0
 
 
 def test_timestamped_measurement_uses_real_frame_intervals():
@@ -68,5 +90,6 @@ def test_timestamped_measurement_uses_real_frame_intervals():
     assert report["matched_transitions"] == 1
     assert report["median_ms"] == pytest.approx(100)
     assert report["frame_interval_max_ms"] == pytest.approx(70)
+    assert summarize([(0.0, 1, 1), (0.0, -1, -1)])["equal_timestamp_intervals"] == 1
     with pytest.raises(ValueError):
-        summarize([(0.0, 1, 1), (0.0, -1, -1)])
+        summarize([(0.1, 1, 1), (0.0, -1, -1)])

@@ -448,3 +448,13 @@ maximum. All transitions in this particular run were under 1.5 seconds, so
 it did not reproduce the long tail the experiment was intended to investigate.
 The shorter interval also increases steady-state traffic. This small run does
 not justify changing the default; the lamp state was restored.
+
+The recorded-video and timestamped-camera analyzers now report matched
+responses beyond the configured cutoff separately, along with responses not
+observed before the next transition or recording end. Their original
+within-cutoff statistics remain available. The timestamped analyzer also
+accepts equal adjacent frame-arrival times caused by clock resolution and
+reports how many occurred. Reanalyzing the 18-transition trace above reports
+17 within the cutoff, one late at 1,922 ms, and none unobserved; one pair of
+frame timestamps was equal. These changes make the limitation visible rather
+than improving the physical lamp latency.

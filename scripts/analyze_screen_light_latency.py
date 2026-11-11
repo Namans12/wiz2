@@ -60,6 +60,29 @@ def pair_transitions(screen, light, max_frames: int):
     return samples
 
 
+def summarize_transition_delays(screen, light, times, max_latency_ms):
+    """Report late changes separately instead of silently dropping their delays."""
+    pairs = pair_transitions(screen, light, len(times))
+    all_delays = sorted((times[b] - times[a]) * 1000 for a, b, _ in pairs)
+    delays = [delay for delay in all_delays if delay <= max_latency_ms]
+    late = [delay for delay in all_delays if delay > max_latency_ms]
+    return {
+        "matched_transitions": len(delays),
+        # Kept for compatibility: includes late and entirely unobserved changes.
+        "unmatched_screen_transitions": len(screen) - len(delays),
+        "late_transitions": len(late),
+        "late_samples_ms": late,
+        "unobserved_before_next_transition_or_end": len(screen) - len(pairs),
+        "all_observed_transitions": len(all_delays),
+        "all_observed_median_ms": statistics.median(all_delays) if all_delays else None,
+        "all_observed_max_ms": max(all_delays) if all_delays else None,
+        "median_ms": statistics.median(delays) if delays else None,
+        "p95_ms": delays[math.ceil(len(delays) * .95) - 1] if delays else None,
+        "max_ms": max(delays) if delays else None,
+        "samples_ms": delays,
+    }
+
+
 def parse_roi(value: str) -> tuple[int, int, int, int]:
     try:
         coords = tuple(int(part.strip()) for part in value.split(","))
@@ -119,22 +142,17 @@ def main() -> int:
         camera.release()
     source = transitions(screen_scores, args.threshold, args.stable_frames)
     target = transitions(light_scores, args.threshold, args.stable_frames)
-    matches = pair_transitions(source, target, int(args.max_latency_ms * fps / 1000))
-    delays = sorted((light - screen) * 1000 / fps for screen, light, _ in matches)
+    timing = summarize_transition_delays(source, target, [i / fps for i in range(len(screen_scores))], args.max_latency_ms)
     report = {
         "scope": "camera-visible red/blue transition delay; assumes constant frame rate",
         "fps": fps, "frame_interval_ms": 1000 / fps,
         "screen_transitions": len(source), "light_transitions": len(target),
-        "matched_transitions": len(delays), "unmatched_screen_transitions": len(source) - len(delays),
-        "median_ms": statistics.median(delays) if delays else None,
-        "p95_ms": delays[math.ceil(len(delays) * 0.95) - 1] if delays else None,
-        "max_ms": max(delays) if delays else None,
-        "samples_ms": delays,
-        "low_sample_count": len(delays) < 5,
+        **timing,
+        "low_sample_count": timing["matched_transitions"] < 5,
         "limitations": "Threshold crossing, frame sampling, rolling shutter, exposure and dropped frames affect results; verify ROI signals and constant frame rate.",
     }
     print(json.dumps(report, indent=2))
-    return 0 if delays else 1
+    return 0 if timing["matched_transitions"] else 1
 
 
 if __name__ == "__main__":
