@@ -304,3 +304,12 @@ reported receiving; its prior state was restored. This is not an optical
 measurement or proof that all spatial patterns are alias-free. A warmed
 32-by-32 analysis sample took a 17.8 µs median over 3,000 calls on this PC;
 that standalone measurement does not establish an end-to-end latency change.
+
+An equal-luma synthetic scene change exposed another fixed-stride bias in the
+mean-color check used for detecting cuts. A large red-to-green change between
+regularly spaced red columns was missed, allowing smoothing to continue. The
+mean-color check now uses the stable distributed analysis grid. In a live
+HDMI test, a patterned red-to-green change was detected as a cut 110 ms
+after the test window's change call, and the lamp reported the mapped color;
+its prior state was restored. This is not an optical delay measurement and
+does not remove every possible alias in the motion detector's initial stride.

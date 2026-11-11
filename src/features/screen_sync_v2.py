@@ -1110,8 +1110,10 @@ class MotionDetector:
         # as a global ambient-color change.
         color_change = 0.0
         if diff > self._CUT_DIFF_THRESHOLD and hist_tv <= self._CUT_HIST_THRESHOLD:
-            mean_rgb = small[::4, ::4].mean(axis=(0, 1))
-            previous_rgb = self._last_frame[::4, ::4].mean(axis=(0, 1))
+            # A fixed phase can miss an entire changed pattern (for example,
+            # every eighth column), masking a real change in ambient color.
+            mean_rgb = _sample_even_rgb(small, 32).mean(axis=(0, 1))
+            previous_rgb = _sample_even_rgb(self._last_frame, 32).mean(axis=(0, 1))
             color_change = float(np.abs(mean_rgb - previous_rgb).mean() / 255.0)
         self._last_frame = small
         self._motion_history.append(diff)

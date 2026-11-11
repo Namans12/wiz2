@@ -142,6 +142,18 @@ def test_final_analysis_samples_both_colors_in_repeating_grid_pattern(axis):
     np.testing.assert_array_equal(sampled, _sample_even_rgb(image, 32))
 
 
+def test_scene_cut_detects_changed_color_between_fixed_stride_columns():
+    # Red and this green have approximately equal luma. The red columns at
+    # x=0,8,... previously hid the change from the color-mean stride sample.
+    before = np.full((360, 640, 3), (255, 0, 0), dtype=np.uint8)
+    after = np.full_like(before, (0, 76, 0))
+    after[:, ::8] = (255, 0, 0)
+    detector = MotionDetector()
+    detector.update(before)
+    detector.update(after)
+    assert detector.last_scene_cut
+
+
 @pytest.mark.parametrize("width", [1280, 1920, 2560, 3840])
 @pytest.mark.parametrize("axis", [0, 1])
 def test_downsample_represents_alternating_pixel_lines(width, axis):
