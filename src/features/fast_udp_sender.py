@@ -23,6 +23,9 @@ _CACHE_EVICT_SIZE = 512
 # loss insurance). Unchanged repeats (heartbeat/force-refresh) send once.
 _BURST_REPEATS = 3
 _BURST_GAP = 0.003
+# A short burst can be lost as a group during Wi-Fi contention. Repeat a
+# settled update later, but cancel these retries as soon as a newer one queues.
+_SETTLED_RETRY_DELAYS = (0.15, 0.45)
 
 _FMT_5 = (
     b'{"method":"setPilot","params":{"state":%s,'
@@ -148,16 +151,37 @@ class BulbUDPSocket:
             self._thread.join(timeout=1.0)
 
     def _run(self) -> None:
+        retry_packet: bytes | None = None
+        retry_deadlines: list[float] = []
         try:
             while not self._stop_event.is_set():
+                timeout = max(0.0, retry_deadlines[0] - time.perf_counter()) if retry_deadlines else 1.0
                 try:
-                    item = self._queue.get(timeout=1.0)
+                    item = self._queue.get(timeout=timeout)
                 except queue.Empty:
+                    if not retry_deadlines or retry_packet is None:
+                        continue
+                    with self._state_lock:
+                        if not self._running:
+                            return
+                        # Queueing and this check share the same lock, so a
+                        # newer color cannot be followed by a stale retry.
+                        if not self._queue.empty():
+                            continue
+                        success = self._send_raw(retry_packet)
+                        if success:
+                            self._datagrams_sent += 1
+                            self._last_error = None
+                        else:
+                            self._send_errors += 1
+                    retry_deadlines.pop(0)
                     continue
                 if item is self._SENTINEL:
                     return
                 if not isinstance(item, bytes):
                     continue
+                retry_packet = None
+                retry_deadlines.clear()
                 wait_time = self._min_interval - (time.perf_counter() - self._last_send_at)
                 if self._stop_event.wait(max(0.0, wait_time)):
                     return
@@ -193,6 +217,9 @@ class BulbUDPSocket:
                         self._last_packet_sent = packet
                         self._sent += 1
                     self._last_send_at = time.perf_counter()
+                    if sent_any and repeats > 1:
+                        retry_packet = packet
+                        retry_deadlines = [self._last_send_at + delay for delay in _SETTLED_RETRY_DELAYS]
         finally:
             try:
                 self._socket.close()
@@ -221,7 +248,8 @@ class BulbUDPSocket:
         """Successful socket sends, not acknowledgements from the bulb.
 
         The legacy sent count remains update groups; datagrams_sent includes
-        burst copies. Failed groups do not count as sent.
+        burst and settled-retry copies. Send errors count failed datagrams,
+        including retries; failed groups do not count as sent.
         """
         with self._state_lock:
             return {

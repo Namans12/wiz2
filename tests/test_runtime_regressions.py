@@ -3,6 +3,7 @@
 import asyncio
 import json
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -147,6 +148,58 @@ def test_failed_send_group_is_not_reported_as_sent(monkeypatch):
     assert stats["sent"] == stats["datagrams_sent"] == 0
     assert stats["attempted"] == stats["send_errors"] == 1
     assert stats["last_error"] == "synthetic send failure"
+
+
+def test_settled_udp_update_is_retried_after_initial_burst(monkeypatch):
+    class Socket(FakeSocket):
+        def send(self, packet):
+            self.packets.append(packet)
+            if len(self.packets) == 5:
+                self.completed.set()
+
+    socket = Socket()
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.04, 0.10))
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic")
+    try:
+        assert sender.send(b"color")
+        assert socket.completed.wait(2)
+    finally:
+        sender.stop()
+    assert socket.packets == [b"color"] * 5
+    assert sender.stats["datagrams_sent"] == 5
+
+
+def test_new_udp_color_cancels_previous_settled_retries(monkeypatch):
+    class Socket(FakeSocket):
+        def __init__(self):
+            super().__init__()
+            self.times = []
+
+        def send(self, packet):
+            self.packets.append(packet)
+            self.times.append((packet, time.monotonic()))
+            if self.packets.count(b"new") >= 5:
+                self.completed.set()
+
+    socket = Socket()
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.08, 0.18))
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic", max_send_hz=1000)
+    try:
+        assert sender.send(b"old")
+        deadline = time.monotonic() + 2
+        while socket.packets.count(b"old") < 3 and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert socket.packets.count(b"old") == 3
+        assert sender.send(b"new")
+        new_queued_at = time.monotonic()
+        assert socket.completed.wait(2)
+    finally:
+        sender.stop()
+    first_new = socket.packets.index(b"new")
+    assert b"old" not in socket.packets[first_new:]
+    assert not any(packet == b"old" and sent_at > new_queued_at for packet, sent_at in socket.times)
 
 
 def test_closed_pool_cannot_recreate_sender_when_producer_races_close(monkeypatch):

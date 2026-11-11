@@ -9,6 +9,32 @@ balance, screen color profile and wall reflectance were not calibrated.
 
 ## Capture and timing
 
+- A later tablet Pro Video recording showed 44 red/blue screen transitions.
+  Using the video frame timestamps and the wall region's 0.15 red/blue
+  threshold, 42 changes matched before the next screen change. The median
+  matched delay was 333 ms, p95 1,833 ms, and maximum 1,933 ms. Four matched
+  changes took 1.8–1.9 seconds. One blue change did not visibly arrive before
+  the next red change, which also left that red change unmatched by the
+  alternating-state detector. The earlier 1.5-second analysis cutoff hid
+  those four late matches as unmatched. The recording was about 30 fps, so
+  frame sampling alone resolves time only to roughly 33 ms. White balance and
+  ISO were set manually; shutter/exposure mode was not confirmed locked.
+  Screen light on the wall, exposure, display scanout and rolling shutter can
+  bias threshold-based measurements. These results do not measure UDP delivery
+  or prove the cause of the late/missed transition.
+- A separate status-polling probe recorded app packet submissions and
+  `getPilot` responses during red/blue transitions. In several slow cases,
+  three local sends succeeded within roughly 100 ms but the bulb continued
+  reporting its old color until after the 1.5-second refresh. This is
+  consistent with burst loss, though successful local sends do not prove
+  network delivery and polling can itself affect timing. A follow-up run with
+  additional cancellable retries at 150 and 450 ms observed 24 of 24 complete
+  test changes, versus 23 of 24 in the first probe. The slowest observed
+  response was 1,281 ms versus 1,859 ms; medians were 414 ms versus 375 ms.
+  These small sequential samples with polling timeouts do not establish an
+  optical latency improvement. A new camera recording is needed to compare
+  visible response under similar conditions.
+
 - DXGI capture returned black while CPU capture saw a picture. Windows
   Graphics Capture followed full-screen red and blue test patterns. The app
   switched from DXGI to Windows Graphics Capture in a live test.
