@@ -329,3 +329,15 @@ camera, automatic camera processing, and wall reflection; they do not isolate
 capture, network, bulb, or camera latency. The camera cadence limits precision,
 the unmatched transition is excluded, and this is not a controlled comparison
 with previous recordings. The variation and longest delays remain unresolved.
+
+A second 55-second run logged local UDP sends alongside connected-camera
+samples. Seventeen matched screen-to-wall transitions within 1.5 seconds had
+a 422 ms median, ranging from 172 to 1,015 ms; camera frame intervals had a
+31 ms median and 78 ms maximum. All 117 instrumented local send calls reported
+success, which does not prove UDP delivery. Many sends were timestamped before
+the corresponding screen transition appeared in the connected-camera feed,
+showing that the camera's buffering and timestamping prevent attribution of
+the delay to individual pipeline stages from these data alone. The initial
+restore attempts timed out; a separate retry succeeded, and `getPilot`
+confirmed the original lamp channels and dimming. No color calibration was
+inferred from the automatically processed camera feed.
