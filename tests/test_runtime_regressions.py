@@ -170,6 +170,66 @@ def test_settled_udp_update_is_retried_after_initial_burst(monkeypatch):
     assert sender.stats["datagrams_sent"] == 5
 
 
+def test_udp_update_recovers_after_initial_socket_errors(monkeypatch):
+    class TransientSocket(FakeSocket):
+        def __init__(self):
+            super().__init__()
+            self.attempts = 0
+
+        def send(self, packet):
+            self.attempts += 1
+            if self.attempts <= 2:
+                raise OSError("temporarily unavailable")
+            self.packets.append(packet)
+            self.completed.set()
+
+    socket = TransientSocket()
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.04, 0.12))
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic")
+    try:
+        assert sender.send(b"color")
+        assert socket.completed.wait(2)
+    finally:
+        sender.stop()
+    assert socket.packets == [b"color"]
+    assert sender.stats["attempted"] == 1
+    assert sender.stats["sent"] == 1
+    assert sender.stats["send_errors"] == 1
+
+
+def test_new_udp_update_supersedes_failed_update_before_retry(monkeypatch):
+    class TransientSocket(FakeSocket):
+        def __init__(self):
+            super().__init__()
+            self.failures = 0
+            self.failed = threading.Event()
+
+        def send(self, packet):
+            if packet == b"old":
+                self.failures += 1
+                if self.failures == 2:
+                    self.failed.set()
+                raise OSError("temporarily unavailable")
+            self.packets.append(packet)
+            self.completed.set()
+
+    socket = TransientSocket()
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.08, 0.18))
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic", max_send_hz=1000)
+    try:
+        assert sender.send(b"old")
+        assert socket.failed.wait(2)
+        assert sender.send(b"new")
+        assert socket.completed.wait(2)
+        time.sleep(0.2)
+    finally:
+        sender.stop()
+    assert socket.failures == 2
+    assert socket.packets and all(packet == b"new" for packet in socket.packets)
+
+
 def test_new_udp_color_cancels_previous_settled_retries(monkeypatch):
     class Socket(FakeSocket):
         def __init__(self):

@@ -153,6 +153,7 @@ class BulbUDPSocket:
     def _run(self) -> None:
         retry_packet: bytes | None = None
         retry_deadlines: list[float] = []
+        retry_group_counted = False
         try:
             while not self._stop_event.is_set():
                 timeout = max(0.0, retry_deadlines[0] - time.perf_counter()) if retry_deadlines else 1.0
@@ -172,6 +173,10 @@ class BulbUDPSocket:
                         if success:
                             self._datagrams_sent += 1
                             self._last_error = None
+                            if not retry_group_counted:
+                                self._last_packet_sent = retry_packet
+                                self._sent += 1
+                                retry_group_counted = True
                         else:
                             self._send_errors += 1
                     retry_deadlines.pop(0)
@@ -182,6 +187,7 @@ class BulbUDPSocket:
                     continue
                 retry_packet = None
                 retry_deadlines.clear()
+                retry_group_counted = False
                 wait_time = self._min_interval - (time.perf_counter() - self._last_send_at)
                 if self._stop_event.wait(max(0.0, wait_time)):
                     return
@@ -217,9 +223,13 @@ class BulbUDPSocket:
                         self._last_packet_sent = packet
                         self._sent += 1
                     self._last_send_at = time.perf_counter()
-                    if sent_any and repeats > 1:
+                    # Also recover from local socket failures. A successful
+                    # local send is not a delivery acknowledgement, while a
+                    # failed one should not wait for the 1.5 s scene refresh.
+                    if repeats > 1 or not sent_any:
                         retry_packet = packet
                         retry_deadlines = [self._last_send_at + delay for delay in _SETTLED_RETRY_DELAYS]
+                        retry_group_counted = sent_any
         finally:
             try:
                 self._socket.close()
@@ -248,8 +258,8 @@ class BulbUDPSocket:
         """Successful socket sends, not acknowledgements from the bulb.
 
         The legacy sent count remains update groups; datagrams_sent includes
-        burst and settled-retry copies. Send errors count failed datagrams,
-        including retries; failed groups do not count as sent.
+        burst and settled-retry copies. Send errors count failed send
+        operations, including retries; failed groups do not count as sent.
         """
         with self._state_lock:
             return {
