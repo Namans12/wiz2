@@ -475,3 +475,13 @@ observation window before the next screen change or recording end, and a
 95th percentile across all observed responses including late ones. Reanalysis
 located the earlier 1,922 ms red response at 35.875 seconds in that trace.
 These are camera-arrival timestamps, not light sensor exposure timestamps.
+
+On the test PC, the saved adaptive configuration uses a 15–30 FPS range, so
+static scenes intentionally have a longer polling interval than active ones.
+A standalone motion-histogram microbenchmark on 320-by-180 random luma found
+NumPy's existing histogram at approximately 1.04 ms median. A simpler
+bin-count alternative took approximately 0.18 ms but disagreed at some bin
+boundaries; a version correcting those boundary decisions took approximately
+1.47 ms. These local microbenchmarks do not measure end-to-end latency. The
+histogram implementation was retained: neither approximate bin changes nor
+a slower exact replacement is justified by these results.
