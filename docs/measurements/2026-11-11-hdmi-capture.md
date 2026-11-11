@@ -458,3 +458,14 @@ reports how many occurred. Reanalyzing the 18-transition trace above reports
 17 within the cutoff, one late at 1,922 ms, and none unobserved; one pair of
 frame timestamps was equal. These changes make the limitation visible rather
 than improving the physical lamp latency.
+
+An exploratory attempt to observe UDP responses alongside optical timing
+was invalid: Windows had switched to the screen-saver desktop and the camera
+detected only six of the expected approximately 36 screen changes. Capture
+reported OK, but the app was not displaying the intended pattern to the
+camera. The receiver recorded 1,504 `setPilot` success responses while the
+sender logged 1,820 datagrams; replies had no usable per-command identifier
+in this trace, so they cannot be assigned reliably to individual color
+changes. No optical latency or packet-loss rate can be inferred from this
+run. The lamp's prior state was restored and acknowledged. A valid retest
+requires the normal desktop and the test pattern visible to the camera.
