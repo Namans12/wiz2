@@ -87,6 +87,25 @@ def test_detect_content_bounds_ignores_letterbox_bars():
     assert height == 80
 
 
+@pytest.mark.parametrize("shape", [(63, 63), (63, 95), (2, 2)])
+def test_screen_color_sampling_covers_all_four_corners(shape):
+    from src.features.screen_sync_v2 import _sample_pixels, _stride_sample_rgb
+
+    height, width = shape
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    image[:height // 2, :width // 2] = (255, 0, 0)
+    image[:height // 2, width // 2:] = (0, 255, 0)
+    image[height // 2:, :width // 2] = (0, 0, 255)
+    image[height // 2:, width // 2:] = (255, 255, 0)
+    sampled, _ = _sample_pixels(image, 32)
+    other = _stride_sample_rgb(image, 32)
+    assert tuple(sampled[0, 0]) == (255, 0, 0)
+    assert tuple(sampled[0, -1]) == (0, 255, 0)
+    assert tuple(sampled[-1, 0]) == (0, 0, 255)
+    assert tuple(sampled[-1, -1]) == (255, 255, 0)
+    np.testing.assert_array_equal(sampled, other)
+
+
 @pytest.mark.parametrize("threshold", [1, 16, 80, 200])
 def test_content_bounds_preserve_float32_luma_decisions(threshold):
     rng = np.random.default_rng(177)

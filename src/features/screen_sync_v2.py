@@ -178,31 +178,28 @@ def blend_colors(
     )
 
 
+def _sample_even_rgb(image: np.ndarray, sample_size: int) -> np.ndarray:
+    """Sample the centers of an even grid spanning the entire image."""
+    height, width = image.shape[:2]
+    if height <= 0 or width <= 0:
+        return np.zeros((sample_size, sample_size, 3), dtype=image.dtype)
+    rows = ((2 * np.arange(sample_size) + 1) * height) // (2 * sample_size)
+    cols = ((2 * np.arange(sample_size) + 1) * width) // (2 * sample_size)
+    return image[rows[:, None], cols[None, :], :3]
+
+
 def _sample_pixels(
     image: np.ndarray,
     sample_size: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Downsample once and return pixel arrays for shared color analysis.
 
-    The hot path only needs a stable color sample, not a high-quality image
-    resize. Strided sampling avoids PIL object creation and large resize
-    allocations while keeping the existing cinematic algorithm intact.
+    The hot path needs a stable color sample spanning the whole image, not a
+    high-quality resize. An even grid avoids large image allocations and does
+    not omit the lower or right parts when dimensions are not grid multiples.
     """
 
-    height, width = image.shape[:2]
-    if height <= 0 or width <= 0:
-        pixels = np.zeros((sample_size, sample_size, 3), dtype=np.float32)
-        return pixels, pixels
-
-    step_y = max(1, height // sample_size)
-    step_x = max(1, width // sample_size)
-    sampled = image[::step_y, ::step_x, :3][:sample_size, :sample_size]
-    if sampled.shape[0] < sample_size or sampled.shape[1] < sample_size:
-        padded = np.empty((sample_size, sample_size, 3), dtype=image.dtype)
-        padded[:] = sampled[-1:, -1:, :] if sampled.size else 0
-        padded[: sampled.shape[0], : sampled.shape[1], :] = sampled
-        sampled = padded
-
+    sampled = _sample_even_rgb(image, sample_size)
     pixels = sampled.astype(np.float32, copy=False)
     return pixels, pixels / 255.0
 
@@ -874,26 +871,14 @@ def should_use_gpu_capture(config: OptimizedCaptureConfig) -> bool:
 
 
 def _stride_sample_rgb(image: np.ndarray, sample_size: int) -> np.ndarray:
-    """Strided RGB downsample to (sample_size, sample_size, 3) — no PIL.
+    """Even-grid RGB sample of shape (sample_size, sample_size, 3).
 
     Matches the hot-path auto extractor's sampling so the optional
     weighted/histogram/kmeans algorithms avoid PIL object creation and large
     resize allocations.
     """
 
-    height, width = image.shape[:2]
-    if height <= 0 or width <= 0:
-        return np.zeros((sample_size, sample_size, 3), dtype=np.uint8)
-
-    step_y = max(1, height // sample_size)
-    step_x = max(1, width // sample_size)
-    sampled = image[::step_y, ::step_x, :3][:sample_size, :sample_size]
-    if sampled.shape[0] < sample_size or sampled.shape[1] < sample_size:
-        padded = np.empty((sample_size, sample_size, 3), dtype=image.dtype)
-        padded[:] = sampled[-1:, -1:, :] if sampled.size else 0
-        padded[: sampled.shape[0], : sampled.shape[1], :] = sampled
-        sampled = padded
-    return np.ascontiguousarray(sampled[:, :, :3])
+    return np.ascontiguousarray(_sample_even_rgb(image, sample_size))
 
 
 def extract_dominant_histogram(

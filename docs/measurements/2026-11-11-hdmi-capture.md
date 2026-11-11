@@ -200,6 +200,14 @@ Seven static scenes (red, green, blue, cyan, magenta, yellow and white)
 produced the corresponding application color targets through Windows Graphics
 Capture. This verifies the basic scene path, not absolute color accuracy.
 
+The color sampling grid was later changed to cover the full captured region
+when frame dimensions are not multiples of the sample count. Synthetic tests
+cover unequal-sized and tiny images. A live Windows Graphics Capture test of
+four colored HDMI-screen quadrants observed the expected color in each sampled
+quadrant. A local 32×32-grid sampling microbenchmark averaged about 24 µs per
+call. This does not verify optical color accuracy or eliminate all aliasing in
+the earlier full-frame downsampling step. The lamp was off for this check.
+
 The bulb reported one white channel. For a white input, its current heuristic
 mapper produced `(0, 0, 0, 255)`, using only that channel. A camera comparison
 showed a warm-looking reflection for white-channel-only output and a
