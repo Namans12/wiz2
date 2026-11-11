@@ -761,8 +761,15 @@ def _distributed_sample_indices(height: int, width: int, step: int) -> np.ndarra
     """Choose a repeatable flat pixel index per cell without a fixed stride phase."""
     rows = np.arange((height + step - 1) // step, dtype=np.uint32)[:, None]
     cols = np.arange((width + step - 1) // step, dtype=np.uint32)[None, :]
-    hashed = ((cols * np.uint32(1103515245) + rows * np.uint32(12345))
-              ^ (cols * np.uint32(2654435761) + rows * np.uint32(2246822519)))
+    # Mix high bits into low bits before taking a remainder. Without this
+    # avalanche, even sampling steps can select only even source rows and
+    # completely miss alternating horizontal lines.
+    hashed = cols * np.uint32(0x9E3779B9) + rows * np.uint32(0x85EBCA6B)
+    hashed ^= hashed >> np.uint32(16)
+    hashed *= np.uint32(0x7FEB352D)
+    hashed ^= hashed >> np.uint32(15)
+    hashed *= np.uint32(0x846CA68B)
+    hashed ^= hashed >> np.uint32(16)
     index_type = np.int32 if height * width <= np.iinfo(np.int32).max else np.int64
     y = np.minimum(rows * step + hashed % step, height - 1).astype(index_type)
     x = np.minimum(cols * step + (hashed // step) % step, width - 1).astype(index_type)

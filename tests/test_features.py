@@ -120,6 +120,22 @@ def test_downsample_retains_fine_repeating_colors_for_single_bulb():
     np.testing.assert_array_equal(sampled, GPUCaptureManager._to_rgb(frame))
 
 
+@pytest.mark.parametrize("width", [1280, 1920, 2560, 3840])
+@pytest.mark.parametrize("axis", [0, 1])
+def test_downsample_represents_alternating_pixel_lines(width, axis):
+    frame = np.zeros((1080, width, 4), dtype=np.uint8)
+    if axis == 0:
+        frame[::2, :, 2] = 255
+        frame[1::2, :, 0] = 255
+    else:
+        frame[:, ::2, 2] = 255
+        frame[:, 1::2, 0] = 255
+    red, green, blue = GPUCaptureManager._to_rgb(frame).mean(axis=(0, 1))
+    assert 120 < red < 135
+    assert green == 0
+    assert 120 < blue < 135
+
+
 def test_two_prominent_colors_blend_without_losing_either_hue():
     image = np.zeros((48, 48, 3), dtype=np.uint8)
     image[:, :16] = (255, 0, 0)

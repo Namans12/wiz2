@@ -280,3 +280,16 @@ the same app subsequently started without startup polling. This single pair
 of observations does not establish the cause of that failure. Fresh device
 identity verification remains enabled to avoid driving a different light if
 an IP address has been reassigned.
+
+The distributed downsampler was subsequently found to select only even
+source rows for alternating one-pixel horizontal lines at several common
+resolutions. Mixing the coordinate hash before choosing sampling offsets
+removed this specific bias. Synthetic tests now cover horizontal and vertical
+alternating lines at widths 1280, 1920, 2560 and 3840; arbitrary patterns can
+still alias. With horizontal red/blue lines displayed on the HDMI monitor, the
+live Windows Graphics Capture path produced target `(255, 4, 243)`, mapped
+it to RGBW `(235, 4, 239, 0)`, and the lamp reported the same channel values.
+Its prior state was restored. This confirms the screen-to-command path, not
+the optical result. A separate warmed 1080p conversion benchmark on this PC
+measured a 2.21 ms median over 150 calls; it is not a controlled before/after
+latency measurement.
