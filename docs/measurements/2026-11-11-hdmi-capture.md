@@ -357,3 +357,21 @@ that any particular packet was lost or that burst retries cause delay. The
 single-send median includes all 13 paired changes, including the three slow
 ones; excluding them would make the single-send result misleadingly favorable.
 The current retry policy was retained pending broader controlled tests.
+
+Two further 81-second exploratory runs compared the current 150/450 ms
+settled retries with earlier 60/150 ms retries, keeping the initial three-send
+burst in both cases. The schedule changed after every two screen transitions;
+the second run reversed their order. For the first run, 12 of 13 transitions
+were paired in each group: current median 524 ms, maximum 1,094 ms; early
+median 406 ms, maximum 687 ms. In the reverse-order run all 13 per group were
+paired: current median 484 ms, maximum 1,031 ms; early median 453 ms, maximum
+922 ms. Combining matched samples gives medians of 500 ms and 437 ms,
+respectively, with 25 matches per group. The lamp state was restored after
+both runs.
+
+These results motivate further tests but do not establish a universally safer
+retry schedule. The samples come from one light, one network, red/blue changes,
+and an automatically processed camera; an unmatched transition in each group
+was not assigned a delay. Earlier retries remove the later 450 ms recovery
+attempt and may behave differently under longer packet-loss bursts. The
+production schedule was therefore not changed on this evidence alone.
