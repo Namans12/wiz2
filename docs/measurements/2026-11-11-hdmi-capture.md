@@ -429,3 +429,22 @@ standalone local microbenchmark; this does not establish an end-to-end speedup.
 The full automated suite passed, and a separate live HDMI patterned change
 was detected and sent to the lamp, whose original state was restored. The live
 pattern does not independently reproduce the exact synthetic blind spot.
+
+A subsequent 55-second camera run of the updated detector recorded 18 screen
+transitions. Seventeen fell within the initial 1.5-second matching window,
+with a 375 ms median and 593 ms maximum. Inspecting the excluded transition
+showed that the wall changed about 1,922 ms after the screen, before the next
+screen change. Including it gives 18 matched transitions with a 406.5 ms
+median and 1,922 ms maximum. Multiple locally successful sends preceded the
+slow wall change, including a later unchanged-color refresh; these timestamps
+do not prove when a packet arrived or why the wall was slow. The lamp state
+was restored.
+
+A further 81-second exploratory run alternated the existing 1.5-second
+unchanged-color refresh and a 0.75-second refresh in pairs. Each group had
+13 camera-paired transitions: the existing interval had a 438 ms median and
+813 ms maximum, and the shorter interval had a 422 ms median and 625 ms
+maximum. All transitions in this particular run were under 1.5 seconds, so
+it did not reproduce the long tail the experiment was intended to investigate.
+The shorter interval also increases steady-state traffic. This small run does
+not justify changing the default; the lamp state was restored.
