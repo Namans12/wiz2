@@ -375,3 +375,12 @@ and an automatically processed camera; an unmatched transition in each group
 was not assigned a delay. Earlier retries remove the later 450 ms recovery
 attempt and may behave differently under longer packet-loss bursts. The
 production schedule was therefore not changed on this evidence alone.
+
+A subsequent exploratory run kept the 450 ms recovery retry while adding a
+60 ms retry (60/150/450 ms versus 150/450 ms), again alternating schedules
+in pairs. The existing schedule had 12 matched transitions out of 13, with a
+500 ms median and 1,031 ms maximum; the extra-retry schedule had 13 of 13,
+with a 469 ms median and 828 ms maximum. The lamp state was restored. The
+extra packet increases network traffic, and this single small run cannot
+establish a general improvement or characterize multiple bulbs under load.
+No production timing was changed based on this experiment.
