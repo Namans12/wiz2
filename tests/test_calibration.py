@@ -34,6 +34,30 @@ def test_calibration_store_round_trip(tmp_path):
     assert loaded.samples[1].measured_rgb == (250, 8, 8)
 
 
+def test_user_white_balance_round_trip_and_mapping(tmp_path):
+    store = CalibrationStore(tmp_path)
+    table = BulbCalibrationTable(key="lamp", neutral_white_payload=(180, 255, 180, 160))
+    store.save(table)
+    loaded = store.load("lamp")
+    assert loaded.neutral_white_payload == (180, 255, 180, 160)
+    mapper = BulbGamutMapper(BulbColorProfile(white_channels=1), calibration=loaded)
+    plain = BulbGamutMapper(BulbColorProfile(white_channels=1))
+    assert mapper.map_rgb((255, 255, 255)) == (180, 255, 180, 160)
+    assert mapper.map_rgb((0, 0, 0)) == (0, 0, 0, 0)
+    assert mapper.map_rgb((255, 0, 0)) == plain.map_rgb((255, 0, 0))
+    gray = mapper.map_rgb((128, 128, 128))
+    assert all(abs(actual - expected) <= 1 for actual, expected in zip(gray, (90, 128, 90, 80)))
+
+
+def test_white_balance_ignores_incompatible_or_invalid_payload():
+    profile = BulbColorProfile(white_channels=2)
+    plain = BulbGamutMapper(profile)
+    for payload in ((180, 255, 180, 160), (0, 0, 0, 0, 0), (0, 0, 0, 0, 300)):
+        mapper = BulbGamutMapper(profile, calibration=BulbCalibrationTable(
+            key="lamp", neutral_white_payload=payload))
+        assert mapper.map_rgb((255, 255, 255)) == plain.map_rgb((255, 255, 255))
+
+
 def test_tone_calibration_store_uses_tone_suffix(tmp_path):
     store = ToneCalibrationStore(tmp_path)
     table = BulbCalibrationTable(

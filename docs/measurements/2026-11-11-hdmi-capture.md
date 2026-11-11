@@ -147,6 +147,15 @@ Mixed B was also visibly dimmer than warm-white-only. Some screen regions
 still clipped, although the two sampled regions did not. No default or
 device calibration was changed based on this comparison.
 
+After reviewing the dimmer/neutral trade-off, the user selected mixed B for
+the tested bulb. A separate, user-selected neutral-white payload is now saved
+locally for that bulb, and the mapper blends it into near-neutral colors.
+This is a preference based on the camera comparison, not a colorimetric
+calibration. A live app test on a white screen reported the selected RGBW
+payload `(180,255,180,160)` and the bulb's `getPilot` reported those same
+channels. The lamp's previous state was restored. Saturated colors continue
+through the ordinary mapping path.
+
 The desktop UDP encoder previously rounded channels to steps of eight before
 sending. A direct device test with exact RGBW values `(123, 5, 0, 17)` was
 accepted and `getPilot` reported those same values; the previous lamp state

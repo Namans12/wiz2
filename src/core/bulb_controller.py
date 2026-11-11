@@ -371,15 +371,16 @@ class BulbController:
         profile = self._color_profiles.get(ip)
         primary_key = sanitize_calibration_key(profile.mac) if profile and profile.mac else None
         ip_key = sanitize_calibration_key(ip)
-        calibration_active = ip_key in self._calibration_tables or (
-            primary_key in self._calibration_tables if primary_key else False
-        )
+        calibration = (self._calibration_tables.get(primary_key) if primary_key else None) or self._calibration_tables.get(ip_key)
+        calibration_active = calibration is not None and calibration.sample_count >= 4
+        neutral_active = calibration is not None and calibration.neutral_white_payload is not None
         tone_active = ip_key in self._tone_tables or (
             primary_key in self._tone_tables if primary_key else False
         )
         return {
             "model_name": profile.model_name if profile else None,
             "camera_calibration": calibration_active,
+            "neutral_white": neutral_active,
             "tone_lut": tone_active,
         }
 
@@ -394,6 +395,8 @@ class BulbController:
             parts.append(self._screen_sync_source_color_space)
         if any(bool(flag["camera_calibration"]) for flag in flags):
             parts.append("camera calibration")
+        if any(bool(flag["neutral_white"]) for flag in flags):
+            parts.append("custom white balance")
         if any(bool(flag["tone_lut"]) for flag in flags):
             parts.append("tone LUT")
         return ", ".join(parts)

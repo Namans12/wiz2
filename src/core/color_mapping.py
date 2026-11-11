@@ -446,6 +446,11 @@ class BulbGamutMapper:
                 blend = t * t * (3.0 - 2.0 * t)
                 luma_index = int(round(r * 0.2126 + g * 0.7152 + b * 0.0722))
                 gray = self._gray_lookup[max(0, min(255, luma_index))].astype(np.float64)
+                neutral = self.calibration.neutral_white_payload if self.calibration is not None else None
+                if (neutral is not None and self.profile.white_channels > 0 and len(neutral) == len(gray)
+                        and all(0 <= channel <= 255 for channel in neutral)
+                        and any(neutral)):
+                    gray = np.asarray(neutral, dtype=np.float64) * (luma_index / 255.0)
                 payload = payload + (gray - payload) * blend
 
         return tuple(int(v) for v in np.clip(np.round(payload), 0, 255))
