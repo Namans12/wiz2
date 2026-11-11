@@ -134,8 +134,13 @@ def detect_content_bounds(
     if height < 8 or width < 8:
         return (0, 0, width, height)
 
-    pixels = image.astype(np.float32)
-    luma = pixels[:, :, 0] * 0.2126 + pixels[:, :, 1] * 0.7152 + pixels[:, :, 2] * 0.0722
+    # Avoid allocating a full three-channel float image on the usual uint8
+    # capture path; each channel is promoted during the weighted operations.
+    # Preserve the prior float32 conversion for other input dtypes.
+    pixels = image if image.dtype == np.uint8 else image.astype(np.float32)
+    luma = (pixels[:, :, 0] * np.float32(0.2126)
+            + pixels[:, :, 1] * np.float32(0.7152)
+            + pixels[:, :, 2] * np.float32(0.0722))
     row_activity = (luma > threshold).mean(axis=1)
     col_activity = (luma > threshold).mean(axis=0)
 

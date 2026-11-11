@@ -87,6 +87,24 @@ def test_detect_content_bounds_ignores_letterbox_bars():
     assert height == 80
 
 
+@pytest.mark.parametrize("threshold", [1, 16, 80, 200])
+def test_content_bounds_preserve_float32_luma_decisions(threshold):
+    rng = np.random.default_rng(177)
+    image = rng.integers(0, 256, (120, 160, 3), dtype=np.uint8)
+    image[:12] = 0
+    image[-12:] = 0
+    image[:, :14] = 0
+    image[:, -14:] = 0
+    # Non-contiguous crops also occur after the GPU frame is downsampled.
+    for candidate in (image, image[::2, ::2]):
+        pixels = candidate.astype(np.float32)
+        luma = pixels[:, :, 0] * 0.2126 + pixels[:, :, 1] * 0.7152 + pixels[:, :, 2] * 0.0722
+        rows = np.flatnonzero((luma > threshold).mean(axis=1) > 0.02)
+        cols = np.flatnonzero((luma > threshold).mean(axis=0) > 0.02)
+        expected = (int(cols[0]), int(rows[0]), int(cols[-1] - cols[0] + 1), int(rows[-1] - rows[0] + 1))
+        assert detect_content_bounds(candidate, threshold=threshold) == expected
+
+
 def test_crop_content_area_falls_back_on_tiny_detected_crop(monkeypatch):
     image = np.zeros((16, 16, 3), dtype=np.uint8)
     monkeypatch.setattr("src.features.screen_sync.detect_content_bounds", lambda _: (3, 3, 0, 0))

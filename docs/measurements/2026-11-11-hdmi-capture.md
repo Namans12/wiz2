@@ -121,6 +121,23 @@ balance, screen color profile and wall reflectance were not calibrated.
   small sequential experiments, not an optical latency comparison. Cached
   mode was enabled for the WinRT backend; the capture library is still asked
   for a new frame on each call, with its cached frame used if none is ready.
+- A subsequent pair of 75-second, three-second red/blue pattern runs compared
+  sender and bulb-status timings before and after cached-frame mode. Each had
+  24 complete matching updates and used frequent `getPilot` polling. Median
+  time from the pattern-change call to the first local send was 63 ms before
+  and 86 ms after; p95 was 94 and 125 ms. Median time to the first matching
+  status response was 414 and 523 ms, respectively. The runs were sequential,
+  had polling timeouts, and used the pattern call rather than an optical
+  screen timestamp. They do not establish a latency improvement and also do
+  not isolate cached-frame mode from changes in system or network load.
+- A later full-screen, changing-pattern test compared the selected WinRT
+  backend with MSS on this monitor. Both matched 19 sampled changes with a
+  47 ms median from the pattern call to the first matching capture. WinRT's
+  mean grab call was 1.0 ms versus 23.7 ms for MSS in these sequential runs,
+  so MSS was not promoted as the default. A separate synthetic 640×360
+  letterbox-mask benchmark measured the original calculation at 2.0–2.2 ms
+  per frame and an allocation-reduced equivalent at 1.3–1.4 ms on this PC.
+  This microbenchmark does not establish a screen-to-light improvement.
 
 ## Color observations
 
