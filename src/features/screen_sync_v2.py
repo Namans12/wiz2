@@ -756,15 +756,16 @@ _PROCESS_MAX_WIDTH = 640
 
 
 @lru_cache(maxsize=4)
-def _distributed_sample_indices(height: int, width: int, step: int) -> tuple[np.ndarray, np.ndarray]:
-    """Choose a repeatable subpixel per cell without a fixed stride phase."""
+def _distributed_sample_indices(height: int, width: int, step: int) -> np.ndarray:
+    """Choose a repeatable flat pixel index per cell without a fixed stride phase."""
     rows = np.arange((height + step - 1) // step, dtype=np.uint32)[:, None]
     cols = np.arange((width + step - 1) // step, dtype=np.uint32)[None, :]
     hashed = ((cols * np.uint32(1103515245) + rows * np.uint32(12345))
               ^ (cols * np.uint32(2654435761) + rows * np.uint32(2246822519)))
-    y = np.minimum(rows * step + hashed % step, height - 1).astype(np.int32)
-    x = np.minimum(cols * step + (hashed // step) % step, width - 1).astype(np.int32)
-    return y, x
+    index_type = np.int32 if height * width <= np.iinfo(np.int32).max else np.int64
+    y = np.minimum(rows * step + hashed % step, height - 1).astype(index_type)
+    x = np.minimum(cols * step + (hashed // step) % step, width - 1).astype(index_type)
+    return y * width + x
 
 
 def _downscale_for_processing(frame: np.ndarray, *, bgra: bool = False) -> np.ndarray:
@@ -779,7 +780,10 @@ def _downscale_for_processing(frame: np.ndarray, *, bgra: bool = False) -> np.nd
     step = max(1, width // _PROCESS_MAX_WIDTH)
     if step == 1:
         return np.ascontiguousarray(frame[:, :, channels])
-    rows, cols = _distributed_sample_indices(height, width, step)
+    indices = _distributed_sample_indices(height, width, step)
+    if frame.flags.c_contiguous:
+        return np.ascontiguousarray(frame.reshape(-1, frame.shape[2])[indices, channels])
+    rows, cols = np.divmod(indices, width)
     return np.ascontiguousarray(frame[rows, cols, channels])
 
 

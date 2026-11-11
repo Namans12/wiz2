@@ -138,6 +138,19 @@ def test_distributed_downsample_handles_odd_edges_and_rgb_input():
     assert np.all(result == (19, 73, 211))
 
 
+@pytest.mark.parametrize("noncontiguous", [False, True])
+def test_distributed_sampling_preserves_selected_pixels(noncontiguous):
+    from src.features.screen_sync_v2 import _distributed_sample_indices
+
+    image = np.random.default_rng(42).integers(0, 256, (181, 1281, 4), dtype=np.uint8)
+    if noncontiguous:
+        image = image[:, ::-1]
+    indices = _distributed_sample_indices(image.shape[0], image.shape[1], 2)
+    rows, cols = np.divmod(indices, image.shape[1])
+    expected = np.ascontiguousarray(image[rows, cols, 2::-1])
+    np.testing.assert_array_equal(GPUCaptureManager._to_rgb(image), expected)
+
+
 @pytest.mark.parametrize("threshold", [1, 16, 80, 200])
 def test_content_bounds_preserve_float32_luma_decisions(threshold):
     rng = np.random.default_rng(177)

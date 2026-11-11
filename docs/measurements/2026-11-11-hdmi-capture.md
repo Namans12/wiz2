@@ -224,6 +224,11 @@ previous fixed-stride conversion in separate runs. That is an explicit CPU
 cost for less aliasing, not a demonstrated latency improvement. Distributed
 sampling is not full area averaging and can still alias some patterns; a
 GPU-side area reduction remains a candidate for future evaluation.
+Changing the cached coordinates to flat pixel indices later reduced the
+same local 1080p conversion benchmark from about 3.0 ms to about 2.0 ms per
+frame. Pixel-equivalence tests cover contiguous and non-contiguous inputs,
+and another HDMI stripe capture produced a mixed red/blue target. The lamp
+was unreachable during that follow-up; no new optical delay was measured.
 
 The bulb reported one white channel. For a white input, its current heuristic
 mapper produced `(0, 0, 0, 255)`, using only that channel. A camera comparison
