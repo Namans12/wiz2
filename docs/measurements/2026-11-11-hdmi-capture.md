@@ -208,6 +208,23 @@ quadrant. A local 32×32-grid sampling microbenchmark averaged about 24 µs per
 call. This does not verify optical color accuracy or eliminate all aliasing in
 the earlier full-frame downsampling step. The lamp was off for this check.
 
+A subsequent HDMI test used repeating one-pixel vertical stripes: one red
+stripe followed by two blue stripes. The full captured frame averaged about
+`(85, 0, 170)` in encoded RGB, but fixed-phase downsampling made the prior
+cinematic target almost entirely red. A repeatable distributed subpixel
+sampler and a blend for two prominent colors reduced that bias. In an app
+test with the actual HDMI monitor and lamp, the target was `(223, 1, 255)`,
+the mapper sent `(206, 2, 254, 0)` RGBW, and `getPilot` reported those
+channels. The previous lamp state was restored. This verifies a controlled
+screen-to-command path, not the optical output or arbitrary patterns.
+
+On this PC, synthetic 1920×1080 BGRA-to-RGB sampling averaged approximately
+3.0 ms with distributed sampling, compared with about 0.7–0.9 ms for the
+previous fixed-stride conversion in separate runs. That is an explicit CPU
+cost for less aliasing, not a demonstrated latency improvement. Distributed
+sampling is not full area averaging and can still alias some patterns; a
+GPU-side area reduction remains a candidate for future evaluation.
+
 The bulb reported one white channel. For a white input, its current heuristic
 mapper produced `(0, 0, 0, 255)`, using only that channel. A camera comparison
 showed a warm-looking reflection for white-channel-only output and a

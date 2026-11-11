@@ -7,6 +7,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Optional, Sequence
 
 import numpy as np
@@ -480,6 +481,27 @@ def _palette_balance_score(
     return min(1.0, prominence * min(1.0, separation / 170.0))
 
 
+def _mixed_color_balance(normalized: np.ndarray, weights: np.ndarray) -> float:
+    """Identify two substantial, distinct primary-color populations."""
+    maximum = normalized.max(axis=2)
+    minimum = normalized.min(axis=2)
+    dominant = normalized.argmax(axis=2)
+    # A magenta pixel, for example, should not count as a separate red or
+    # blue population merely because one channel wins a near tie.
+    second = np.partition(normalized, 1, axis=2)[:, :, 1]
+    strong = (maximum - minimum >= 0.35) & (maximum - second >= 0.15)
+    totals = np.bincount(dominant[strong], weights=weights[strong], minlength=3)
+    leaders = np.sort(totals)[::-1]
+    if leaders[0] <= 0 or (leaders[0] + leaders[1]) < float(weights.sum()) * 0.45:
+        return 0.0
+    return _smoothstep_scalar((leaders[1] / leaders[0] - 0.25) / 0.30)
+
+
+def _smoothstep_scalar(value: float) -> float:
+    value = max(0.0, min(1.0, value))
+    return value * value * (3.0 - 2.0 * value)
+
+
 
 
 def color_saturation(color: tuple[int, int, int]) -> float:
@@ -533,6 +555,9 @@ def extract_dominant_auto(
         palette_weight *= 0.45
     if balance_score > 0.32 and weighted_saturation < 0.22:
         palette_weight *= max(0.15, 1.0 - balance_score * 1.25)
+    two_color_balance = _mixed_color_balance(normalized, weights)
+    reference = blend_colors(reference, weighted, two_color_balance)
+    palette_weight *= 1.0 - two_color_balance
     return blend_colors(reference, matched, palette_weight)
 
 
@@ -580,6 +605,10 @@ def extract_cinematic_single_color(
         palette_weight *= 0.55
     if balance_score > 0.3 and weighted_saturation < 0.22:
         palette_weight *= max(0.12, 1.0 - balance_score * 1.35)
+
+    two_color_balance = _mixed_color_balance(normalized, weights)
+    reference = blend_colors(reference, weighted, two_color_balance)
+    palette_weight *= 1.0 - two_color_balance
 
     return blend_colors(reference, matched, palette_weight)
 
@@ -726,13 +755,32 @@ def build_optimized_capture_config(
 _PROCESS_MAX_WIDTH = 640
 
 
-def _downscale_for_processing(frame: np.ndarray) -> np.ndarray:
-    """Strided downscale (view) so the max width is ~_PROCESS_MAX_WIDTH."""
-    w = frame.shape[1]
-    if w <= _PROCESS_MAX_WIDTH:
-        return frame
-    step = max(1, w // _PROCESS_MAX_WIDTH)
-    return frame[::step, ::step]
+@lru_cache(maxsize=4)
+def _distributed_sample_indices(height: int, width: int, step: int) -> tuple[np.ndarray, np.ndarray]:
+    """Choose a repeatable subpixel per cell without a fixed stride phase."""
+    rows = np.arange((height + step - 1) // step, dtype=np.uint32)[:, None]
+    cols = np.arange((width + step - 1) // step, dtype=np.uint32)[None, :]
+    hashed = ((cols * np.uint32(1103515245) + rows * np.uint32(12345))
+              ^ (cols * np.uint32(2654435761) + rows * np.uint32(2246822519)))
+    y = np.minimum(rows * step + hashed % step, height - 1).astype(np.int32)
+    x = np.minimum(cols * step + (hashed // step) % step, width - 1).astype(np.int32)
+    return y, x
+
+
+def _downscale_for_processing(frame: np.ndarray, *, bgra: bool = False) -> np.ndarray:
+    """Sample across the whole frame, distributing subpixel phases per cell.
+
+    Fixed-phase striding can mistake a repeating fine pattern for a single
+    color. Distributed sampling reduces that bias while retaining actual
+    source pixels for the downstream linear-light color calculation.
+    """
+    height, width = frame.shape[:2]
+    channels = slice(2, None, -1) if bgra else slice(0, 3)
+    step = max(1, width // _PROCESS_MAX_WIDTH)
+    if step == 1:
+        return np.ascontiguousarray(frame[:, :, channels])
+    rows, cols = _distributed_sample_indices(height, width, step)
+    return np.ascontiguousarray(frame[rows, cols, channels])
 
 
 class GPUCaptureManager:
@@ -804,12 +852,9 @@ class GPUCaptureManager:
 
     @staticmethod
     def _to_rgb(frame: np.ndarray) -> np.ndarray:
-        # Downscale (cheap strided view) BEFORE the channel-reverse copy so we
-        # never allocate/convert a full 4K buffer per frame.
-        frame = _downscale_for_processing(frame)
         if frame.ndim == 3 and frame.shape[2] == 4:
-            return np.ascontiguousarray(frame[:, :, 2::-1])
-        return np.ascontiguousarray(frame[:, :, :3])
+            return _downscale_for_processing(frame, bgra=True)
+        return _downscale_for_processing(frame)
 
     def grab(self) -> Optional[np.ndarray]:
         """Capture a frame. Returns RGB numpy array or None (never blocks)."""
@@ -1401,9 +1446,7 @@ class OptimizedScreenSync:
                     screenshot.width,
                     4,
                 )
-                # Downscale first (view) so the RGB copy is on a small array.
-                raw = _downscale_for_processing(raw)
-                return np.ascontiguousarray(raw[:, :, 2::-1])
+                return _downscale_for_processing(raw, bgra=True)
             except Exception as exc:
                 with self._stats_lock:
                     self._last_error = f"MSS capture failed: {exc}"

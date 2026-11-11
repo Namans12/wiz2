@@ -106,6 +106,38 @@ def test_screen_color_sampling_covers_all_four_corners(shape):
     np.testing.assert_array_equal(sampled, other)
 
 
+def test_downsample_retains_fine_repeating_colors_for_single_bulb():
+    frame = np.zeros((1080, 1920, 4), dtype=np.uint8)
+    frame[:, 0::3, 2] = 255  # BGRA red
+    frame[:, 1::3, 0] = 255  # BGRA blue
+    frame[:, 2::3, 0] = 255
+    sampled = GPUCaptureManager._to_rgb(frame)
+    mean = sampled.mean(axis=(0, 1))
+    assert 75 < mean[0] < 95 and 160 < mean[2] < 180
+    red, green, blue = extract_cinematic_single_color(sampled)
+    assert blue > red > 100
+    assert green < 10
+    np.testing.assert_array_equal(sampled, GPUCaptureManager._to_rgb(frame))
+
+
+def test_two_prominent_colors_blend_without_losing_either_hue():
+    image = np.zeros((48, 48, 3), dtype=np.uint8)
+    image[:, :16] = (255, 0, 0)
+    image[:, 16:] = (0, 0, 255)
+    red, green, blue = extract_cinematic_single_color(image, sample_size=24)
+    assert blue > red > 100
+    assert green < 10
+
+
+def test_distributed_downsample_handles_odd_edges_and_rgb_input():
+    image = np.zeros((361, 1921, 3), dtype=np.uint8)
+    image[:] = (19, 73, 211)
+    result = GPUCaptureManager._to_rgb(image)
+    assert result.shape == (121, 641, 3)
+    assert result.flags.c_contiguous
+    assert np.all(result == (19, 73, 211))
+
+
 @pytest.mark.parametrize("threshold", [1, 16, 80, 200])
 def test_content_bounds_preserve_float32_luma_decisions(threshold):
     rng = np.random.default_rng(177)
