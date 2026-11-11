@@ -1060,6 +1060,7 @@ class MotionDetector:
     def __init__(self, threshold: float = 0.015):
         self._threshold = threshold
         self._last_frame: Optional[np.ndarray] = None
+        self._last_scene_sample: Optional[np.ndarray] = None
         self._motion_history: deque = deque(maxlen=5)
         self._prev_hist: Optional[np.ndarray] = None
         self.last_scene_cut = False
@@ -1077,6 +1078,7 @@ class MotionDetector:
         # threshold valid on both downscaled and full-res frames.
         step = max(1, frame.shape[1] // self._CUT_HIST_TARGET_COLS)
         small = frame[::step, ::step].astype(np.float32)
+        scene_sample = _sample_even_rgb(frame, 32)
 
         # Luma histogram for scene-cut detection (cheap: runs on the same
         # downsample used for motion diffing). A cut must move the histogram
@@ -1099,12 +1101,26 @@ class MotionDetector:
 
         if self._last_frame is None or self._last_frame.shape != small.shape:
             self._last_frame = small
+            self._last_scene_sample = scene_sample
             self._motion_history.clear()
             self.last_scene_cut = False
             return 0.5  # Default to medium motion on first frame
 
         # Calculate frame difference
         diff = np.abs(small - self._last_frame).mean() / 255.0
+        fallback_color_change = None
+        # A fixed-phase motion stride can miss all changed pixels in a fine
+        # pattern. Only check the small distributed sample when the main
+        # stride sees little change; avoid a second full-frame comparison.
+        if diff <= self._CUT_DIFF_THRESHOLD and self._last_scene_sample is not None:
+            current_sample = scene_sample.astype(np.float32)
+            previous_sample = self._last_scene_sample.astype(np.float32)
+            sample_diff = float(np.abs(current_sample - previous_sample).mean() / 255.0)
+            if sample_diff > self._CUT_DIFF_THRESHOLD:
+                diff = sample_diff
+                fallback_color_change = float(np.abs(
+                    current_sample.mean(axis=(0, 1)) - previous_sample.mean(axis=(0, 1))
+                ).mean() / 255.0)
         # Sample spatially before averaging to keep this inexpensive. Comparing
         # means (rather than pixels) avoids treating a pan of the same colors
         # as a global ambient-color change.
@@ -1112,10 +1128,14 @@ class MotionDetector:
         if diff > self._CUT_DIFF_THRESHOLD and hist_tv <= self._CUT_HIST_THRESHOLD:
             # A fixed phase can miss an entire changed pattern (for example,
             # every eighth column), masking a real change in ambient color.
-            mean_rgb = _sample_even_rgb(small, 32).mean(axis=(0, 1))
-            previous_rgb = _sample_even_rgb(self._last_frame, 32).mean(axis=(0, 1))
-            color_change = float(np.abs(mean_rgb - previous_rgb).mean() / 255.0)
+            if fallback_color_change is not None:
+                color_change = fallback_color_change
+            else:
+                mean_rgb = _sample_even_rgb(small, 32).mean(axis=(0, 1))
+                previous_rgb = _sample_even_rgb(self._last_frame, 32).mean(axis=(0, 1))
+                color_change = float(np.abs(mean_rgb - previous_rgb).mean() / 255.0)
         self._last_frame = small
+        self._last_scene_sample = scene_sample
         self._motion_history.append(diff)
 
         self.last_scene_cut = (
@@ -1134,6 +1154,7 @@ class MotionDetector:
     def reset(self) -> None:
         """Reset motion history."""
         self._last_frame = None
+        self._last_scene_sample = None
         self._motion_history.clear()
         self._prev_hist = None
         self.last_scene_cut = False

@@ -154,6 +154,18 @@ def test_scene_cut_detects_changed_color_between_fixed_stride_columns():
     assert detector.last_scene_cut
 
 
+def test_scene_cut_detects_changes_hidden_from_motion_stride():
+    before = np.full((360, 640, 3), (255, 0, 0), dtype=np.uint8)
+    after = before.copy()
+    after[:, 1::2] = (0, 255, 0)
+    detector = MotionDetector()
+    detector.update(before)
+    assert detector.update(after) > 0.1
+    assert detector.last_scene_cut
+    detector.reset()
+    assert not detector.last_scene_cut
+
+
 @pytest.mark.parametrize("width", [1280, 1920, 2560, 3840])
 @pytest.mark.parametrize("axis", [0, 1])
 def test_downsample_represents_alternating_pixel_lines(width, axis):

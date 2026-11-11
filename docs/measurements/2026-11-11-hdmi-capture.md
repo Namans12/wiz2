@@ -418,3 +418,14 @@ sample of the nominal pure-blue scene was approximately RGB `(18, 198, 249)`.
 Monitor color, camera white balance/exposure, wall reflectance and screen
 spill have not been independently characterized, so no per-color accuracy
 or precise latency claims follow from this sequence.
+
+The motion detector's initial fixed stride could also miss a color change:
+in a synthetic 640-by-360 image, changing every odd column from red to green
+previously reported zero motion and no scene cut. The detector now checks a
+small stable distributed sample when the main stride reports little motion;
+the synthetic change is detected without a second full-frame comparison.
+The added sampling and static-sample comparison took a 0.033 ms median in a
+standalone local microbenchmark; this does not establish an end-to-end speedup.
+The full automated suite passed, and a separate live HDMI patterned change
+was detected and sent to the lamp, whose original state was restored. The live
+pattern does not independently reproduce the exact synthetic blind spot.
