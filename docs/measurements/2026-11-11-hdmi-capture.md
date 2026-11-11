@@ -255,3 +255,28 @@ changed from approximately `(1.073, 0.833, 1.094)` at green 180 to
 `(1.081, 0.833, 1.086)`. This suggests a possible device-specific correction,
 but is not a calibration: the tablet virtual camera rejected requests to lock
 both automatic white balance and manual exposure. No correction was applied.
+
+## Live sender timing after precise frame waits
+
+An exploratory 45-second run alternated a fullscreen red/blue test window on
+the HDMI monitor every three seconds. Windows Graphics Capture processed 675
+frames and the app reported no capture error. The lamp's original state was
+restored successfully. For ten complete transitions after startup, the time
+from the application's window-color change call to its first matching UDP
+send was 47–94 ms, with a 70.5 ms median. These are application timestamps;
+the window call does not establish when pixels appeared on the display.
+
+The first matching `getPilot` response arrived 469–672 ms after the window
+change (570 ms median). Polling began only after startup and ran roughly five
+times per second; eight polls timed out during the run. Polling can both delay
+observation and add Wi-Fi and bulb load, and a reported state is not an optical
+measurement. These figures therefore cannot establish lamp response time or
+be compared directly with the earlier camera recordings. The tablet's live
+camera was locked during this run, so the effect of the new frame timer on
+actual screen-to-light latency remains unmeasured.
+
+An earlier attempt with polling active during startup failed to start sync;
+the same app subsequently started without startup polling. This single pair
+of observations does not establish the cause of that failure. Fresh device
+identity verification remains enabled to avoid driving a different light if
+an IP address has been reassigned.
