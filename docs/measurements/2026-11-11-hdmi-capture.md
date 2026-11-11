@@ -132,6 +132,21 @@ also clipped on white. Camera processing, screen spill and wall reflectance
 remain uncalibrated, so these images cannot determine an accurate white mix
 or establish absolute color accuracy. No color calibration was applied.
 
+A subsequent ISO 100 / 5000 K white-balance recording compared the same
+single-white-channel bulb with five direct RGBW payloads: warm-white-only
+`(0,0,0,255)`, RGB-only `(255,255,255,0)`, mixed A `(180,255,180,96)`,
+mixed B `(180,255,180,160)`, and mixed C `(200,255,200,64)`. In the video,
+warm-white-only appeared yellow/orange, RGB-only appeared violet, and the
+mixed settings appeared between those extremes. On one unclipped monitor ROI
+and one unclipped wall ROI, the simple distance between their normalized
+camera RGB values was 0.260 for warm-only, 0.197 for RGB-only, 0.083 for A,
+0.066 for B, and 0.120 for C. This is an exploratory camera-space metric,
+not a calibrated color difference: wall reflectance, monitor spectral output,
+automatic shutter/exposure and video processing are not characterized.
+Mixed B was also visibly dimmer than warm-white-only. Some screen regions
+still clipped, although the two sampled regions did not. No default or
+device calibration was changed based on this comparison.
+
 The desktop UDP encoder previously rounded channels to steps of eight before
 sending. A direct device test with exact RGBW values `(123, 5, 0, 17)` was
 accepted and `getPilot` reported those same values; the previous lamp state
