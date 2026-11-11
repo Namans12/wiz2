@@ -38,6 +38,7 @@ from ..core.color_science import (
     oklab_distance8,
     srgb_encode,
 )
+from ..core.frame_pacer import FramePacer
 
 
 def _linear_mean_srgb8(
@@ -1174,6 +1175,7 @@ class OptimizedScreenSync:
         
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._frame_pacer: Optional[FramePacer] = None
         self._current_colors: dict[str, tuple[int, int, int]] = {}
         self._last_sent_colors: dict[str, tuple[int, int, int]] = {}
         self._last_target_colors: dict[str, tuple[int, int, int]] = {}
@@ -1685,9 +1687,13 @@ class OptimizedScreenSync:
     
     def _sync_loop(self) -> None:
         """Own and release thread-affine capture resources on this worker."""
+        pacer = FramePacer()
+        self._frame_pacer = pacer
         try:
             self._sync_loop_inner()
         finally:
+            self._frame_pacer = None
+            pacer.close()
             if self._gpu_capture and getattr(self._gpu_capture, "backend", "dxgi") == "winrt":
                 capture_gpu, self._gpu_capture = self._gpu_capture, None
                 capture_gpu.stop()
@@ -1877,7 +1883,7 @@ class OptimizedScreenSync:
             
             target_frame_time = 1.0 / self._current_fps
             if frame_time < target_frame_time:
-                time.sleep(target_frame_time - frame_time)
+                self._frame_pacer.sleep(target_frame_time - frame_time)
     
     @property
     def is_running(self) -> bool:

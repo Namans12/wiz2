@@ -14,6 +14,19 @@ from src.features import screen_sync_v2 as sync_module
 from src.features.screen_sync_v2 import OptimizedCaptureConfig, OptimizedScreenSync
 
 
+@pytest.fixture(autouse=True)
+def use_sleep_pacer(monkeypatch):
+    """Keep synthetic-clock sync tests independent of the Windows timer."""
+    class SleepPacer:
+        def sleep(self, seconds):
+            sync_module.time.sleep(seconds)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(sync_module, "FramePacer", SleepPacer)
+
+
 def test_failed_microphone_start_closes_stream_and_resets_state(monkeypatch):
     from src.features import clap_detector
     from unittest.mock import Mock

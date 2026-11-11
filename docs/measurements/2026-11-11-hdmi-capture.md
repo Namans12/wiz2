@@ -138,6 +138,15 @@ balance, screen color profile and wall reflectance were not calibrated.
   letterbox-mask benchmark measured the original calculation at 2.0–2.2 ms
   per frame and an allocation-reduced equivalent at 1.3–1.4 ms on this PC.
   This microbenchmark does not establish a screen-to-light improvement.
+- On Windows/Python 3.10, a 10 ms `sleep` measured roughly 15.5 ms median on
+  this PC. A high-resolution waitable timer measured approximately 10.3 ms.
+  In two 24 FPS synthetic engine runs, ordinary sleep produced about 46.5–46.7
+  ms median frame intervals versus 42.0 ms with the timer. A sequential live
+  WinRT capture check processed approximately 20.7 versus 23.3 frames per
+  second, including startup time, with no capture error. The timer is scoped
+  to the active sync worker and falls back to ordinary sleep when unavailable;
+  it is closed on worker exit. More frequent wakeups can increase power use.
+  These checks do not establish a screen-to-light or color-accuracy improvement.
 
 ## Color observations
 
