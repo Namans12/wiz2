@@ -789,7 +789,7 @@ class GPUCaptureManager:
                     return False
                 # Prime the cache so the first static-screen grab has pixels —
                 # and verify grabbing actually works in this environment.
-                probe = self._camera.grab()
+                probe = self._camera.grab(new_frame_only=False) if self.backend == "winrt" else self._camera.grab()
                 if probe is not None:
                     self._last_frame = self._to_rgb(probe)
                 return True
@@ -820,7 +820,10 @@ class GPUCaptureManager:
             return None
 
         try:
-            frame = self._camera.grab()
+            # WinRT's one-shot default waits briefly for a new frame; on
+            # Windows that wait can be rounded up by the scheduler. Ask for
+            # its cached frame instead so a static scene never incurs it.
+            frame = self._camera.grab(new_frame_only=False) if self.backend == "winrt" else self._camera.grab()
         except Exception as exc:
             self._consecutive_errors += 1
             self._last_error = str(exc)

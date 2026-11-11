@@ -499,6 +499,22 @@ def test_gpu_manager_can_select_windows_graphics_capture(monkeypatch):
     camera.release.assert_called_once()
 
 
+def test_windows_capture_requests_nonwaiting_frames_and_accepts_changes():
+    from unittest.mock import Mock
+    camera = Mock()
+    camera.grab.side_effect = [
+        None,
+        np.full((4, 4, 4), (0, 0, 255, 255), dtype=np.uint8),
+        np.full((4, 4, 4), (255, 0, 0, 255), dtype=np.uint8),
+    ]
+    capture = sync_module.GPUCaptureManager(backend="winrt")
+    capture._camera = camera
+    assert capture.grab() is None
+    assert tuple(capture.grab()[0, 0]) == (255, 0, 0)
+    assert tuple(capture.grab()[0, 0]) == (0, 0, 255)
+    assert all(call.kwargs == {"new_frame_only": False} for call in camera.grab.call_args_list)
+
+
 @pytest.mark.parametrize("value,accepted", [(120, True), (240, False)])
 def test_windows_capture_requires_matching_display(monkeypatch, value, accepted):
     from unittest.mock import Mock

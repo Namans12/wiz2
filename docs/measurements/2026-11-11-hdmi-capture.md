@@ -111,8 +111,26 @@ balance, screen color profile and wall reflectance were not calibrated.
   implementation would also need to validate pixel correctness, frame
   freshness, GPU resource ownership, display recovery, and shutdown under
   load across supported machines.
+- On a mostly static desktop, an isolated WinRT `grab` test measured roughly
+  12 ms per call with the library's default new-frame wait and 0.05 ms with
+  `new_frame_only=False`. An application run using cached-frame mode reported
+  mean capture 3.7 ms and p95 4.8 ms for its rolling samples. A separate
+  alternating red/blue window test observed median first-matching capture
+  times of 47 ms in both modes (19 changes per mode); mean grab-call times
+  were 13.7 ms with the default and 0.6 ms with cached-frame mode. These are
+  small sequential experiments, not an optical latency comparison. Cached
+  mode was enabled for the WinRT backend; the capture library is still asked
+  for a new frame on each call, with its cached frame used if none is ready.
 
 ## Color observations
+
+A further tablet recording showed the lamp visibly changing for red, green,
+blue, cyan, magenta, yellow, and white test screens. The white reflection
+appeared warmer than the monitor. The video clipped one or more screen
+channels in cyan, magenta, yellow, green, and white; the sampled wall region
+also clipped on white. Camera processing, screen spill and wall reflectance
+remain uncalibrated, so these images cannot determine an accurate white mix
+or establish absolute color accuracy. No color calibration was applied.
 
 The desktop UDP encoder previously rounded channels to steps of eight before
 sending. A direct device test with exact RGBW values `(123, 5, 0, 17)` was
