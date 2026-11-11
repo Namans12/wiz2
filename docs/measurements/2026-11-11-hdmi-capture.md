@@ -313,3 +313,19 @@ HDMI test, a patterned red-to-green change was detected as a cut 110 ms
 after the test window's change call, and the lamp reported the mapped color;
 its prior state was restored. This is not an optical delay measurement and
 does not remove every possible alias in the motion detector's initial stride.
+
+After the tablet's connected camera was restored, a 55-second live run used
+the saved sync settings and alternated full-screen red and blue about every
+three seconds. Windows Graphics Capture reported 808 processed frames and no
+error. The connected camera captured 1,674 frames (31 ms median and 63 ms
+maximum intervals). Of 18 detected screen transitions, 17 were paired with
+the wall's red/blue transitions. Their observed screen-to-wall delays ranged
+from 265 to 1,063 ms, with a 469 ms median; the largest sample is also the
+reported 95th-percentile sample for this small set. Other wall regions gave
+similar results. The original lamp state was restored successfully.
+
+These are approximate threshold-based optical observations with a connected
+camera, automatic camera processing, and wall reflection; they do not isolate
+capture, network, bulb, or camera latency. The camera cadence limits precision,
+the unmatched transition is excluded, and this is not a controlled comparison
+with previous recordings. The variation and longest delays remain unresolved.
