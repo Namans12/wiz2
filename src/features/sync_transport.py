@@ -1,17 +1,31 @@
 """Shared color/brightness handoff for GUI and standalone screen sync."""
 
+import asyncio
 from dataclasses import dataclass
 from threading import RLock
-from typing import Optional
+from typing import Mapping, Sequence, Union
 
 from .screen_sync_v2 import resolve_auto_display_profile
 from .sync_dispatcher import CoalescingAsyncDispatcher
+
+Brightness = Union[int, Mapping[str, int], None]
 
 
 @dataclass(frozen=True)
 class ScreenSyncUpdate:
     colors: dict[str, tuple[int, int, int]]
-    brightness: Optional[int]
+    brightness: Brightness
+
+
+def brightness_for_bulbs(engine, bulb_ips: Sequence[str], mode: str, bulb_layout: Mapping[str, str]) -> Brightness:
+    """Dimming to send with the engine's current colours.
+
+    Single mode shares one level. In zone mode each bulb dims with the part of
+    the picture it follows, so a dark edge is not lit like a bright one.
+    """
+    if mode != "zones":
+        return engine.output_brightness
+    return {ip: engine.output_brightness_for(bulb_layout.get(ip, "")) for ip in bulb_ips}
 
 
 async def prepare_screen_sync_mapping(controller, ips, settings) -> None:
@@ -39,12 +53,23 @@ class ScreenSyncTransport:
         self.dispatcher = CoalescingAsyncDispatcher(submit, self._apply_update)
 
     async def _apply_update(self, update: ScreenSyncUpdate) -> None:
-        await self._controller.set_screen_sync_map(update.colors, update.brightness)
+        if not isinstance(update.brightness, Mapping):
+            await self._controller.set_screen_sync_map(update.colors, update.brightness)
+            return
+        await asyncio.gather(
+            *(
+                self._controller.set_screen_sync_map({ip: color}, update.brightness.get(ip))
+                for ip, color in update.colors.items()
+            ),
+            return_exceptions=True,
+        )
 
-    def send(self, colors, brightness: Optional[int]) -> None:
+    def send(self, colors, brightness: Brightness) -> None:
         with self._lock:
             if self._closed or not colors:
                 return
+            if isinstance(brightness, Mapping):
+                brightness = dict(brightness)
             update = ScreenSyncUpdate(dict(colors), brightness)
             payloads = self._controller.map_screen_sync_payloads_cached(update.colors)
             if len(payloads) == len(update.colors):

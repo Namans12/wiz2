@@ -117,8 +117,14 @@ class ScreenSyncConfig:
     # and its stated, unverified spectral assumptions. Try it live; it is
     # not proven better without a colorimeter.
     mixing_model: str = "heuristic"
+    # Hold each bulb's Wi-Fi radio awake during sync with a chain of read-only
+    # status queries, and use the replies to confirm delivery. Measured on a
+    # WiZ ESP25 bulb: updates arrive in about 18 ms instead of about 117 ms.
+    # Costs roughly 110 small packets per second per bulb while syncing.
+    keep_awake: bool = True
 
     def __post_init__(self) -> None:
+        self.keep_awake = bool(self.keep_awake)
         self.mode = self.mode if self.mode in SCREEN_SYNC_MODES else "single"
         self.fps = max(4, min(60, int(self.fps)))
         self.monitor = int(self.monitor)

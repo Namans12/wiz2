@@ -25,8 +25,11 @@ three prior failed camera-calibration attempts):
     (real phosphor-converted whites have a blue pump peak + broad phosphor
     hump, not a smooth Planckian curve).
   * Relative luminous output between channels is inferred from the
-    hardware's reported drive currents and white_to_color_ratio, since no
-    per-channel luminous-flux measurement is available.
+    hardware's reported drive currents and typical luminous output per
+    milliamp for each LED type, since no per-channel luminous-flux
+    measurement is available.
+  * Channel values are sent as linear drive fractions; the bulb's real
+    value-to-light response has not been measured.
 These are the same class of engineering estimate the existing heuristic
 mapper already makes (e.g. its channel-current-based gain correction) --
 this model makes the assumptions explicit and solves a real equation with
@@ -56,6 +59,21 @@ _LED_WAVELENGTHS_NM = {"r": 625.0, "g": 530.0, "b": 455.0}
 # green LEDs are usually broader than red/blue -- see module docstring).
 _LED_FWHM_NM = {"r": 20.0, "g": 30.0, "b": 20.0}
 
+# Typical luminous output per milliamp of drive current for each LED type,
+# in relative units. An earlier version took drive current alone as the
+# luminance of every channel, which made the blue LED two-thirds as bright as
+# red. A 455 nm emitter sits where the eye's sensitivity is about 5% of its
+# peak, so per unit of current a blue die yields roughly a quarter of red's
+# lumens and an eighth of green's, and a phosphor white roughly matches green.
+# Derived from typical radiant output (red ~0.9, green ~0.66, blue ~1.65 mW
+# per mA) times luminous efficacy of radiation at each peak (219, 589 and
+# 33 lm/W), and ~120 lm/W at ~3 V for phosphor white. These are typical-part
+# figures, not measurements of any particular bulb.
+_LUMENS_PER_MILLIAMP = {"r": 197.0, "g": 389.0, "b": 54.0, "white": 360.0}
+# White-LED drive current relative to the strongest colour LED when the bulb
+# does not report one (the WiZ ESP25 RGBW module reports 24 mA against 9 mA).
+_DEFAULT_WHITE_CURRENT_RATIO = 2.7
+
 _GAMUT_EPSILON = 1e-6  # tolerance for "is this weight within [0,1]"
 
 
@@ -71,6 +89,7 @@ class _ProfileLike(Protocol):
     cct_cool_kelvin: float
     cct_warm_kelvin: float
     rgb_channel_current: tuple[int, int, int]
+    white_channel_current: tuple[int, ...]
 
     @property
     def white_ratio(self) -> float: ...
@@ -94,29 +113,34 @@ class PhysicalPrimaries:
             led_gaussian_xyz(_LED_WAVELENGTHS_NM[name], _LED_FWHM_NM[name])
             for name in ("r", "g", "b")
         ]
-        # Relative luminance between R/G/B is inferred from the hardware's
-        # reported drive currents (see module docstring): a higher current is
-        # taken as a proxy for higher relative max luminous output.
+        # Relative luminance of each channel: reported drive current times the
+        # typical luminous output per milliamp of that LED type (see
+        # _LUMENS_PER_MILLIAMP), normalized so the brightest colour LED is 1.
         currents = np.clip(np.array(profile.rgb_channel_current[:3], dtype=np.float64), 1.0, None)
-        rel_luminance = list(currents / currents.max())
+        per_ma = np.array([_LUMENS_PER_MILLIAMP[name] for name in ("r", "g", "b")])
+        colour_lumens = currents * per_ma
+        scale = float(colour_lumens.max())
+        rel_luminance = list(colour_lumens / scale)
 
-        # White channels' relative luminance ceiling: NOT profile.white_ratio
-        # (white_to_color_ratio) -- that field is a blend-threshold knob used
-        # elsewhere in this file's heuristic gating math, not a measured
-        # luminous-flux ratio, and using it here as one would badly starve
-        # white-channel usage (verified: it drove "full white" (255,255,255)
-        # to mostly R+G+B instead of the dedicated white LEDs). Dedicated
-        # white LEDs are typically a fixture's primary/most efficient
-        # channel, so this uses the same max-luminance ceiling as the
-        # strongest-current color channel (rel_luminance 1.0) -- a stated
-        # assumption, like the other unmeasured relative-output estimates in
-        # this module, absent real per-channel luminous-flux data.
+        # White channels use their own reported drive current when the bulb
+        # provides one; otherwise a typical ratio to the colour LEDs. This is
+        # NOT profile.white_ratio (white_to_color_ratio): that field is a
+        # blend-threshold knob in the heuristic mapper, not a flux ratio.
+        reported_white = tuple(
+            float(value) for value in getattr(profile, "white_channel_current", ()) if float(value) > 0
+        )
+        default_white = float(currents.max()) * _DEFAULT_WHITE_CURRENT_RATIO
+
+        def white_luminance(index: int) -> float:
+            current = reported_white[index] if index < len(reported_white) else default_white
+            return current * _LUMENS_PER_MILLIAMP["white"] / scale
+
         dual_white = int(getattr(profile, "white_channels", 1)) >= 2
         if int(getattr(profile, "white_channels", 1)) <= 0:
             white_indices = ()
         elif dual_white:
             raw += [blackbody_xyz(profile.cct_cool_kelvin), blackbody_xyz(profile.cct_warm_kelvin)]
-            rel_luminance += [1.0, 1.0]
+            rel_luminance += [white_luminance(0), white_luminance(1)]
             white_indices = (3, 4)
         else:
             # Single-white bulbs have no distinct CCT field; a WiZ RGBW
@@ -124,7 +148,7 @@ class PhysicalPrimaries:
             # cct_warm_kelvin as the representative CCT (a stated estimate,
             # like the other spectral assumptions in this module).
             raw += [blackbody_xyz(profile.cct_warm_kelvin)]
-            rel_luminance += [1.0]
+            rel_luminance += [white_luminance(0)]
             white_indices = (3,)
 
         rows = []

@@ -9,6 +9,7 @@ This audit lists user-facing controls that should remain visible because they ma
 | Start / Stop Screen Sync | `screen_sync.enabled` | `running`, `updatesSent` | Starts or stops capture and UDP sending. | Keep visible |
 | Monitor | `screen_sync.monitor` | `captureBackend`, target/output color changes | Selects the display captured by DXCam/MSS. | Keep visible |
 | Fast GPU capture | `screen_sync.use_gpu` | `captureBackend` | Uses DXCam when available, with MSS fallback. | Keep visible |
+| Low-latency link | `screen_sync.keep_awake` | Advanced Debug cadence line (delay, awake %, delivered, signal) | Holds each bulb's radio awake with read-only status queries and confirms delivery from the replies. | Keep visible |
 | Responsiveness | `screen_sync.max_fps` | `requestedFps`, `currentFps`, `frameTimeMs` | Raises the target capture cadence, capped by bulb/network limits. | Keep visible |
 | Smoothness | `screen_sync.smoothing` | `smoothingFactor` | Lower values react faster; higher values reduce flicker. | Keep visible |
 | Color Punch | `screen_sync.color_boost` | `effectiveColorBoost`, `outputColors` | Increases saturation after scene-aware attenuation. | Keep visible |

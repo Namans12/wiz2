@@ -83,6 +83,9 @@ class BulbColorProfile:
     white_channels: int = 1
     white_to_color_ratio: int = 20
     rgb_channel_current: tuple[int, int, int] = (9, 8, 6)
+    # Drive current of the white LED(s) as reported by the bulb (empty when
+    # unknown). Used only by the physical mixing model.
+    white_channel_current: tuple[int, ...] = field(default_factory=tuple)
     render_factor: tuple[int, ...] = field(default_factory=tuple)
     fade_in_ms: int = 0
     fade_out_ms: int = 0
@@ -384,6 +387,16 @@ class BulbGamutMapper:
         primaries = PhysicalPrimaries.from_profile(self.profile)
         target_xyz = linear.reshape(-1, 3).astype(np.float64) @ SRGB_TO_XYZ.T
         weights = solve_channel_mix_batch(target_xyz, primaries)  # (N, n_channels) in [0,1]
+
+        # The solve matches absolute luminance against the modeled LEDs, which
+        # leaves most colours at a fraction of full drive. Screen sync carries
+        # brightness in the dimming field and feeds full-drive colours here,
+        # so rescale each mix (ratios, hence chromaticity, unchanged) until
+        # its strongest channel matches the input's strongest channel, as the
+        # standard path does.
+        peak = weights.max(axis=1, keepdims=True)
+        wanted = np.clip(linear.reshape(-1, 3).astype(np.float64).max(axis=1, keepdims=True), 0.0, 1.0)
+        weights = np.where(peak > 1e-9, weights * (wanted / np.maximum(peak, 1e-9)), weights)
 
         # ── 5. Encode channel weights (0..1 drive fraction) to uint8 payload ────
         payload = np.clip(np.round(weights * 255.0), 0, 255).astype(np.uint8)

@@ -47,7 +47,8 @@ def cli(ctx):
 
 
 @cli.command()
-@click.option("--broadcast", "-b", default="192.168.1.255", help="Broadcast address for discovery")
+@click.option("--broadcast", "-b", default=None,
+              help="One broadcast address to search (default: every local network interface)")
 @click.option("--save/--no-save", default=True, help="Save discovered bulbs to config")
 @click.pass_context
 def discover(ctx, broadcast, save):
@@ -55,11 +56,11 @@ def discover(ctx, broadcast, save):
     controller = ctx.obj["controller"]
     config = ctx.obj["config"]
     
-    click.echo(f"Discovering bulbs on {broadcast}...")
+    click.echo(f"Discovering bulbs on {broadcast or 'all local network interfaces'}...")
     bulbs = run_async(ctx, controller.discover(broadcast))
     
     if not bulbs:
-        click.echo("No bulbs found. Check your network and broadcast address.")
+        click.echo("No bulbs found. Check that this PC and the bulbs are on the same Wi-Fi network.")
         return
     
     click.echo(f"Found {len(bulbs)} bulb(s):")

@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Optional
 
-from pywizlight import wizlight, discovery, PilotBuilder
+from pywizlight import wizlight, PilotBuilder
 
 from .calibration import (
     BulbCalibrationTable,
@@ -14,6 +14,7 @@ from .calibration import (
 )
 from .color_mapping import BulbColorProfile, BulbGamutMapper
 from .device_identity import mac_identity
+from .network import LIMITED_BROADCAST, discover_wiz_bulbs
 from .wiz_profile_metadata import parse_wiz_profile_hints
 
 PROFILE_QUERY_TIMEOUT = 2.5
@@ -85,28 +86,25 @@ class BulbController:
         self._screen_sync_cool_mix_bias = 0.0
         self._screen_sync_mixing_model = "heuristic"
     
-    async def discover(self, broadcast_space: str = "192.168.1.255") -> list[dict]:
+    async def discover(self, broadcast_space: Optional[str] = None) -> list[dict]:
         """
         Discover WiZ bulbs on the local network.
-        
+
         Args:
-            broadcast_space: Broadcast address for discovery (e.g., "192.168.1.255")
-        
+            broadcast_space: One explicit broadcast address (e.g.
+                "192.168.1.255"). ``None`` or "255.255.255.255" searches every
+                local network interface instead of one fixed subnet.
+
         Returns:
             List of discovered bulbs with ip and mac
         """
-        bulbs = await discovery.discover_lights(broadcast_space=broadcast_space)
-        
-        discovered = []
-        for bulb in bulbs:
-            self._bulbs[bulb.ip] = bulb
-            discovered.append({
-                "ip": bulb.ip,
-                "mac": bulb.mac,
-            })
-        
+        explicit = None if broadcast_space in (None, "", "auto", LIMITED_BROADCAST) else [broadcast_space]
+        discovered = await asyncio.to_thread(discover_wiz_bulbs, explicit)
+        for bulb in discovered:
+            if bulb["ip"] not in self._bulbs:
+                self._bulbs[bulb["ip"]] = wizlight(bulb["ip"], mac=bulb["mac"])
         return discovered
-    
+
     def _get_bulb(self, ip: str) -> wizlight:
         """Get or create a wizlight instance for an IP."""
         if ip not in self._bulbs:
@@ -146,11 +144,21 @@ class BulbController:
         # each has its own PROFILE_QUERY_TIMEOUT budget, so awaiting them one
         # at a time let a single slow/unresponsive bulb cost up to 3x the
         # timeout (~7.5s) before sync could start.
-        system_result, model_result, user_result = await asyncio.gather(
-            self._query_profile_metadata(bulb.getBulbConfig()),
-            self._query_profile_metadata(bulb.getModelConfig()),
-            self._query_profile_metadata(bulb.getUserConfig()),
-        )
+        queries = (bulb.getBulbConfig, bulb.getModelConfig, bulb.getUserConfig)
+        results = list(await asyncio.gather(
+            *(self._query_profile_metadata(query()) for query in queries)
+        ))
+        # A lost reply would silently fall back to generic hardware defaults
+        # (white-LED count and ratio), changing how colours are mapped for the
+        # whole session. Ask once more for whatever did not answer.
+        missing = [index for index, result in enumerate(results) if not result]
+        if missing:
+            retried = await asyncio.gather(
+                *(self._query_profile_metadata(queries[index]()) for index in missing)
+            )
+            for index, result in zip(missing, retried):
+                results[index] = result
+        system_result, model_result, user_result = results
 
         hints = parse_wiz_profile_hints(model_result, user_result, profile)
 
@@ -160,6 +168,7 @@ class BulbController:
             white_channels=hints.white_channels,
             white_to_color_ratio=hints.white_to_color_ratio,
             rgb_channel_current=hints.rgb_channel_current,
+            white_channel_current=hints.white_channel_current,
             render_factor=hints.render_factor,
             fade_in_ms=hints.fade_in_ms,
             fade_out_ms=hints.fade_out_ms,
@@ -177,6 +186,7 @@ class BulbController:
                 white_channels=profile.white_channels,
                 white_to_color_ratio=profile.white_to_color_ratio,
                 rgb_channel_current=profile.rgb_channel_current,
+                white_channel_current=profile.white_channel_current,
                 render_factor=profile.render_factor,
                 fade_in_ms=profile.fade_in_ms,
                 fade_out_ms=profile.fade_out_ms,
@@ -383,6 +393,16 @@ class BulbController:
             "neutral_white": neutral_active,
             "tone_lut": tone_active,
         }
+
+    def max_fade_ms(self, ips: list[str]) -> int:
+        """Longest on/off fade the given bulbs have configured (0 if unknown)."""
+
+        fades = [0]
+        for ip in ips:
+            profile = self._color_profiles.get(ip)
+            if profile is not None:
+                fades.extend((int(profile.fade_in_ms), int(profile.fade_out_ms)))
+        return max(fades)
 
     def summarize_screen_sync_mapping(self, ips: list[str]) -> str:
         """Return a compact user-facing summary of active screen-sync mapping layers."""

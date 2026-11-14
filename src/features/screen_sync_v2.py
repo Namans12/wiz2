@@ -2,6 +2,7 @@
 
 import gc
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -250,6 +251,21 @@ _TRUE_BLACK_LUMA = 0.015
 # runtime, defeating "follow video brightness". gamma<1 still lifts shadows
 # a bit (a dim-but-not-black scene stays visible) without an artificial cap.
 _BRIGHTNESS_FOLLOW_GAMMA = 0.7
+# Follow-mode dimming is smoothed with a time constant rather than a fixed
+# per-frame step (0.35 per frame at 30 FPS), so it settles equally fast at
+# every adaptive frame rate. A scene cut or a large step skips the smoothing:
+# it exists to hide flicker, not to delay a real change.
+_BRIGHTNESS_SMOOTH_TAU = 0.077
+_BRIGHTNESS_SNAP_STEP = 90.0
+# A colour target that jumps this far (Oklab distance x OKLAB_DELTA_SCALE) in
+# one frame is a scene change even when the cut detector's absolute
+# frame-difference test stays quiet, as it does between two dark scenes.
+_JUMP_SNAP_DELTA = 56.0
+_JUMP_MIN_FRAME_DIFF = 0.02
+# While waiting out a slow adaptive frame interval, a new frame whose sampled
+# pixels moved this much (0..1) is processed at once instead of on schedule.
+_EARLY_WAKE_CHANGE = 0.05
+_EARLY_WAKE_POLL = 0.004
 
 
 def _scene_stats(image: np.ndarray, sample_size: int = 24) -> tuple[float, float, float]:
@@ -836,8 +852,46 @@ class GPUCaptureManager:
         self.backend = backend
         self._lock = threading.Lock()
         self._last_frame: Optional[np.ndarray] = None
+        self._pending_frame: Optional[np.ndarray] = None
+        self._served_sample: Optional[np.ndarray] = None
         self._consecutive_errors = 0
         self._last_error: Optional[str] = None
+
+    @property
+    def poll_waits_for_frame(self) -> bool:
+        """Whether poll_change() itself blocks briefly waiting for a frame."""
+        return self.backend == "winrt"
+
+    def poll_change(self) -> Optional[float]:
+        """Check for a newer frame between scheduled captures.
+
+        Returns ``None`` when the screen has not changed, otherwise how far
+        the new frame's sampled pixels moved (0..1) from the frame last
+        served by ``grab()``. The new frame is kept and served by the next
+        ``grab()``, so polling early never costs a second capture.
+        """
+        camera = self._camera
+        if camera is None:
+            return None
+        try:
+            frame = camera.grab(new_frame_only=True) if self.backend == "winrt" else camera.grab()
+        except Exception:
+            # grab() owns error accounting; an idle poll must not double-count.
+            return None
+        if frame is None:
+            return None
+        rgb = self._to_rgb(frame)
+        self._pending_frame = rgb
+        sample = _sample_even_rgb(rgb, 32).astype(np.int16)
+        served = self._served_sample
+        if served is None or served.shape != sample.shape:
+            return 1.0
+        return float(np.abs(sample - served).mean() / 255.0)
+
+    def _serve(self, frame: np.ndarray) -> np.ndarray:
+        self._last_frame = frame
+        self._served_sample = _sample_even_rgb(frame, 32).astype(np.int16)
+        return frame
 
     def start(self, target_fps: int = 30) -> bool:
         """Initialize GPU capture. target_fps kept for caller compatibility."""
@@ -847,6 +901,8 @@ class GPUCaptureManager:
         with self._lock:
             try:
                 self._last_frame = None
+                self._pending_frame = None
+                self._served_sample = None
                 self._consecutive_errors = 0
                 self._last_error = None
                 # output_color="BGRA" keeps dxcam on the raw DXGI byte order and
@@ -855,6 +911,12 @@ class GPUCaptureManager:
                 # mode made every grab() raise ModuleNotFoundError('cv2').
                 # We slice BGRA -> RGB ourselves in grab().
                 backend_options = {"backend": self.backend} if self.backend != "dxgi" else {}
+                if self.backend == "winrt":
+                    # Windows Graphics Capture outlines a captured monitor in
+                    # yellow unless the session opts out. dxcam reads this
+                    # setting from the environment when it builds the session.
+                    # A user-provided value wins.
+                    os.environ.setdefault("DXCAM_WINRT_BORDER_REQUIRED", "0")
                 self._camera = dxcam.create(
                     device_idx=self._device,
                     output_idx=self._monitor,
@@ -867,7 +929,7 @@ class GPUCaptureManager:
                 # and verify grabbing actually works in this environment.
                 probe = self._camera.grab(new_frame_only=False) if self.backend == "winrt" else self._camera.grab()
                 if probe is not None:
-                    self._last_frame = self._to_rgb(probe)
+                    self._serve(self._to_rgb(probe))
                 return True
             except Exception:
                 # Release so the dxcam factory doesn't hand the broken
@@ -892,6 +954,11 @@ class GPUCaptureManager:
         if self._camera is None:
             return None
 
+        pending, self._pending_frame = self._pending_frame, None
+        if pending is not None:
+            # A frame fetched by poll_change() moments ago is the newest one.
+            return self._serve(pending)
+
         try:
             # WinRT's one-shot default waits briefly for a new frame; on
             # Windows that wait can be rounded up by the scheduler. Ask for
@@ -908,8 +975,7 @@ class GPUCaptureManager:
         self._consecutive_errors = 0
         self._last_error = None
         if frame is not None:
-            self._last_frame = self._to_rgb(frame)
-            return self._last_frame
+            return self._serve(self._to_rgb(frame))
         # None = screen unchanged since last acquire -> same pixels.
         return self._last_frame
 
@@ -919,6 +985,8 @@ class GPUCaptureManager:
             camera = self._camera
             self._camera = None
             self._last_frame = None
+            self._pending_frame = None
+            self._served_sample = None
             if camera is not None:
                 try:
                     camera.release()
@@ -1064,6 +1132,8 @@ class MotionDetector:
         self._motion_history: deque = deque(maxlen=5)
         self._prev_hist: Optional[np.ndarray] = None
         self.last_scene_cut = False
+        # Unaveraged frame-to-frame difference of the latest update (0..1).
+        self.last_diff = 0.0
 
     _CUT_HIST_TARGET_COLS = 320  # keep the cut histogram this dense regardless of input size
 
@@ -1104,6 +1174,7 @@ class MotionDetector:
             self._last_scene_sample = scene_sample
             self._motion_history.clear()
             self.last_scene_cut = False
+            self.last_diff = 0.0
             return 0.5  # Default to medium motion on first frame
 
         # Calculate frame difference
@@ -1137,6 +1208,7 @@ class MotionDetector:
         self._last_frame = small
         self._last_scene_sample = scene_sample
         self._motion_history.append(diff)
+        self.last_diff = float(diff)
 
         self.last_scene_cut = (
             diff > self._CUT_DIFF_THRESHOLD
@@ -1158,6 +1230,7 @@ class MotionDetector:
         self._motion_history.clear()
         self._prev_hist = None
         self.last_scene_cut = False
+        self.last_diff = 0.0
 
 
 class ColorPredictor:
@@ -1250,8 +1323,14 @@ class OptimizedScreenSync:
         self._output_brightness = (
             255 if self.config.brightness_mode == "follow" else int(self.config.sync_brightness)
         )
-        self._smoothed_brightness: Optional[float] = None
-        self._last_sent_brightness: Optional[int] = None
+        self._output_brightness_by_key: dict[str, int] = {}
+        self._smoothed_brightness: dict[str, float] = {}
+        self._last_sent_brightness: dict[str, int] = {}
+        self._frame_scene_cut = False
+        self._frame_dt: Optional[float] = None
+        self._prev_observed_targets: dict[str, tuple[int, int, int]] = {}
+        self._jump_snaps = 0
+        self._early_wakes = 0
 
         # Optimization components
         self._gpu_capture: Optional[GPUCaptureManager] = None
@@ -1324,8 +1403,14 @@ class OptimizedScreenSync:
             self._output_brightness = (
                 255 if self.config.brightness_mode == "follow" else int(self.config.sync_brightness)
             )
-            self._smoothed_brightness = None
-            self._last_sent_brightness = None
+            self._output_brightness_by_key = {}
+            self._smoothed_brightness = {}
+            self._last_sent_brightness = {}
+            self._frame_scene_cut = False
+            self._frame_dt = None
+            self._prev_observed_targets = {}
+            self._jump_snaps = 0
+            self._early_wakes = 0
             self._capture_status = "OK"
             self._dxcam_recovery_events_seen, _ = _dxcam_recovery_state()
             self._dxcam_recovery_status_until = 0.0
@@ -1536,7 +1621,7 @@ class OptimizedScreenSync:
         content: np.ndarray,
         region: str,
         neutral: float,
-    ) -> tuple[str, tuple[int, int, int], float]:
+    ) -> tuple[str, tuple[int, int, int], float, float]:
         """Process a single region (for parallel execution)."""
         region_image = crop_relative_region(content, region)
         color = self._extract_color(region_image)
@@ -1544,7 +1629,10 @@ class OptimizedScreenSync:
         effective_boost = 1.0 + (effective_boost - 1.0) * (1.0 - neutral)
         enhanced = enhance_color(color, color_boost=effective_boost, min_brightness=0)
         adapted = _apply_content_adaptation(enhanced, neutral)
-        return region, adapted, effective_boost
+        # Each zone dims with its own part of the picture: a dark left edge
+        # must not light as brightly as a bright right edge.
+        _, _, region_value = _scene_stats(region_image)
+        return region, adapted, effective_boost, region_value
 
     def _extract_colors(self, image: np.ndarray) -> dict[str, tuple[int, int, int]]:
         """Extract colors from image, using parallel processing if enabled."""
@@ -1566,11 +1654,14 @@ class OptimizedScreenSync:
         # dimming is pinned so only hue/saturation track the screen. The final
         # value is set after extraction (see _finalize_output_brightness) so
         # near-black colors can taper the output instead of flashing white.
-        if follow:
-            floor_frac = max(10, min(60, int(self.config.min_brightness))) / 255.0
-            raw_brightness = 255.0 * (floor_frac + (1.0 - floor_frac) * brightness)
-        else:
-            raw_brightness = float(self.config.sync_brightness)
+        floor_frac = max(10, min(60, int(self.config.min_brightness))) / 255.0
+
+        def raw_level(value_factor: float) -> float:
+            if follow:
+                return 255.0 * (floor_frac + (1.0 - floor_frac) * value_factor)
+            return float(self.config.sync_brightness)
+
+        raw_brightness = raw_level(brightness)
 
         # A genuinely black frame: in follow mode the bulb turns OFF (payload
         # of zeros encodes state:false in the sender) — but only after the
@@ -1609,11 +1700,13 @@ class OptimizedScreenSync:
                 # Constant mode on a nearly-black frame: the hue is noise, and
                 # brightness must not react — hold the last color instead.
                 return {}
-            self._finalize_output_brightness(raw_brightness, follow, peak)
+            self._finalize_output_brightness(raw_brightness, follow, peak, "all")
+            self._publish_output_brightness(("all",))
             return {"all": _normalize_to_full_drive(adapted)}
 
         # Zone mode - process regions
         colors: dict[str, tuple[int, int, int]] = {}
+        region_values: dict[str, float] = {}
 
         if self._executor and self.config.parallel_regions:
             # Parallel processing
@@ -1628,8 +1721,11 @@ class OptimizedScreenSync:
             deadline = time.perf_counter() + 0.1
             for future in futures:
                 try:
-                    region, color, effective_boost = future.result(timeout=max(0.0, deadline - time.perf_counter()))
+                    region, color, effective_boost, region_value = future.result(
+                        timeout=max(0.0, deadline - time.perf_counter())
+                    )
                     colors[region] = color
+                    region_values[region] = region_value
                     boosts.append(effective_boost)
                 except Exception:
                     future.cancel()
@@ -1640,8 +1736,9 @@ class OptimizedScreenSync:
             # Sequential processing
             boosts = []
             for region in self.config.active_regions:
-                _, color, effective_boost = self._process_region(content, region, neutral)
+                _, color, effective_boost, region_value = self._process_region(content, region, neutral)
                 colors[region] = color
+                region_values[region] = region_value
                 boosts.append(effective_boost)
             if boosts:
                 with self._stats_lock:
@@ -1650,31 +1747,60 @@ class OptimizedScreenSync:
         peak = max((max(color) for color in colors.values()), default=0)
         if not follow and peak < 24:
             return {}
-        self._finalize_output_brightness(raw_brightness, follow, peak)
+        for region, color in colors.items():
+            self._finalize_output_brightness(
+                raw_level(_brightness_factor(region_values.get(region, avg_value))),
+                follow,
+                max(color),
+                region,
+            )
+        self._publish_output_brightness(tuple(colors))
         return {region: _normalize_to_full_drive(color) for region, color in colors.items()}
-    
-    def _finalize_output_brightness(self, raw_brightness: float, follow: bool, peak: int) -> None:
-        """Finish the per-frame dimming value once the frame color is known.
+
+    def _finalize_output_brightness(
+        self,
+        raw_brightness: float,
+        follow: bool,
+        peak: int,
+        key: str = "all",
+    ) -> None:
+        """Finish one target's dimming value once its frame color is known.
 
         Follow mode tapers brightness with the pre-normalize color peak so a
         nearly-black scene glows faintly instead of flashing the normalized
-        color at the scene-value floor, then smooths with a short EMA (~3
-        frames) and quantizes to steps of 5 (deflicker + sender packet-cache
-        hits). Constant mode is pinned by definition — no taper, no smoothing.
+        color at the scene-value floor, then smooths with a short time
+        constant and quantizes to steps of 5 (deflicker + sender packet-cache
+        hits). A scene cut or a large step is applied at once. Constant mode
+        is pinned by definition — no taper, no smoothing.
         """
 
         if follow:
             if peak < 48:
                 raw_brightness *= max(0.0, peak) / 48.0
-            prev = self._smoothed_brightness
-            smoothed = raw_brightness if prev is None else prev + (raw_brightness - prev) * 0.35
-            self._smoothed_brightness = smoothed
+            prev = self._smoothed_brightness.get(key)
+            if prev is None or self._frame_scene_cut or abs(raw_brightness - prev) >= _BRIGHTNESS_SNAP_STEP:
+                smoothed = raw_brightness
+            else:
+                dt = self._frame_dt
+                alpha = 0.35 if dt is None else 1.0 - float(np.exp(-max(0.0, dt) / _BRIGHTNESS_SMOOTH_TAU))
+                smoothed = prev + (raw_brightness - prev) * alpha
+            self._smoothed_brightness[key] = smoothed
             out_brightness = int(round(smoothed / 5.0) * 5)
         else:
-            self._smoothed_brightness = None
+            self._smoothed_brightness.pop(key, None)
             out_brightness = int(round(raw_brightness / 5.0) * 5)
         with self._stats_lock:
-            self._output_brightness = max(26, min(255, out_brightness))
+            self._output_brightness_by_key[key] = max(26, min(255, out_brightness))
+
+    def _publish_output_brightness(self, keys: Sequence[str]) -> None:
+        """Drop targets no longer produced and refresh the overall level."""
+
+        with self._stats_lock:
+            for stale in set(self._output_brightness_by_key) - set(keys):
+                self._output_brightness_by_key.pop(stale, None)
+                self._smoothed_brightness.pop(stale, None)
+            if self._output_brightness_by_key:
+                self._output_brightness = max(self._output_brightness_by_key.values())
 
     def _update_adaptive_fps(self, motion_score: float) -> None:
         """Update FPS based on motion detection."""
@@ -1795,6 +1921,8 @@ class OptimizedScreenSync:
                         self._cuts_detected += 1
 
                 # Extract colors
+                self._frame_scene_cut = scene_cut
+                self._frame_dt = dt
                 target_colors = self._extract_colors(image)
                 with self._stats_lock:
                     self._last_target_colors = dict(target_colors)
@@ -1815,7 +1943,24 @@ class OptimizedScreenSync:
                         had_current = key in self._current_colors
 
                     observed_target = target
-                    if self._effective_mode == "single" and key == "all":
+                    # A large one-frame jump of the scene's own colour is a
+                    # scene change the absolute-difference cut test can miss
+                    # (two dark scenes): follow it at once, like a cut.
+                    last_observed = self._prev_observed_targets.get(key)
+                    self._prev_observed_targets[key] = observed_target
+                    jump = (
+                        not scene_cut
+                        and not black_off
+                        and had_current
+                        and last_observed is not None
+                        and self._motion_detector.last_diff >= _JUMP_MIN_FRAME_DIFF
+                        and oklab_distance8(observed_target, last_observed) * OKLAB_DELTA_SCALE >= _JUMP_SNAP_DELTA
+                        and oklab_distance8(observed_target, current) * OKLAB_DELTA_SCALE >= _JUMP_SNAP_DELTA
+                    )
+                    if jump:
+                        with self._stats_lock:
+                            self._jump_snaps += 1
+                    if self._effective_mode == "single" and key == "all" and not jump:
                         # No hold on cuts, in action profile (kills responsiveness),
                         # or on neutral scenes (holding tints B&W content).
                         skip_hold = (
@@ -1830,7 +1975,7 @@ class OptimizedScreenSync:
                     # smoothed output back into prediction creates momentum
                     # even after the scene has stopped or reversed.
                     # Apply predictive smoothing
-                    if prediction_weight > 0.0 and not black_off:
+                    if prediction_weight > 0.0 and not black_off and not jump:
                         predicted = self._color_predictor.predict(key, target)
                         # Blend predicted with target
                         target = tuple(
@@ -1840,7 +1985,7 @@ class OptimizedScreenSync:
 
                     # Smooth transition — perceptually-uniform Oklab lerp with a
                     # hard snap once within ~0.4 JND (kills the EMA's long tail).
-                    if black_off or not had_current or smoothing_factor >= 1.0:
+                    if black_off or not had_current or smoothing_factor >= 1.0 or jump:
                         smoothed = tuple(int(v) for v in target)
                     else:
                         smoothed = lerp_oklab8(current, target, smoothing_factor)
@@ -1856,7 +2001,7 @@ class OptimizedScreenSync:
                     with self._stats_lock:
                         last_sent = self._last_sent_colors.get(key)
                         last_sent_at = self._last_color_send_at.get(key)
-                    if last_sent is None or scene_cut:
+                    if last_sent is None or scene_cut or jump:
                         delta = float("inf")
                     else:
                         delta = oklab_distance8(smoothed, last_sent) * OKLAB_DELTA_SCALE
@@ -1881,26 +2026,27 @@ class OptimizedScreenSync:
                             self._current_colors.pop(key, None)
                             self._last_sent_colors.pop(key, None)
                             self._last_color_send_at.pop(key, None)
+                            self._prev_observed_targets.pop(key, None)
+                            self._last_sent_brightness.pop(key, None)
 
                 # Brightness rides the dimming field: when it moves >=5 while
                 # the color holds steady (e.g. a slow fade in follow mode), the
                 # colors must be resent anyway or the bulb never dims.
                 with self._stats_lock:
-                    out_brightness = self._output_brightness
-                    last_sent_brightness = self._last_sent_brightness
-                if (
-                    target_colors
-                    and last_sent_brightness is not None
-                    and abs(out_brightness - last_sent_brightness) >= 5
-                ):
-                    with self._stats_lock:
-                        # Dimming is shared by all zones. A hue change in one
-                        # zone must not prevent steady zones receiving it too.
-                        changed_colors.update({
-                            key: self._current_colors[key]
-                            for key in target_colors
-                            if key in self._current_colors
-                        })
+                    # Each target carries its own dimming; resend any whose
+                    # level moved even if another zone's hue also changed.
+                    levels = {
+                        key: self._output_brightness_by_key.get(key, self._output_brightness)
+                        for key in target_colors
+                    }
+                    for key, level in levels.items():
+                        last_level = self._last_sent_brightness.get(key)
+                        if (
+                            last_level is not None
+                            and abs(level - last_level) >= 5
+                            and key in self._current_colors
+                        ):
+                            changed_colors[key] = self._current_colors[key]
 
                 # Send changes
                 if changed_colors:
@@ -1916,7 +2062,10 @@ class OptimizedScreenSync:
                         self._last_send_time = now
                         self._updates_sent += 1
                         self._last_error = None
-                        self._last_sent_brightness = out_brightness
+                        for key in changed_colors:
+                            self._last_sent_brightness[key] = levels.get(
+                                key, self._output_brightness_by_key.get(key, self._output_brightness)
+                            )
             except Exception as exc:
                 print(f"Screen sync error: {exc}")
                 with self._stats_lock:
@@ -1932,7 +2081,44 @@ class OptimizedScreenSync:
             
             target_frame_time = 1.0 / self._current_fps
             if frame_time < target_frame_time:
-                self._frame_pacer.sleep(target_frame_time - frame_time)
+                self._wait_for_next_frame(frame_time, target_frame_time)
+
+    def _wait_for_next_frame(self, frame_time: float, target_frame_time: float) -> None:
+        """Sleep until the next scheduled frame, waking early for a new scene.
+
+        Adaptive FPS slows the loop on a static screen, which used to delay
+        the first frame of a scene change by up to a whole slow interval.
+        Past the fastest allowed frame interval the wait now watches the GPU
+        capture for a new frame and returns as soon as one differs clearly
+        from the frame last processed. Small changes keep the slower pace.
+        """
+
+        pacer = self._frame_pacer
+        gpu = self._gpu_capture
+        remaining = target_frame_time - frame_time
+        fastest = 1.0 / max(1, self.config.max_fps if self.config.adaptive_fps else self.config.fps)
+        head = max(0.0, fastest - frame_time)
+        if gpu is None or not gpu.is_active or remaining - head < _EARLY_WAKE_POLL:
+            pacer.sleep(remaining)
+            return
+        pacer.sleep(head)
+        deadline = time.perf_counter() + (remaining - head)
+        while self._running:
+            left = deadline - time.perf_counter()
+            if left <= 0:
+                return
+            change = gpu.poll_change()
+            if change is None:
+                if not gpu.poll_waits_for_frame:
+                    pacer.sleep(min(_EARLY_WAKE_POLL, left))
+                continue
+            if change >= _EARLY_WAKE_CHANGE:
+                with self._stats_lock:
+                    self._early_wakes += 1
+                return
+            # A small change keeps the scheduled pace; do not fetch frames
+            # faster than the fastest frame interval while waiting it out.
+            pacer.sleep(min(fastest, max(0.0, deadline - time.perf_counter())))
     
     @property
     def is_running(self) -> bool:
@@ -2005,6 +2191,9 @@ class OptimizedScreenSync:
                 "sceneCut": self._last_scene_cut,
                 "cuts_detected": self._cuts_detected,
                 "cutsDetected": self._cuts_detected,
+                "jump_snaps": self._jump_snaps,
+                "early_wakes": self._early_wakes,
+                "output_brightness_by_target": dict(self._output_brightness_by_key),
                 "scene_neutral": self._scene_neutral,
                 "sceneNeutral": self._scene_neutral,
                 "scene_luma": self._scene_luma,
@@ -2039,10 +2228,20 @@ class OptimizedScreenSync:
 
     @property
     def output_brightness(self) -> int:
-        """Current bulb brightness (0-255) to send as the setPilot dimming."""
+        """Current bulb brightness (0-255) to send as the setPilot dimming.
+
+        In zone mode this is the brightest zone; use
+        ``output_brightness_for`` to dim each zone with its own content.
+        """
 
         with self._stats_lock:
             return self._output_brightness
+
+    def output_brightness_for(self, key: str) -> int:
+        """Brightness (0-255) for one target ("all" or a zone name)."""
+
+        with self._stats_lock:
+            return self._output_brightness_by_key.get(key, self._output_brightness)
 
     @property
     def current_fps(self) -> int:

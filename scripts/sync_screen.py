@@ -15,7 +15,7 @@ from src.core.config import Config
 from src.features.screen_sync import build_bulb_color_map, effective_screen_sync_mode, resolve_active_regions
 from src.features.screen_sync_v2 import OptimizedScreenSync, build_optimized_capture_config
 from src.features.fast_udp_sender import FastBulbSenderPool
-from src.features.sync_transport import ScreenSyncTransport, prepare_screen_sync_mapping
+from src.features.sync_transport import ScreenSyncTransport, brightness_for_bulbs, prepare_screen_sync_mapping
 
 
 def main():
@@ -47,14 +47,18 @@ def main():
         layout = dict(settings.bulb_layout) if mode == "zones" else {}
         transport = ScreenSyncTransport(
             controller, runner.submit,
-            FastBulbSenderPool(max_send_hz=min(28, max(12, settings.max_fps)), prewarm_ips=ips),
+            FastBulbSenderPool(
+                max_send_hz=min(28, max(12, settings.max_fps)),
+                prewarm_ips=ips,
+                keep_awake=settings.keep_awake,
+            ),
         )
 
         def on_color_change(colors_by_target):
             if screen_sync is None:
                 return
             colors = build_bulb_color_map(ips, colors_by_target, mode, layout)
-            transport.send(colors, screen_sync.output_brightness)
+            transport.send(colors, brightness_for_bulbs(screen_sync, ips, mode, layout))
 
         screen_sync = OptimizedScreenSync(
             on_color_change=on_color_change,

@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import gc
+import ipaddress
 import json
 import sys
 from concurrent.futures import Future
@@ -28,7 +29,7 @@ from ..features.screen_sync import (
 )
 from ..features.screen_sync_v2 import OptimizedScreenSync, build_optimized_capture_config
 from ..features.fast_udp_sender import FastBulbSenderPool
-from ..features.sync_transport import ScreenSyncTransport
+from ..features.sync_transport import ScreenSyncTransport, brightness_for_bulbs
 from ..features.sync_preflight import prepare_screen_sync_mapping
 
 # Import new components
@@ -400,6 +401,7 @@ class WizLightModernGUI(AnimationMixin):
         self.use_gpu_var = ctk.BooleanVar(value=self.config.screen_sync.use_gpu)
         self.adaptive_fps_var = ctk.BooleanVar(value=self.config.screen_sync.adaptive_fps)
         self.predictive_smoothing_var = ctk.BooleanVar(value=self.config.screen_sync.predictive_smoothing)
+        self.keep_awake_var = ctk.BooleanVar(value=self.config.screen_sync.keep_awake)
         self.color_source_labels = {
             "Auto (detect)": "auto",
             "Standard / sRGB": "srgb",
@@ -594,6 +596,14 @@ class WizLightModernGUI(AnimationMixin):
             variable=self.use_gpu_var,
             command=self._queue_screen_sync_settings_save,
         ).pack(side="left", padx=(0, 10))
+        # Keeps each bulb's Wi-Fi radio listening during sync so updates land
+        # in milliseconds, and confirms delivery from the bulb's replies.
+        ctk.CTkCheckBox(
+            flags,
+            text="Low-latency link",
+            variable=self.keep_awake_var,
+            command=self._queue_screen_sync_settings_save,
+        ).pack(side="left", padx=(0, 10))
 
         ctk.CTkLabel(
             flags,
@@ -701,6 +711,20 @@ class WizLightModernGUI(AnimationMixin):
             border_width=1,
         )
         self.remove_stale_button.pack(side="left")
+        add_row = ctk.CTkFrame(bulbs, fg_color=self._surface_color(bulbs))
+        add_row.pack(fill="x", padx=14, pady=(0, 10))
+        self.add_bulb_entry = ctk.CTkEntry(
+            add_row, placeholder_text="Bulb IP address, e.g. 192.168.1.20", width=260
+        )
+        self.add_bulb_entry.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            add_row,
+            text="Add by IP",
+            command=self._add_bulb_by_ip,
+            width=110,
+            fg_color="transparent",
+            border_width=1,
+        ).pack(side="left")
         self.bulb_info = ctk.CTkLabel(bulbs, text="No bulbs found", justify="left", text_color="gray")
         self.bulb_info.pack(anchor="w", padx=14, pady=(0, 14))
         self._dashboard_frame.pack(fill="both", expand=True, pady=(0, 12))
@@ -884,6 +908,7 @@ class WizLightModernGUI(AnimationMixin):
         settings.use_gpu = bool(self.use_gpu_var.get())
         settings.adaptive_fps = bool(self.adaptive_fps_var.get())
         settings.predictive_smoothing = bool(self.predictive_smoothing_var.get())
+        settings.keep_awake = bool(self.keep_awake_var.get())
         settings.bulb_layout = self._current_screen_layout()
         settings.__post_init__()
         self.config.save()
@@ -1176,6 +1201,9 @@ class WizLightModernGUI(AnimationMixin):
             self.screen_sync_debug_cadence.set(
                 f"Cadence: warming up | sends {snapshot['updates_sent']}"
             )
+        link_text = self._link_summary()
+        if link_text:
+            self.screen_sync_debug_cadence.set(f"{self.screen_sync_debug_cadence.get()} | {link_text}")
         self.screen_sync_debug_motion.set(
             f"Motion: {snapshot['motion_score']:.3f} | smooth {snapshot['smoothing_factor']:.2f} | predict {snapshot['prediction_weight']:.2f}"
         )
@@ -1193,6 +1221,25 @@ class WizLightModernGUI(AnimationMixin):
                 self.screen_sync_debug_preview.configure(fg_color=preview_color)
 
         self._screen_sync_debug_id = self.root.after(350, self._refresh_screen_sync_debug)
+
+    def _link_summary(self) -> str:
+        """One line per bulb on the low-latency link: delay, delivery, signal."""
+        transport = self._screen_sync_transport
+        stats = getattr(getattr(transport, "fast_sender", None), "link_stats", None) or []
+        parts = []
+        for link in stats:
+            if not link.get("reachable"):
+                parts.append(f"{link['ip']}: no reply")
+                continue
+            text = f"{link['ip']}: {link['rtt_ms']:.0f} ms"
+            if link.get("awake_pct") is not None:
+                text += f", awake {link['awake_pct']:.0f}%"
+            if link.get("confirm_ms") is not None:
+                text += f", delivered in {link['confirm_ms']:.0f} ms ({link['confirmed']}/{link['updates']})"
+            if link.get("rssi") is not None:
+                text += f", signal {link['rssi']} dBm"
+            parts.append(text)
+        return "Link " + "; ".join(parts) if parts else ""
 
     def _update_bulb_status(self):
         has_bulbs = bool(self.config.bulbs)
@@ -1241,6 +1288,32 @@ class WizLightModernGUI(AnimationMixin):
                 self.root.after(0, lambda msg=message: self._set_status(msg))
 
         self._run_async(discover())
+
+    def _add_bulb_by_ip(self):
+        """Add a bulb that discovery cannot see, after it answers at that address."""
+        text = self.add_bulb_entry.get().strip()
+        try:
+            ip = str(ipaddress.IPv4Address(text))
+        except ValueError:
+            self._set_status("Enter a valid IPv4 address, e.g. 192.168.1.20")
+            return
+        self._set_status(f"Checking {ip}...")
+
+        async def add():
+            try:
+                mac = await fetch_fresh_identity(self.controller, ip)
+            except Exception:
+                mac = None
+            if self._closing:
+                return
+            if mac is None:
+                self.root.after(0, lambda: self._set_status(f"No WiZ bulb answered at {ip}"))
+                return
+            self.config.add_bulb(ip, f"Bulb {len(self.config.bulbs) + 1}", mac, preserve_name=True)
+            self.root.after(0, self._update_bulb_status)
+            self.root.after(0, lambda: self._set_status(f"Added bulb at {ip}"))
+
+        self._run_async(add())
 
     def _remove_stale_bulbs(self):
         configured_ips = self._get_bulb_ips()
@@ -1423,8 +1496,9 @@ class WizLightModernGUI(AnimationMixin):
             if bulb_colors:
                 # Brightness rides the setPilot dimming field so hue is always
                 # rendered at full LED drive (colors are value-normalized by
-                # the engine); read it at send time from the engine.
-                brightness = engine.output_brightness if engine else None
+                # the engine); read it at send time from the engine. In zone
+                # mode each bulb dims with its own part of the picture.
+                brightness = brightness_for_bulbs(engine, ips, mode, bulb_layout) if engine else None
                 transport.send(bulb_colors, brightness)
 
         try:
@@ -1433,6 +1507,7 @@ class WizLightModernGUI(AnimationMixin):
                 self._async_runner.submit,
                 FastBulbSenderPool(
                     max_send_hz=min(28, max(12, settings.max_fps)), prewarm_ips=ips,
+                    keep_awake=bool(getattr(settings, "keep_awake", False)),
                 ),
             )
             self._screen_sync_transport = transport
@@ -1460,9 +1535,18 @@ class WizLightModernGUI(AnimationMixin):
         if mapping:
             runtime = f"{runtime} / {mapping}"
         skipped = len(configured_ips) - len(ips)
+        # Follow mode switches the bulb off on black; coming back then costs
+        # the bulb's own fade-in, which only the WiZ app can change.
+        fade_ms = self.controller.max_fade_ms(ips) if settings.brightness_mode == "follow" else 0
+        if not isinstance(fade_ms, int):
+            fade_ms = 0
         self._set_status(
             f"Screen sync ON ({runtime}{', skipped ' + str(skipped) + ' stale bulb(s)' if skipped else ''})"
             + (f" | profile setup incomplete: {warning}" if warning else "")
+            + (
+                f" | bulb fade is {fade_ms} ms: set Fade in/out to 0 in the WiZ app for faster returns from black"
+                if fade_ms >= 100 else ""
+            )
         )
         missing = set(configured_ips) - set(ips)
         self._sync_active_ips = set(ips)
