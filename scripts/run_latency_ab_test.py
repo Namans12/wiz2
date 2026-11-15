@@ -125,7 +125,8 @@ def main() -> None:
     root.configure(bg=BLACK)
     label = tk.Label(root, font=("Arial", 20), bg=BLACK, fg="#808080")
     label.place(relx=0.5, rely=0.92, anchor="center")
-    log: dict = {"order": order, "hold": args.hold, "ips": ips, "segments": []}
+    log: dict = {"order": order, "hold": args.hold, "ips": ips, "segments": [],
+                 "capture_error": None}
     stopped = {"value": False}
 
     def show(colour: str, text: str) -> None:
@@ -176,6 +177,15 @@ def main() -> None:
                 # confirms the pattern covered the captured monitor.
                 seen = engine.debug_snapshot["target_colors"].get("all")
                 segment["changes"][-1]["engine_target_at_end"] = list(seen) if seen else None
+                expected = (255, 0, 0) if segment["changes"][-1]["colour"] == "red" else (0, 0, 255)
+                if seen is None or sum((a - b) ** 2 for a, b in zip(seen, expected)) > 80 ** 2:
+                    log["capture_error"] = (
+                        f"Capture did not retain the displayed {segment['changes'][-1]['colour']} "
+                        f"frame: observed {seen}. Recording is not valid for latency comparison."
+                    )
+                    print(log["capture_error"], flush=True)
+                    finish()
+                    return
             if cut >= args.cuts:
                 close_segment(segment)
                 show(GREEN, f"segment {index + 1}/{len(order)} done")

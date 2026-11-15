@@ -83,3 +83,24 @@ multi-color measurements, hours-long operation, controlled network impairment,
 and physical Google TV/macOS acceptance. The WinRT no-frame poll loop now
 paces immediate returns instead of busy-spinning, with regression tests for
 both immediate and blocking polls.
+
+## Live capture regression found during optical setup
+
+The first optical attempt was invalid: the user reported that the lights did
+not follow the pattern. Its capture log retained a red target at the end of
+every blue interval. The cause was the new early poll using DXCam's
+`new_frame_only=True`: this consumed a new WinRT frame without updating the
+backend's fallback cache. A subsequent ordinary `new_frame_only=False` grab
+could return the older red frame. The manager's one-use pending frame did not
+prevent that reversion.
+
+WinRT polling now uses the same nonblocking cache path as ordinary grabs.
+A regression test reproduced red → polled blue → stale red before the fix,
+then verified that repeated grabs retain blue after the fix. All eleven
+capture-path tests passed. The optical runner now aborts if the engine does
+not retain the displayed color, rather than accepting an invalid recording.
+
+A four-cut live preflight then retained the correct targets, both bulbs
+confirmed 4/4 changed states, and the user confirmed that both lamps followed
+the HDMI monitor correctly. Both original states were restored. This validates
+the capture fix; optical latency still requires analysis of a fresh recording.

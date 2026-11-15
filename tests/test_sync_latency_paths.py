@@ -135,6 +135,37 @@ def test_windows_graphics_capture_session_is_created_without_the_yellow_border(m
     assert seen["border"] == "0"
 
 
+def test_winrt_polled_frame_cannot_revert_to_an_older_backend_cache():
+    red = np.zeros((64, 64, 4), dtype=np.uint8)
+    red[:, :, 2] = 255
+    blue = np.zeros_like(red)
+    blue[:, :, 0] = 255
+
+    class Camera:
+        # DXCam only updates its fallback cache on new_frame_only=False.
+        # A True poll can consume a newer frame while leaving that cache old.
+        def __init__(self):
+            self.frames = [red, blue]
+            self.cached = None
+
+        def grab(self, *, new_frame_only=True):
+            if self.frames:
+                frame = self.frames.pop(0)
+                if not new_frame_only:
+                    self.cached = frame
+                return frame
+            return None if new_frame_only else self.cached
+
+    capture = GPUCaptureManager(backend="winrt")
+    capture._camera = Camera()
+    assert tuple(capture.grab()[0, 0]) == (255, 0, 0)
+    assert capture.poll_change() > sync_module._EARLY_WAKE_CHANGE
+    assert tuple(capture.grab()[0, 0]) == (0, 0, 255)
+    for _ in range(3):
+        assert tuple(capture.grab()[0, 0]) == (0, 0, 255)
+    assert capture.poll_change() in (None, 0.0)
+
+
 def test_wait_returns_early_when_the_polled_frame_changed():
     engine = OptimizedScreenSync(
         lambda colors: None,

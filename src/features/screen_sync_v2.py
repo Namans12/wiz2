@@ -860,7 +860,7 @@ class GPUCaptureManager:
     @property
     def poll_waits_for_frame(self) -> bool:
         """Whether poll_change() itself blocks briefly waiting for a frame."""
-        return self.backend == "winrt"
+        return False
 
     def poll_change(self) -> Optional[float]:
         """Check for a newer frame between scheduled captures.
@@ -874,7 +874,12 @@ class GPUCaptureManager:
         if camera is None:
             return None
         try:
-            frame = camera.grab(new_frame_only=True) if self.backend == "winrt" else camera.grab()
+            # Use the same cache contract as grab(). DXCam's True path
+            # consumes a new WinRT frame without updating its fallback cache;
+            # the next False grab would then resurrect an older scene.
+            # False also avoids WinRT's wait for frame arrival. Repeated
+            # cached pixels compare as zero change and are paced below.
+            frame = camera.grab(new_frame_only=False) if self.backend == "winrt" else camera.grab()
         except Exception:
             # grab() owns error accounting; an idle poll must not double-count.
             return None
