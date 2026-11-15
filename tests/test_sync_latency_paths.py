@@ -1,6 +1,7 @@
 """Scene-change responsiveness: early wake, brightness snap, jump snap, zone dimming."""
 
 import numpy as np
+import pytest
 
 from src.features import screen_sync_v2 as sync_module
 from src.features.screen_sync_v2 import GPUCaptureManager, OptimizedCaptureConfig, OptimizedScreenSync
@@ -160,6 +161,41 @@ def test_wait_returns_early_when_the_polled_frame_changed():
     assert engine._gpu_capture.polls == 2
     assert engine._frame_pacer.slept < 0.1  # nowhere near the 250 ms interval
     assert engine.debug_snapshot["early_wakes"] == 1
+
+
+@pytest.mark.parametrize("poll_delay", [0.0, 0.01])
+def test_winrt_empty_polls_are_paced_without_double_wait(monkeypatch, poll_delay):
+    engine = _engine()
+    engine.config.adaptive_fps = True
+    engine.config.max_fps = 30
+    clock = [10.0]
+    sleeps = []
+
+    class Gpu:
+        is_active = True
+        poll_waits_for_frame = True
+        polls = 0
+
+        def poll_change(self):
+            self.polls += 1
+            assert self.polls < 70, "No-frame capture must not busy-spin"
+            clock[0] += poll_delay
+            return None
+
+    class Pacer:
+        def sleep(self, seconds):
+            assert seconds > 0
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: clock[0])
+    engine._gpu_capture, engine._frame_pacer, engine._running = Gpu(), Pacer(), True
+    engine._wait_for_next_frame(0.001, 0.25)
+    assert 10.249 <= clock[0] <= 10.26
+    if poll_delay:
+        assert len(sleeps) == 1  # only the initial frame-rate cap; polls waited already
+    else:
+        assert len(sleeps) > 1
 
 
 def test_each_zone_dims_with_its_own_part_of_the_picture():

@@ -2107,10 +2107,17 @@ class OptimizedScreenSync:
             left = deadline - time.perf_counter()
             if left <= 0:
                 return
+            poll_started = time.perf_counter()
             change = gpu.poll_change()
             if change is None:
-                if not gpu.poll_waits_for_frame:
-                    pacer.sleep(min(_EARLY_WAKE_POLL, left))
+                # WinRT normally waits internally, but a missing frame or
+                # capture exception can also return immediately. Avoid a
+                # busy loop then; do not add delay after a blocking poll.
+                poll_elapsed = time.perf_counter() - poll_started
+                idle = min(_EARLY_WAKE_POLL - poll_elapsed,
+                           deadline - time.perf_counter())
+                if idle > 0:
+                    pacer.sleep(idle)
                 continue
             if change >= _EARLY_WAKE_CHANGE:
                 with self._stats_lock:
