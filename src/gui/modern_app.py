@@ -1235,7 +1235,9 @@ class WizLightModernGUI(AnimationMixin):
             if link.get("awake_pct") is not None:
                 text += f", awake {link['awake_pct']:.0f}%"
             if link.get("confirm_ms") is not None:
-                text += f", delivered in {link['confirm_ms']:.0f} ms ({link['confirmed']}/{link['updates']})"
+                text += f", state confirmed in {link['confirm_ms']:.0f} ms ({link['confirmed']}/{link['updates']})"
+            if link.get("stale_events"):
+                text += f", stale recoveries {link['recoveries']}/{link['stale_events']}"
             if link.get("rssi") is not None:
                 text += f", signal {link['rssi']} dBm"
             parts.append(text)

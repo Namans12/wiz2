@@ -63,6 +63,10 @@ _LINK_IDLE_PAUSE = 120.0
 # Re-send an update the bulb does not report showing, at most this many times.
 _CONFIRM_RESEND_AFTER = 0.035
 _CONFIRM_MAX_RESENDS = 4
+# A persistent mismatch must not exhaust recovery forever, nor cause a tight
+# resend loop on firmware that reports channels differently.
+_CONFIRM_RETRY_COOLDOWN = 1.0
+_STALE_CONFIRM_AFTER = 0.035
 
 
 def _clamp_channel(value: int) -> int:
@@ -107,7 +111,7 @@ def pilot_state_matches(result: Mapping, expected: tuple) -> bool:
     """Whether a getPilot result shows the state from expected_pilot_state()."""
 
     state, r, g, b, c, w, dimming = expected
-    if bool(result.get("state")) != state:
+    if not isinstance(result.get("state"), bool) or result["state"] != state:
         return False
     if not state:
         return True
@@ -390,7 +394,8 @@ class BulbUDPSocket:
 
 
 class _Expectation:
-    __slots__ = ("packet", "state", "created_at", "last_attempt_at", "resends", "confirmed")
+    __slots__ = ("packet", "state", "created_at", "last_attempt_at", "resends", "confirmed",
+                 "recovering", "mismatch_since")
 
     def __init__(self, packet: bytes, state: tuple, now: float):
         self.packet = packet
@@ -399,6 +404,8 @@ class _Expectation:
         self.last_attempt_at = now
         self.resends = 0
         self.confirmed = False
+        self.recovering = False
+        self.mismatch_since: Optional[float] = None
 
 
 class BulbLinkMonitor:
@@ -437,6 +444,9 @@ class BulbLinkMonitor:
         self._timeouts = 0
         self._updates = 0
         self._confirmed_count = 0
+        self._stale_events = 0
+        self._recoveries = 0
+        self._recovery_ms: deque = deque(maxlen=60)
         self._resends = 0
         self._rssi: Optional[int] = None
         self._paused = False
@@ -551,24 +561,52 @@ class BulbLinkMonitor:
                     pass
 
     def _check(self, result: dict, now: float) -> None:
+        # An error/incomplete response is not evidence that an off command
+        # succeeded, or that a previously confirmed bulb changed state.
+        if not isinstance(result.get("state"), bool):
+            return
         action = None
         with self._lock:
             expected = self._expected
-            if expected is None or expected.confirmed:
+            if expected is None:
                 return
             if pilot_state_matches(result, expected.state):
+                expected.mismatch_since = None
+                if expected.confirmed:
+                    return
                 expected.confirmed = True
-                self._confirmed_count += 1
-                self._confirm_ms.append((now - expected.created_at) * 1000.0)
+                elapsed_ms = (now - expected.created_at) * 1000.0
+                if expected.recovering:
+                    self._recoveries += 1
+                    self._recovery_ms.append(elapsed_ms)
+                else:
+                    self._confirmed_count += 1
+                    self._confirm_ms.append(elapsed_ms)
                 action = self._confirmed
-            elif (
-                expected.resends < _CONFIRM_MAX_RESENDS
-                and now - expected.last_attempt_at >= _CONFIRM_RESEND_AFTER
-            ):
-                expected.resends += 1
-                expected.last_attempt_at = now
-                self._resends += 1
-                action = self._resend
+            else:
+                if expected.confirmed:
+                    # Require a sustained mismatch: a single delayed report
+                    # must not cause flicker or inflate recovery statistics.
+                    if expected.mismatch_since is None:
+                        expected.mismatch_since = now
+                        return
+                    if now - expected.mismatch_since < _STALE_CONFIRM_AFTER:
+                        return
+                    expected.confirmed = False
+                    expected.recovering = True
+                    expected.created_at = expected.mismatch_since
+                    expected.last_attempt_at = now - _CONFIRM_RESEND_AFTER - 0.001
+                    expected.resends = 0
+                    self._stale_events += 1
+                if (expected.resends >= _CONFIRM_MAX_RESENDS
+                        and now - expected.last_attempt_at >= _CONFIRM_RETRY_COOLDOWN):
+                    expected.resends = 0
+                if (expected.resends < _CONFIRM_MAX_RESENDS
+                        and now - expected.last_attempt_at >= _CONFIRM_RESEND_AFTER):
+                    expected.resends += 1
+                    expected.last_attempt_at = now
+                    self._resends += 1
+                    action = self._resend
             packet = expected.packet
         # Callbacks take the sender's lock; never call them holding ours.
         if action is not None:
@@ -596,6 +634,12 @@ class BulbLinkMonitor:
                 "rssi": self._rssi,
                 "updates": self._updates,
                 "confirmed": self._confirmed_count,
+                "stale_events": self._stale_events,
+                "recoveries": self._recoveries,
+                "state_confirmed": bool(self._expected and self._expected.confirmed),
+                "recovery_ms": (
+                    sorted(self._recovery_ms)[len(self._recovery_ms) // 2]
+                ) if self._recovery_ms else None,
                 "resends": self._resends,
                 "confirm_ms": confirms[len(confirms) // 2] if confirms else None,
                 "confirm_p95_ms": (

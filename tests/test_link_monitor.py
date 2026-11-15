@@ -84,6 +84,7 @@ def test_expected_state_and_matching_cover_on_off_and_dimming():
     # An off bulb still reports its last colour; only the power state matters.
     assert udp.pilot_state_matches({"state": False, "r": 9, "g": 9, "b": 9}, off)
     assert not udp.pilot_state_matches({"state": True, "r": 0, "g": 0, "b": 0}, off)
+    assert not udp.pilot_state_matches({"success": False}, off)
 
 
 def test_link_confirms_update_and_cancels_blind_retries(bulb, monkeypatch):
@@ -119,6 +120,74 @@ def test_link_resends_an_update_the_bulb_never_received(monkeypatch):
         fake.close()
     assert fake.state["b"] == 255
     assert link["resends"] >= 1
+
+
+def test_confirmed_colour_recovers_after_bulb_state_changes_without_new_frame(bulb, monkeypatch):
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", ())
+    pool = udp.FastBulbSenderPool(max_send_hz=1000, prewarm_ips=["127.0.0.1"], keep_awake=True)
+    try:
+        assert _wait(lambda: pool.link_stats[0]["replies"] > 3)
+        pool.send_payload_map({"127.0.0.1": (0, 0, 255, 0)}, 128)
+        assert _wait(lambda: pool.link_stats[0]["confirmed"] == 1)
+        for recovery in (1, 2):
+            bulb.state = {**bulb.state, "state": False, "b": 0, "dimming": 100}
+            assert _wait(lambda: pool.link_stats[0]["recoveries"] == recovery)
+            assert bulb.state["state"] and bulb.state["b"] == 255
+            assert bulb.state["dimming"] == 50
+        link = pool.link_stats[0]
+        assert link["confirmed"] == link["updates"] == 1
+        assert link["stale_events"] == 2 and link["state_confirmed"]
+    finally:
+        pool.close()
+
+
+def test_confirmation_ignores_transient_mismatch_and_bounds_persistent_retries(monkeypatch):
+    # Control the clock and responses without starting a network worker.
+    monkeypatch.setattr(threading.Thread, "start", lambda self: None)
+    retries = []
+    monitor = udp.BulbLinkMonitor("synthetic", resend=lambda packet: retries.append(packet))
+    state = udp.expected_pilot_state((255, 0, 0, 0), 255)
+    monitor.expect(b"red", state)
+    start = monitor._expected.created_at
+    red = {"state": True, "r": 255, "dimming": 100}
+    wrong = {"state": False}
+    monitor._check(red, start + 0.01)
+    monitor._check({"success": False}, start + 0.02)
+    monitor._check(wrong, start + 0.03)
+    monitor._check(red, start + 0.04)
+    assert not retries and monitor.stats["state_confirmed"]
+    monitor._check(wrong, start + 0.10)
+    for offset in (0.15, 0.20, 0.25, 0.30):
+        monitor._check(wrong, start + offset)
+    assert len(retries) == udp._CONFIRM_MAX_RESENDS
+    for offset in (0.4, 0.6, 1.0, 1.29):
+        monitor._check(wrong, start + offset)
+    assert len(retries) == udp._CONFIRM_MAX_RESENDS
+    monitor._check(wrong, start + 1.31)
+    assert len(retries) == udp._CONFIRM_MAX_RESENDS + 1
+    monitor._check(red, start + 1.32)
+    assert monitor.stats["recoveries"] == 1
+    assert monitor.stats["confirmed"] == monitor.stats["updates"] == 1
+    monitor.expect(b"blue", udp.expected_pilot_state((0, 0, 255, 0), 255))
+    monitor._check(red, time.perf_counter() + 0.1)
+    assert retries[-1] == b"blue"
+
+
+def test_initial_delivery_recovers_after_first_retry_budget_is_exhausted(monkeypatch):
+    fake = FakeBulb(drop_set_pilots=6)
+    monkeypatch.setattr(udp, "WIZ_PORT", fake.port)
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", ())
+    monkeypatch.setattr(udp, "_CONFIRM_RETRY_COOLDOWN", 0.15)
+    pool = udp.FastBulbSenderPool(max_send_hz=1000, prewarm_ips=["127.0.0.1"], keep_awake=True)
+    try:
+        assert _wait(lambda: pool.link_stats[0]["replies"] > 3)
+        pool.send_payload_map({"127.0.0.1": (0, 255, 0, 0)}, 255)
+        assert _wait(lambda: pool.link_stats[0]["confirmed"] == 1)
+        assert pool.link_stats[0]["resends"] > udp._CONFIRM_MAX_RESENDS
+        assert fake.state["g"] == 255
+    finally:
+        pool.close()
+        fake.close()
 
 
 def test_resend_never_requeues_a_colour_replaced_by_a_newer_one(monkeypatch):
