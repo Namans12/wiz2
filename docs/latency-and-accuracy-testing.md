@@ -52,6 +52,27 @@ test should require both white channels to be zero.
 
 ## Real End-To-End Latency
 
+### Two-lamp reported-state checks
+
+Run `python scripts/validate_live_link.py --ip FIRST_IP --ip SECOND_IP --out report.json`.
+This opt-in test changes both lamps, then restores and checks their starting
+states. It exercises per-zone brightness with twelve colors including gray,
+dark gray and black, compares link-off/link-on in ABBA order, changes a
+confirmed lamp state to test recovery without a new frame, and runs a bounded
+two-lamp soak (`--soak-seconds`, default 120). Do not run another sync sender
+at the same time. Use current addresses obtained from discovery.
+
+The comparison uses identical observer queries in both modes; those queries
+can themselves affect radio sleep. Results are dispatch-to-reported-state
+timings, not optical latency, perceived brightness or measured color accuracy.
+Keep unmatched cases and restoration failures in the report.
+
+The low-latency monitor continues checking confirmed states. A sustained
+mismatch reopens confirmation; a transient mismatched reply does not. After
+four recovery attempts it waits one second before another bounded group.
+Recovery counts and timings are separate from initial update confirmation.
+Stopping sync stops this recovery, allowing other controllers to take over.
+
 True latency must include screen, app, WiFi, bulb firmware, and the bulb LED response. The recommended lab setup is:
 
 1. Put the screen and bulb in the same camera frame.
