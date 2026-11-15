@@ -1,0 +1,1842 @@
+{
+  "scope": "Compare capture cadence on a monitor using repeatable visible color cuts.\n\nThis opens a borderless test window (Escape closes it). It does not send to\nlamps. Timings start at the Tk redraw request, not physical display emission,\nand end at the engine's first matching output. CPU includes pattern drawing.\n",
+  "geometry": {
+    "left": -1920,
+    "top": 625,
+    "width": 1920,
+    "height": 1080
+  },
+  "runs": [
+    {
+      "mode": "adaptive",
+      "cuts": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032322.8253706,
+          "response_ms": 81.34999999310821
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032323.5790518,
+          "response_ms": 75.79000003170222
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032324.3310288,
+          "response_ms": 75.7230999879539
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032325.0814666,
+          "response_ms": 73.7385000102222
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032325.8374957,
+          "response_ms": 69.75759996566921
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032326.5910153,
+          "response_ms": 68.16619995515794
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032327.3448852,
+          "response_ms": 68.00829991698265
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032328.1004671,
+          "response_ms": 58.50579997058958
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032328.8610069,
+          "response_ms": 121.67200003750622
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032329.6265754,
+          "response_ms": 107.04379994422197
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032330.3815563,
+          "response_ms": 101.25579999294132
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032331.1382549,
+          "response_ms": 103.7977000232786
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032331.8976124,
+          "response_ms": 90.4607999837026
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032332.6611402,
+          "response_ms": 80.3586000110954
+        }
+      ],
+      "started": 1032322.8212993,
+      "cpu_started": 1.734375,
+      "configured_fps": 30,
+      "configured_adaptive": true,
+      "initial_frames": 30,
+      "snapshot": {
+        "running": true,
+        "mode": "single",
+        "capture_method": "winrt",
+        "capture_status": "OK",
+        "requested_fps": 30,
+        "requestedFps": 30,
+        "current_fps": 15,
+        "currentFps": 15,
+        "average_frame_time_ms": 9.704636669872949,
+        "frameTimeMs": 9.704636669872949,
+        "capture_time_ms": 2.431441660155542,
+        "capture_time_p95_ms": 7.986565039027482,
+        "processing_time_ms": 6.60890083721218,
+        "processing_time_p95_ms": 8.733004977693781,
+        "timing_samples": 120,
+        "motion_score": 0.0,
+        "motionScore": 0.0,
+        "smoothing_factor": 0.7568855391930671,
+        "smoothingFactor": 0.7568855391930671,
+        "prediction_weight": 0.3,
+        "effective_color_boost": 1.063,
+        "effectiveColorBoost": 1.063,
+        "min_brightness": 30,
+        "minBrightness": 30,
+        "delta_threshold": 12,
+        "deltaThreshold": 12,
+        "captureBackend": "winrt",
+        "target_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "targetColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "current_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "outputColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "send_interval_ms": 739.3157937476644,
+        "send_rate_hz": 1.35260197125088,
+        "sendRateHz": 1.35260197125088,
+        "updates_sent": 17,
+        "updatesSent": 17,
+        "frames_processed": 227,
+        "framesProcessed": 227,
+        "scene_cut": false,
+        "sceneCut": false,
+        "cuts_detected": 16,
+        "cutsDetected": 16,
+        "jump_snaps": 0,
+        "early_wakes": 14,
+        "output_brightness_by_target": {
+          "all": 255
+        },
+        "scene_neutral": 0.0,
+        "sceneNeutral": 0.0,
+        "scene_luma": 0.7874000072479248,
+        "sceneLuma": 0.7874000072479248,
+        "sync_profile": "auto",
+        "syncProfile": "auto",
+        "brightness_mode": "follow",
+        "brightnessMode": "follow",
+        "output_brightness": 255,
+        "outputBrightness": 255,
+        "capture_looks_black": false,
+        "captureLooksBlack": false,
+        "last_error": null,
+        "lastError": null
+      },
+      "wall_seconds": 10.595195200061426,
+      "cpu_seconds": 2.65625,
+      "cpu_one_core_percent": 25.07032621715738,
+      "processed_fps": 18.59333370270119,
+      "matched": 14,
+      "median_ms": 78.07430002139881,
+      "p95_ms": 112.16366997687146
+    },
+    {
+      "mode": "15",
+      "cuts": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032336.4330558,
+          "response_ms": 102.98959992360324
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032337.19219,
+          "response_ms": 73.23119998909533
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032337.9472851,
+          "response_ms": 61.91449996549636
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032338.7065232,
+          "response_ms": 107.2349000023678
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032339.4614115,
+          "response_ms": 89.09959997981787
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032340.2186669,
+          "response_ms": 63.77020000945777
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032340.9747828,
+          "response_ms": 51.13630008418113
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032341.7328556,
+          "response_ms": 101.48680000565946
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032342.4955253,
+          "response_ms": 63.61569999717176
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032343.2543588,
+          "response_ms": 48.9969999762252
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032344.013954,
+          "response_ms": 98.1065999949351
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032344.7736077,
+          "response_ms": 70.70719997864217
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032345.5384007,
+          "response_ms": 42.33520000707358
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032346.2993098,
+          "response_ms": 89.04939994681627
+        }
+      ],
+      "started": 1032336.4324268,
+      "cpu_started": 4.78125,
+      "configured_fps": 15,
+      "configured_adaptive": false,
+      "initial_frames": 27,
+      "snapshot": {
+        "running": true,
+        "mode": "single",
+        "capture_method": "winrt",
+        "capture_status": "OK",
+        "requested_fps": 15,
+        "requestedFps": 15,
+        "current_fps": 15,
+        "currentFps": 15,
+        "average_frame_time_ms": 12.149393333432574,
+        "frameTimeMs": 12.149393333432574,
+        "capture_time_ms": 5.712457496944505,
+        "capture_time_p95_ms": 8.155344950500874,
+        "processing_time_ms": 5.855830001140324,
+        "processing_time_p95_ms": 7.759200019063428,
+        "timing_samples": 120,
+        "motion_score": 0.0,
+        "motionScore": 0.0,
+        "smoothing_factor": 0.7542902127299808,
+        "smoothingFactor": 0.7542902127299808,
+        "prediction_weight": 0.3,
+        "effective_color_boost": 1.063,
+        "effectiveColorBoost": 1.063,
+        "min_brightness": 30,
+        "minBrightness": 30,
+        "delta_threshold": 6,
+        "deltaThreshold": 6,
+        "captureBackend": "winrt",
+        "target_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "targetColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "current_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "outputColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "send_interval_ms": 743.0218375011464,
+        "send_rate_hz": 1.3458554641719493,
+        "sendRateHz": 1.3458554641719493,
+        "updates_sent": 17,
+        "updatesSent": 17,
+        "frames_processed": 186,
+        "framesProcessed": 186,
+        "scene_cut": false,
+        "sceneCut": false,
+        "cuts_detected": 16,
+        "cutsDetected": 16,
+        "jump_snaps": 0,
+        "early_wakes": 0,
+        "output_brightness_by_target": {
+          "all": 255
+        },
+        "scene_neutral": 0.0,
+        "sceneNeutral": 0.0,
+        "scene_luma": 0.7874000072479248,
+        "sceneLuma": 0.7874000072479248,
+        "sync_profile": "auto",
+        "syncProfile": "auto",
+        "brightness_mode": "follow",
+        "brightnessMode": "follow",
+        "output_brightness": 255,
+        "outputBrightness": 255,
+        "capture_looks_black": false,
+        "captureLooksBlack": false,
+        "last_error": null,
+        "lastError": null
+      },
+      "wall_seconds": 10.624971500015818,
+      "cpu_seconds": 1.953125,
+      "cpu_one_core_percent": 18.382402249239842,
+      "processed_fps": 14.964746023061172,
+      "matched": 14,
+      "median_ms": 71.96919998386875,
+      "p95_ms": 104.47545495117083
+    },
+    {
+      "mode": "30",
+      "cuts": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032350.0699618,
+          "response_ms": 72.58160004857928
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032350.8267067,
+          "response_ms": 59.553799917921424
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032351.5805906,
+          "response_ms": 73.70459998492151
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032352.343728,
+          "response_ms": 50.58390006888658
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032353.0975314,
+          "response_ms": 72.4265999160707
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032353.8526584,
+          "response_ms": 61.8379000807181
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032354.6140918,
+          "response_ms": 72.33870006166399
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032355.3705978,
+          "response_ms": 58.70299995876849
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032356.1256435,
+          "response_ms": 47.4626999348402
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032356.8814823,
+          "response_ms": 65.09529997128993
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032357.6326329,
+          "response_ms": 56.92280002404004
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032358.3908416,
+          "response_ms": 45.8391000283882
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032359.1546985,
+          "response_ms": 51.75150011200458
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032359.9190714,
+          "response_ms": 63.19830007851124
+        }
+      ],
+      "started": 1032350.069219,
+      "cpu_started": 7.203125,
+      "configured_fps": 30,
+      "configured_adaptive": false,
+      "initial_frames": 53,
+      "snapshot": {
+        "running": true,
+        "mode": "single",
+        "capture_method": "winrt",
+        "capture_status": "OK",
+        "requested_fps": 30,
+        "requestedFps": 30,
+        "current_fps": 30,
+        "currentFps": 30,
+        "average_frame_time_ms": 9.601306659169495,
+        "frameTimeMs": 9.601306659169495,
+        "capture_time_ms": 5.388796664192341,
+        "capture_time_p95_ms": 8.919365034671499,
+        "processing_time_ms": 4.951519164023921,
+        "processing_time_p95_ms": 8.010850014397873,
+        "timing_samples": 120,
+        "motion_score": 0.0,
+        "motionScore": 0.0,
+        "smoothing_factor": 0.5118371640595152,
+        "smoothingFactor": 0.5118371640595152,
+        "prediction_weight": 0.3,
+        "effective_color_boost": 1.063,
+        "effectiveColorBoost": 1.063,
+        "min_brightness": 30,
+        "minBrightness": 30,
+        "delta_threshold": 6,
+        "deltaThreshold": 6,
+        "captureBackend": "winrt",
+        "target_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "targetColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "current_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "outputColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "send_interval_ms": 740.3722312519676,
+        "send_rate_hz": 1.3506719428266543,
+        "sendRateHz": 1.3506719428266543,
+        "updates_sent": 17,
+        "updatesSent": 17,
+        "frames_processed": 367,
+        "framesProcessed": 367,
+        "scene_cut": false,
+        "sceneCut": false,
+        "cuts_detected": 16,
+        "cutsDetected": 16,
+        "jump_snaps": 0,
+        "early_wakes": 0,
+        "output_brightness_by_target": {
+          "all": 255
+        },
+        "scene_neutral": 0.0,
+        "sceneNeutral": 0.0,
+        "scene_luma": 0.7874000072479248,
+        "sceneLuma": 0.7874000072479248,
+        "sync_profile": "auto",
+        "syncProfile": "auto",
+        "brightness_mode": "follow",
+        "brightnessMode": "follow",
+        "output_brightness": 255,
+        "outputBrightness": 255,
+        "capture_looks_black": false,
+        "captureLooksBlack": false,
+        "last_error": null,
+        "lastError": null
+      },
+      "wall_seconds": 10.61289729992859,
+      "cpu_seconds": 3.109375,
+      "cpu_one_core_percent": 29.29807866906355,
+      "processed_fps": 29.58664265997493,
+      "matched": 14,
+      "median_ms": 60.69584999931976,
+      "p95_ms": 72.97465002629906
+    },
+    {
+      "mode": "60",
+      "cuts": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032363.6611494,
+          "response_ms": 50.68979994393885
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032364.4126748,
+          "response_ms": 58.153599966317415
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032365.1786901,
+          "response_ms": 51.88699997961521
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032365.935855,
+          "response_ms": 43.38729998562485
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032366.6914275,
+          "response_ms": 36.40950005501509
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032367.4529221,
+          "response_ms": 39.17620005086064
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032368.2113235,
+          "response_ms": 68.39199992828071
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032368.9628796,
+          "response_ms": 64.64899994898587
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032369.7219174,
+          "response_ms": 39.39890000037849
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032370.4851283,
+          "response_ms": 48.27779997140169
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032371.2486936,
+          "response_ms": 61.531900078989565
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032372.0012674,
+          "response_ms": 49.2260999744758
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032372.762827,
+          "response_ms": 103.47049997653812
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032373.5273644,
+          "response_ms": 50.787299987860024
+        }
+      ],
+      "started": 1032363.6607454,
+      "cpu_started": 11.0625,
+      "configured_fps": 60,
+      "configured_adaptive": false,
+      "initial_frames": 104,
+      "snapshot": {
+        "running": true,
+        "mode": "single",
+        "capture_method": "winrt",
+        "capture_status": "OK",
+        "requested_fps": 60,
+        "requestedFps": 60,
+        "current_fps": 60,
+        "currentFps": 60,
+        "average_frame_time_ms": 13.069529990510395,
+        "frameTimeMs": 13.069529990510395,
+        "capture_time_ms": 9.097264994246265,
+        "capture_time_p95_ms": 15.283909911522642,
+        "processing_time_ms": 7.692347504780628,
+        "processing_time_p95_ms": 14.341025002067907,
+        "timing_samples": 120,
+        "motion_score": 0.0,
+        "motionScore": 0.0,
+        "smoothing_factor": 0.2927925612723443,
+        "smoothingFactor": 0.2927925612723443,
+        "prediction_weight": 0.3,
+        "effective_color_boost": 1.063,
+        "effectiveColorBoost": 1.063,
+        "min_brightness": 30,
+        "minBrightness": 30,
+        "delta_threshold": 6,
+        "deltaThreshold": 6,
+        "captureBackend": "winrt",
+        "target_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "targetColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "current_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "outputColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "send_interval_ms": 660.1337722192208,
+        "send_rate_hz": 1.5148444786247273,
+        "sendRateHz": 1.5148444786247273,
+        "updates_sent": 19,
+        "updatesSent": 19,
+        "frames_processed": 708,
+        "framesProcessed": 708,
+        "scene_cut": false,
+        "sceneCut": false,
+        "cuts_detected": 18,
+        "cutsDetected": 18,
+        "jump_snaps": 0,
+        "early_wakes": 0,
+        "output_brightness_by_target": {
+          "all": 255
+        },
+        "scene_neutral": 0.0,
+        "sceneNeutral": 0.0,
+        "scene_luma": 0.7874000072479248,
+        "sceneLuma": 0.7874000072479248,
+        "sync_profile": "auto",
+        "syncProfile": "auto",
+        "brightness_mode": "follow",
+        "brightnessMode": "follow",
+        "output_brightness": 255,
+        "outputBrightness": 255,
+        "capture_looks_black": false,
+        "captureLooksBlack": false,
+        "last_error": null,
+        "lastError": null
+      },
+      "wall_seconds": 10.628829599940218,
+      "cpu_seconds": 6.640625,
+      "cpu_one_core_percent": 62.477481058096465,
+      "processed_fps": 56.82657665368887,
+      "matched": 14,
+      "median_ms": 50.73854996589944,
+      "p95_ms": 80.66947494517079
+    },
+    {
+      "mode": "60",
+      "cuts": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032377.3465161,
+          "response_ms": 59.51549997553229
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032378.1068168,
+          "response_ms": 60.65700005274266
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032378.8697489,
+          "response_ms": 54.25500008277595
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032379.6203129,
+          "response_ms": 49.00529992301017
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032380.3721203,
+          "response_ms": 45.737900072708726
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032381.122847,
+          "response_ms": 43.903599958866835
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032381.8861938,
+          "response_ms": 42.99470002297312
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032382.6477039,
+          "response_ms": 43.7843999825418
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032383.4110405,
+          "response_ms": 46.3458999292925
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032384.1757185,
+          "response_ms": 43.57529990375042
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032384.9374469,
+          "response_ms": 49.231400014832616
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032385.6968214,
+          "response_ms": 53.43289999291301
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032386.4547,
+          "response_ms": 38.17359998356551
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032387.2163663,
+          "response_ms": 70.61139994766563
+        }
+      ],
+      "started": 1032377.3459555,
+      "cpu_started": 18.71875,
+      "configured_fps": 60,
+      "configured_adaptive": false,
+      "initial_frames": 98,
+      "snapshot": {
+        "running": true,
+        "mode": "single",
+        "capture_method": "winrt",
+        "capture_status": "OK",
+        "requested_fps": 60,
+        "requestedFps": 60,
+        "current_fps": 60,
+        "currentFps": 60,
+        "average_frame_time_ms": 17.428380010339122,
+        "frameTimeMs": 17.428380010339122,
+        "capture_time_ms": 8.17865000766081,
+        "capture_time_p95_ms": 13.950999977532774,
+        "processing_time_ms": 7.469109996842842,
+        "processing_time_p95_ms": 12.473029969260095,
+        "timing_samples": 120,
+        "motion_score": 0.0,
+        "motionScore": 0.0,
+        "smoothing_factor": 0.3297427921054098,
+        "smoothingFactor": 0.3297427921054098,
+        "prediction_weight": 0.3,
+        "effective_color_boost": 1.063,
+        "effectiveColorBoost": 1.063,
+        "min_brightness": 30,
+        "minBrightness": 30,
+        "delta_threshold": 6,
+        "deltaThreshold": 6,
+        "captureBackend": "winrt",
+        "target_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "targetColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "current_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "outputColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "send_interval_ms": 697.2365294076393,
+        "send_rate_hz": 1.4342335173539797,
+        "sendRateHz": 1.4342335173539797,
+        "updates_sent": 18,
+        "updatesSent": 18,
+        "frames_processed": 713,
+        "framesProcessed": 713,
+        "scene_cut": false,
+        "sceneCut": false,
+        "cuts_detected": 16,
+        "cutsDetected": 16,
+        "jump_snaps": 0,
+        "early_wakes": 0,
+        "output_brightness_by_target": {
+          "all": 255
+        },
+        "scene_neutral": 0.0,
+        "sceneNeutral": 0.0,
+        "scene_luma": 0.7874000072479248,
+        "sceneLuma": 0.7874000072479248,
+        "sync_profile": "auto",
+        "syncProfile": "auto",
+        "brightness_mode": "follow",
+        "brightnessMode": "follow",
+        "output_brightness": 255,
+        "outputBrightness": 255,
+        "capture_looks_black": false,
+        "captureLooksBlack": false,
+        "last_error": null,
+        "lastError": null
+      },
+      "wall_seconds": 10.635007599950768,
+      "cpu_seconds": 6.234375,
+      "cpu_one_core_percent": 58.62125571051647,
+      "processed_fps": 57.827885332479404,
+      "matched": 14,
+      "median_ms": 47.675599926151335,
+      "p95_ms": 64.1410400159657
+    },
+    {
+      "mode": "30",
+      "cuts": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032390.9728686,
+          "response_ms": 67.2027999535203
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032391.7454218,
+          "response_ms": 493.1411000434309
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032392.5106863,
+          "response_ms": 55.294099962338805
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032393.2639378,
+          "response_ms": 568.7452000565827
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032394.2171816,
+          "response_ms": 183.28809994272888
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032394.9728067,
+          "response_ms": 75.72449999861419
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032395.7284024,
+          "response_ms": 101.21869994327426
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032396.4939944,
+          "response_ms": 76.27009996213019
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032397.2525744,
+          "response_ms": 87.87679998204112
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032398.0095832,
+          "response_ms": 69.21039998997003
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032398.7695945,
+          "response_ms": 68.20500001776963
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032399.5286503,
+          "response_ms": 79.46909999009222
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032400.2802147,
+          "response_ms": 46.65739997290075
+        }
+      ],
+      "started": 1032390.972189,
+      "cpu_started": 25.765625,
+      "configured_fps": 30,
+      "configured_adaptive": false,
+      "initial_frames": 48,
+      "snapshot": {
+        "running": true,
+        "mode": "single",
+        "capture_method": "winrt",
+        "capture_status": "OK",
+        "requested_fps": 30,
+        "requestedFps": 30,
+        "current_fps": 30,
+        "currentFps": 30,
+        "average_frame_time_ms": 23.726390003381916,
+        "frameTimeMs": 23.726390003381916,
+        "capture_time_ms": 11.4172366632071,
+        "capture_time_p95_ms": 18.3679299778305,
+        "processing_time_ms": 10.697982501975881,
+        "processing_time_p95_ms": 18.003929988481104,
+        "timing_samples": 120,
+        "motion_score": 0.0,
+        "motionScore": 0.0,
+        "smoothing_factor": 0.5254417149025536,
+        "smoothingFactor": 0.5254417149025536,
+        "prediction_weight": 0.3,
+        "effective_color_boost": 1.063,
+        "effectiveColorBoost": 1.063,
+        "min_brightness": 30,
+        "minBrightness": 30,
+        "delta_threshold": 6,
+        "deltaThreshold": 6,
+        "captureBackend": "winrt",
+        "target_colors": {
+          "all": [
+            255,
+            0,
+            0
+          ]
+        },
+        "targetColors": {
+          "all": [
+            255,
+            0,
+            0
+          ]
+        },
+        "current_colors": {
+          "all": [
+            255,
+            0,
+            0
+          ]
+        },
+        "outputColors": {
+          "all": [
+            255,
+            0,
+            0
+          ]
+        },
+        "send_interval_ms": 750.57548667149,
+        "send_rate_hz": 1.3323110303463421,
+        "sendRateHz": 1.3323110303463421,
+        "updates_sent": 16,
+        "updatesSent": 16,
+        "frames_processed": 334,
+        "framesProcessed": 334,
+        "scene_cut": false,
+        "sceneCut": false,
+        "cuts_detected": 15,
+        "cutsDetected": 15,
+        "jump_snaps": 0,
+        "early_wakes": 0,
+        "output_brightness_by_target": {
+          "all": 255
+        },
+        "scene_neutral": 0.0,
+        "sceneNeutral": 0.0,
+        "scene_luma": 0.2125999927520752,
+        "sceneLuma": 0.2125999927520752,
+        "sync_profile": "auto",
+        "syncProfile": "auto",
+        "brightness_mode": "follow",
+        "brightnessMode": "follow",
+        "output_brightness": 255,
+        "outputBrightness": 255,
+        "capture_looks_black": false,
+        "captureLooksBlack": false,
+        "last_error": null,
+        "lastError": null
+      },
+      "wall_seconds": 10.060667800018564,
+      "cpu_seconds": 6.0625,
+      "cpu_one_core_percent": 60.25941935970507,
+      "processed_fps": 28.427536390722718,
+      "matched": 13,
+      "median_ms": 76.27009996213019,
+      "p95_ms": 523.3827400486915
+    },
+    {
+      "mode": "15",
+      "cuts": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032404.0212931,
+          "response_ms": 44.24860002472997
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032404.7853702,
+          "response_ms": 83.08679994661361
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032405.5466002,
+          "response_ms": 58.22949996218085
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032406.3077049,
+          "response_ms": 33.434799988754094
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032407.0687054,
+          "response_ms": 77.94860005378723
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032407.8322723,
+          "response_ms": 52.603399963118136
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032408.5958005,
+          "response_ms": 93.07519998401403
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032409.3477607,
+          "response_ms": 78.8189999293536
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032410.1078991,
+          "response_ms": 54.194999975152314
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032410.8710416,
+          "response_ms": 98.05100003723055
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032411.621403,
+          "response_ms": 82.22370001021773
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032412.3844507,
+          "response_ms": 55.86510000284761
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032413.1460793,
+          "response_ms": 98.09300000779331
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032413.9094296,
+          "response_ms": 73.68020003195852
+        }
+      ],
+      "started": 1032404.020799,
+      "cpu_started": 32.171875,
+      "configured_fps": 15,
+      "configured_adaptive": false,
+      "initial_frames": 27,
+      "snapshot": {
+        "running": true,
+        "mode": "single",
+        "capture_method": "winrt",
+        "capture_status": "OK",
+        "requested_fps": 15,
+        "requestedFps": 15,
+        "current_fps": 15,
+        "currentFps": 15,
+        "average_frame_time_ms": 8.479509995474169,
+        "frameTimeMs": 8.479509995474169,
+        "capture_time_ms": 4.549538329592906,
+        "capture_time_p95_ms": 6.290004955371841,
+        "processing_time_ms": 4.364780001924373,
+        "processing_time_p95_ms": 5.62836496392265,
+        "timing_samples": 120,
+        "motion_score": 0.0,
+        "motionScore": 0.0,
+        "smoothing_factor": 0.7517489097617884,
+        "smoothingFactor": 0.7517489097617884,
+        "prediction_weight": 0.3,
+        "effective_color_boost": 1.063,
+        "effectiveColorBoost": 1.063,
+        "min_brightness": 30,
+        "minBrightness": 30,
+        "delta_threshold": 6,
+        "deltaThreshold": 6,
+        "captureBackend": "winrt",
+        "target_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "targetColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "current_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "outputColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "send_interval_ms": 741.480481250619,
+        "send_rate_hz": 1.3486531679341696,
+        "sendRateHz": 1.3486531679341696,
+        "updates_sent": 17,
+        "updatesSent": 17,
+        "frames_processed": 186,
+        "framesProcessed": 186,
+        "scene_cut": false,
+        "sceneCut": false,
+        "cuts_detected": 16,
+        "cutsDetected": 16,
+        "jump_snaps": 0,
+        "early_wakes": 0,
+        "output_brightness_by_target": {
+          "all": 255
+        },
+        "scene_neutral": 0.0,
+        "sceneNeutral": 0.0,
+        "scene_luma": 0.7874000072479248,
+        "sceneLuma": 0.7874000072479248,
+        "sync_profile": "auto",
+        "syncProfile": "auto",
+        "brightness_mode": "follow",
+        "brightnessMode": "follow",
+        "output_brightness": 255,
+        "outputBrightness": 255,
+        "capture_looks_black": false,
+        "captureLooksBlack": false,
+        "last_error": null,
+        "lastError": null
+      },
+      "wall_seconds": 10.644778999965638,
+      "cpu_seconds": 1.421875,
+      "cpu_one_core_percent": 13.357487271502677,
+      "processed_fps": 14.936900052177059,
+      "matched": 14,
+      "median_ms": 75.81440004287288,
+      "p95_ms": 98.06570002692752
+    },
+    {
+      "mode": "adaptive",
+      "cuts": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032417.6576882,
+          "response_ms": 83.69390002917498
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032418.4207428,
+          "response_ms": 69.46210004389286
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032419.1712254,
+          "response_ms": 68.84280010126531
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032419.9218435,
+          "response_ms": 64.90430003032088
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032420.685722,
+          "response_ms": 55.15020003076643
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032421.4361451,
+          "response_ms": 50.5105999764055
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032422.1958005,
+          "response_ms": 104.23529997933656
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032422.9575334,
+          "response_ms": 88.40719994623214
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "requested_at": 1032423.7182653,
+          "response_ms": 76.7669000197202
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "requested_at": 1032424.4754428,
+          "response_ms": 64.90300002042204
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "requested_at": 1032425.2358325,
+          "response_ms": 50.38229993078858
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "requested_at": 1032425.9861427,
+          "response_ms": 46.85839999001473
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "requested_at": 1032426.7468065,
+          "response_ms": 97.4358000094071
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "requested_at": 1032427.4986516,
+          "response_ms": 94.29330006241798
+        }
+      ],
+      "started": 1032417.657036,
+      "cpu_started": 33.890625,
+      "configured_fps": 30,
+      "configured_adaptive": true,
+      "initial_frames": 33,
+      "snapshot": {
+        "running": true,
+        "mode": "single",
+        "capture_method": "winrt",
+        "capture_status": "OK",
+        "requested_fps": 30,
+        "requestedFps": 30,
+        "current_fps": 15,
+        "currentFps": 15,
+        "average_frame_time_ms": 6.113540008664131,
+        "frameTimeMs": 6.113540008664131,
+        "capture_time_ms": 1.5909225010545924,
+        "capture_time_p95_ms": 5.296345037641003,
+        "processing_time_ms": 4.543354165313455,
+        "processing_time_p95_ms": 6.190479989163578,
+        "timing_samples": 120,
+        "motion_score": 0.0,
+        "motionScore": 0.0,
+        "smoothing_factor": 0.7570247840987132,
+        "smoothingFactor": 0.7570247840987132,
+        "prediction_weight": 0.3,
+        "effective_color_boost": 1.063,
+        "effectiveColorBoost": 1.063,
+        "min_brightness": 30,
+        "minBrightness": 30,
+        "delta_threshold": 12,
+        "deltaThreshold": 12,
+        "captureBackend": "winrt",
+        "target_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "targetColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "current_colors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "outputColors": {
+          "all": [
+            0,
+            255,
+            255
+          ]
+        },
+        "send_interval_ms": 743.4614500016323,
+        "send_rate_hz": 1.3450596530563952,
+        "sendRateHz": 1.3450596530563952,
+        "updates_sent": 17,
+        "updatesSent": 17,
+        "frames_processed": 231,
+        "framesProcessed": 231,
+        "scene_cut": false,
+        "sceneCut": false,
+        "cuts_detected": 16,
+        "cutsDetected": 16,
+        "jump_snaps": 0,
+        "early_wakes": 14,
+        "output_brightness_by_target": {
+          "all": 255
+        },
+        "scene_neutral": 0.0,
+        "sceneNeutral": 0.0,
+        "scene_luma": 0.7874000072479248,
+        "sceneLuma": 0.7874000072479248,
+        "sync_profile": "auto",
+        "syncProfile": "auto",
+        "brightness_mode": "follow",
+        "brightnessMode": "follow",
+        "output_brightness": 255,
+        "outputBrightness": 255,
+        "capture_looks_black": false,
+        "captureLooksBlack": false,
+        "last_error": null,
+        "lastError": null
+      },
+      "wall_seconds": 10.600688699982129,
+      "cpu_seconds": 1.796875,
+      "cpu_one_core_percent": 16.95054963743091,
+      "processed_fps": 18.678031739610823,
+      "matched": 14,
+      "median_ms": 69.15245007257909,
+      "p95_ms": 99.81562499888241
+    }
+  ]
+}

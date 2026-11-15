@@ -146,7 +146,11 @@ class OptimizedCaptureConfig(CaptureConfig):
     sync_brightness: int = 180
 
     def __post_init__(self) -> None:
+        requested_fps = self.fps
         super().__post_init__()
+        # The legacy engine caps capture at 30. This engine supports 60 in
+        # adaptive mode already; honor the same range when FPS is fixed.
+        self.fps = max(4, min(60, int(requested_fps)))
         self.smoothing = max(0.05, min(0.85, float(self.smoothing)))
         self.min_fps = max(4, min(30, int(self.min_fps)))
         self.max_fps = max(self.min_fps, min(60, int(self.max_fps)))

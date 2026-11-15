@@ -13,6 +13,13 @@ def _engine(**overrides):
     return OptimizedScreenSync(lambda colors: None, config)
 
 
+def test_fixed_capture_honors_60_fps_without_changing_legacy_capture_limit():
+    engine = _engine(fps=60, max_fps=60)
+    assert engine.config.fps == engine._current_fps == 60
+    assert OptimizedCaptureConfig(fps=500).fps == 60
+    assert sync_module.CaptureConfig(fps=60).fps == 30
+
+
 def test_follow_brightness_snaps_on_a_scene_cut_and_smooths_otherwise():
     engine = _engine(brightness_mode="follow")
     engine._frame_dt = 1 / 30

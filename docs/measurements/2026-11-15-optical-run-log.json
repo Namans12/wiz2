@@ -1,0 +1,677 @@
+{
+  "order": "ABBA",
+  "hold": 2.5,
+  "ips": [
+    "lamp_1",
+    "lamp_2"
+  ],
+  "segments": [
+    {
+      "kind": "A",
+      "link": false,
+      "changes": [
+        {
+          "at": 1032040.5694429,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032043.0708707,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032045.5861999,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032048.0986015,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032050.6012661,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032053.1124703,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032055.6158114,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032058.1181292,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032060.6275449,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032063.137121,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032065.6457446,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032068.1523624,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        }
+      ],
+      "started": 1032040.5681647,
+      "link_stats": [],
+      "sender_stats": [
+        {
+          "ip": "lamp_1",
+          "sent": 24,
+          "dropped": 0,
+          "attempted": 24,
+          "datagrams_sent": 84,
+          "send_errors": 0,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "sent": 24,
+          "dropped": 0,
+          "attempted": 24,
+          "datagrams_sent": 84,
+          "send_errors": 0,
+          "last_error": null
+        }
+      ],
+      "engine": {
+        "capture_method": "winrt",
+        "capture_time_ms": 0.6534016720252112,
+        "processing_time_ms": 4.6111825067782775,
+        "cuts_detected": 13,
+        "jump_snaps": 0,
+        "early_wakes": 11
+      }
+    },
+    {
+      "kind": "B",
+      "link": true,
+      "changes": [
+        {
+          "at": 1032074.6839116,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032077.185195,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032079.6891058,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032082.2049323,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032084.7106293,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032087.2211686,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032089.7351774,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032092.238383,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032094.7397397,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032097.2451379,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032099.7482471,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032102.2637322,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        }
+      ],
+      "started": 1032074.6826706,
+      "link_stats": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 558,
+          "replies": 495,
+          "timeouts": 63,
+          "rtt_ms": 7.460499997250736,
+          "rtt_p95_ms": 83.56880000792444,
+          "awake_pct": 92.5,
+          "rssi": -73,
+          "updates": 12,
+          "confirmed": 10,
+          "stale_events": 0,
+          "recoveries": 0,
+          "state_confirmed": true,
+          "recovery_ms": null,
+          "resends": 5,
+          "confirm_ms": 191.14640005864203,
+          "confirm_p95_ms": 896.8447999795899,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 752,
+          "replies": 699,
+          "timeouts": 53,
+          "rtt_ms": 7.43330002296716,
+          "rtt_p95_ms": 160.46829998958856,
+          "awake_pct": 88.75,
+          "rssi": -68,
+          "updates": 12,
+          "confirmed": 12,
+          "stale_events": 0,
+          "recoveries": 0,
+          "state_confirmed": true,
+          "recovery_ms": null,
+          "resends": 2,
+          "confirm_ms": 249.51790005434304,
+          "confirm_p95_ms": 793.0629999609664,
+          "last_error": null
+        }
+      ],
+      "sender_stats": [
+        {
+          "ip": "lamp_1",
+          "sent": 24,
+          "dropped": 0,
+          "attempted": 24,
+          "datagrams_sent": 66,
+          "send_errors": 0,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "sent": 24,
+          "dropped": 0,
+          "attempted": 24,
+          "datagrams_sent": 63,
+          "send_errors": 0,
+          "last_error": null
+        }
+      ],
+      "engine": {
+        "capture_method": "winrt",
+        "capture_time_ms": 0.6292499970489491,
+        "processing_time_ms": 4.457824166941767,
+        "cuts_detected": 26,
+        "jump_snaps": 0,
+        "early_wakes": 24
+      }
+    },
+    {
+      "kind": "B",
+      "link": true,
+      "changes": [
+        {
+          "at": 1032108.8600691,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032111.361225,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032113.870444,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032116.380735,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032118.8921755,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032121.4069656,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032123.9107364,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032126.4209484,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032128.9264602,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032131.4392506,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032133.9433073,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032136.4484026,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        }
+      ],
+      "started": 1032108.8589222,
+      "link_stats": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 949,
+          "replies": 905,
+          "timeouts": 44,
+          "rtt_ms": 7.3176000732928514,
+          "rtt_p95_ms": 147.01149996835738,
+          "awake_pct": 87.5,
+          "rssi": -81,
+          "updates": 12,
+          "confirmed": 12,
+          "stale_events": 0,
+          "recoveries": 0,
+          "state_confirmed": true,
+          "recovery_ms": null,
+          "resends": 4,
+          "confirm_ms": 201.18500001262873,
+          "confirm_p95_ms": 1564.3582999473438,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 1063,
+          "replies": 1021,
+          "timeouts": 42,
+          "rtt_ms": 7.610200089402497,
+          "rtt_p95_ms": 105.93710001558065,
+          "awake_pct": 90.41666666666667,
+          "rssi": -67,
+          "updates": 12,
+          "confirmed": 12,
+          "stale_events": 0,
+          "recoveries": 0,
+          "state_confirmed": true,
+          "recovery_ms": null,
+          "resends": 3,
+          "confirm_ms": 168.96700009237975,
+          "confirm_p95_ms": 757.406699936837,
+          "last_error": null
+        }
+      ],
+      "sender_stats": [
+        {
+          "ip": "lamp_1",
+          "sent": 24,
+          "dropped": 0,
+          "attempted": 24,
+          "datagrams_sent": 71,
+          "send_errors": 0,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "sent": 24,
+          "dropped": 0,
+          "attempted": 24,
+          "datagrams_sent": 61,
+          "send_errors": 0,
+          "last_error": null
+        }
+      ],
+      "engine": {
+        "capture_method": "winrt",
+        "capture_time_ms": 0.9040875040227547,
+        "processing_time_ms": 5.111334160513555,
+        "cuts_detected": 39,
+        "jump_snaps": 0,
+        "early_wakes": 37
+      }
+    },
+    {
+      "kind": "A",
+      "link": false,
+      "changes": [
+        {
+          "at": 1032143.3268974,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032145.8406732,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032148.3558078,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032150.8712763,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032153.3830822,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032155.8842754,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032158.397788,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032160.9040605,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032163.4132138,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032165.9178129,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "at": 1032168.4207687,
+          "colour": "red",
+          "engine_target_at_end": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "at": 1032170.924115,
+          "colour": "blue",
+          "engine_target_at_end": [
+            0,
+            0,
+            255
+          ]
+        }
+      ],
+      "started": 1032143.3250724,
+      "link_stats": [],
+      "sender_stats": [
+        {
+          "ip": "lamp_1",
+          "sent": 24,
+          "dropped": 0,
+          "attempted": 24,
+          "datagrams_sent": 84,
+          "send_errors": 0,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "sent": 24,
+          "dropped": 0,
+          "attempted": 24,
+          "datagrams_sent": 84,
+          "send_errors": 0,
+          "last_error": null
+        }
+      ],
+      "engine": {
+        "capture_method": "winrt",
+        "capture_time_ms": 0.6837691704276949,
+        "processing_time_ms": 4.277458335855044,
+        "cuts_detected": 52,
+        "jump_snaps": 0,
+        "early_wakes": 50
+      }
+    }
+  ],
+  "capture_error": null
+}

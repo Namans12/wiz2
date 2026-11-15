@@ -52,6 +52,21 @@ test should require both white channels to be zero.
 
 ## Real End-To-End Latency
 
+### Capture FPS versus CPU
+
+`python scripts/benchmark_capture_modes.py --monitor 2 --seconds 12 --out capture.json`
+opens a repeatable color-cut pattern on the chosen monitor without controlling
+lamps. It compares adaptive 15–30 FPS with fixed 15, 30 and 60 FPS, then repeats
+in reverse order. Each run gets a two-second capture warmup. The report records
+the effective configured FPS, processed FPS, CPU seconds, captured output
+matches and cut-response times. Escape closes the window.
+
+These timings run from the Tk redraw request to matching engine output, not
+from monitor photons to lamp photons. Pattern rendering contributes to CPU
+use. Repeat runs and examine outliers; do not change production defaults based
+on one favorable median. The optimized engine supports fixed 60 FPS; sender
+rate limits remain independent.
+
 ### Two-lamp reported-state checks
 
 Run `python scripts/validate_live_link.py --ip FIRST_IP --ip SECOND_IP --out report.json`.
