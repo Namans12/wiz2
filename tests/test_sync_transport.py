@@ -2,6 +2,7 @@
 
 from concurrent.futures import Future
 import asyncio
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -141,3 +142,40 @@ def test_failed_engine_stop_still_closes_transport_and_cancels_debug_timer():
     transport.close.assert_called_once()
     app.root.after_cancel.assert_called_once_with("debug-timer")
     assert app._screen_sync_debug_id is None
+
+
+@pytest.mark.parametrize("cancel_restart", [False, True])
+def test_gui_stop_returns_during_launch_and_serializes_restart(cancel_restart):
+    from src.gui.modern_app import WizLightModernGUI
+
+    launched = Future()
+    engine, transport = Mock(), Mock()
+    widget = SimpleNamespace(
+        _closing=False, screen_sync=engine, _screen_sync_transport=transport,
+        _sync_launch_future=launched, _sync_launch_poll_id="launch", _screen_sync_debug_id=None,
+        _set_status=Mock(), _set_sync_running_ui=Mock(), _refresh_screen_sync_debug=Mock(),
+        _start_screen_sync=Mock(), _poll_sync_stop=Mock(), root=Mock(),
+    )
+    stopping_started = Event()
+    engine.stop.side_effect = stopping_started.set
+    WizLightModernGUI._stop_screen_sync(widget)
+    stopping = widget._sync_stop_future
+    try:
+        widget.root.after_cancel.assert_called_once_with("launch")
+        assert widget.screen_sync is None
+        assert widget._screen_sync_transport is None
+        assert not stopping.done()
+        engine.stop.assert_not_called()
+        WizLightModernGUI._start_screen_sync(widget)
+        assert widget._sync_restart_pending
+        if cancel_restart:
+            WizLightModernGUI._stop_screen_sync(widget)
+        WizLightModernGUI._poll_sync_stop(widget, stopping)
+        widget._start_screen_sync.assert_not_called()
+    finally:
+        launched.set_result(None)
+        stopping.result(timeout=2)
+    assert stopping_started.is_set()
+    transport.close.assert_called_once()
+    WizLightModernGUI._poll_sync_stop(widget, stopping)
+    assert widget._start_screen_sync.call_count == (0 if cancel_restart else 1)

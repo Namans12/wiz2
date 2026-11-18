@@ -8,6 +8,7 @@ import json
 import sys
 from concurrent.futures import Future
 from pathlib import Path
+from threading import Thread
 from tkinter import filedialog
 from typing import Optional
 
@@ -80,6 +81,11 @@ class WizLightModernGUI(AnimationMixin):
         self._screen_sync_settings_save_id = None
         self._screen_sync_reconfigure_id = None
         self._screen_sync_debug_id = None
+        self._sync_launch_future: Optional[Future] = None
+        self._sync_launch_poll_id = None
+        self._sync_stop_future: Optional[Future] = None
+        self._sync_stop_poll_id = None
+        self._sync_restart_pending = False
         self._screen_layout_vars: dict[str, ctk.StringVar] = {}
         self._monitor_options = self._load_monitor_options()
         self._monitor_label_to_index = {
@@ -1025,9 +1031,12 @@ class WizLightModernGUI(AnimationMixin):
         self._queue_screen_sync_settings_save()
 
     def _set_status(self, msg: str):
-        self.status_label.configure(text=msg)
+        if self.status_label.cget("text") != msg:
+            self.status_label.configure(text=msg)
         if hasattr(self, "status_indicator"):
-            self.status_indicator.configure(fg_color=self._sync_status_color(msg))
+            color = self._sync_status_color(msg)
+            if self.status_indicator.cget("fg_color") != color:
+                self.status_indicator.configure(fg_color=color)
 
     def _export_diagnostics_report(self) -> None:
         report = build_diagnostics_report(
@@ -1428,9 +1437,14 @@ class WizLightModernGUI(AnimationMixin):
     def _start_screen_sync(self):
         if self._closing or (self.screen_sync and self.screen_sync.is_running):
             return
+        if getattr(self, "_sync_stop_future", None) is not None:
+            self._sync_restart_pending = True
+            self._set_status("Waiting for screen sync to stop...")
+            return
         if getattr(self, "_bulb_recovery_token", None) is not None:
             return
-        if getattr(self, "_sync_start_future", None) is not None:
+        if (getattr(self, "_sync_start_future", None) is not None
+                or getattr(self, "_sync_launch_future", None) is not None):
             return
         bulbs = copy.deepcopy(self.config.screen_sync_bulbs())
         if not bulbs:
@@ -1538,13 +1552,36 @@ class WizLightModernGUI(AnimationMixin):
                 config=build_optimized_capture_config(settings, active_regions),
             )
             engine_holder["engine"] = self.screen_sync
-            self.screen_sync.start()
+            future = WizLightModernGUI._run_sync_worker(self.screen_sync.start)
         except Exception as exc:
-            self._stop_screen_sync(update_status=False)
-            self.screen_sync_switch.deselect()
-            self.config.screen_sync.enabled = False
-            self.config.save()
-            self._set_status(f"Sync startup failed: {exc}")
+            self._handle_sync_launch_error(exc)
+            return
+        self._sync_launch_future = future
+        self._sync_launch_poll_id = self.root.after(
+            25, self._poll_sync_launch, future, ips, configured_ips, settings, mode, warning,
+        )
+
+    def _handle_sync_launch_error(self, exc):
+        self._stop_screen_sync(update_status=False)
+        self.screen_sync_switch.deselect()
+        self.config.screen_sync.enabled = False
+        self.config.save()
+        self._set_status(f"Sync startup failed: {exc}")
+
+    def _poll_sync_launch(self, future, ips, configured_ips, settings, mode, warning):
+        self._sync_launch_poll_id = None
+        if getattr(self, "_sync_launch_future", None) is not future:
+            return
+        if not future.done():
+            self._sync_launch_poll_id = self.root.after(
+                25, self._poll_sync_launch, future, ips, configured_ips, settings, mode, warning,
+            )
+            return
+        self._sync_launch_future = None
+        try:
+            future.result()
+        except Exception as exc:
+            self._handle_sync_launch_error(exc)
             return
         self._set_sync_running_ui(True)
         if self._screen_sync_debug_id:
@@ -1679,7 +1716,65 @@ class WizLightModernGUI(AnimationMixin):
             if self.color_preview.cget("fg_color") != color:
                 self.color_preview.configure(fg_color=color)
 
+    @staticmethod
+    def _run_sync_worker(operation, *args):
+        future = Future()
+
+        def run():
+            try:
+                operation(*args)
+            except Exception as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(None)
+
+        Thread(target=run, name="WizLight screen sync lifecycle", daemon=True).start()
+        return future
+
+    @staticmethod
+    def _release_screen_sync(engine, transport, launching):
+        if launching is not None:
+            # Release partially initialized resources even when startup failed.
+            try:
+                launching.result()
+            except Exception:
+                pass
+        try:
+            if engine is not None:
+                engine.stop()
+        finally:
+            if transport is not None:
+                transport.close()
+
+    def _poll_sync_stop(self, future):
+        self._sync_stop_poll_id = None
+        if getattr(self, "_sync_stop_future", None) is not future:
+            return
+        if not future.done():
+            self._sync_stop_poll_id = self.root.after(25, self._poll_sync_stop, future)
+            return
+        self._sync_stop_future = None
+        restart, self._sync_restart_pending = self._sync_restart_pending, False
+        try:
+            future.result()
+        except Exception as exc:
+            if restart:
+                self.screen_sync_switch.deselect()
+                self.config.screen_sync.enabled = False
+                self.config.save()
+            self._set_status(f"Sync cleanup failed: {exc}")
+            return
+        if restart:
+            self._start_screen_sync()
+
     def _stop_screen_sync(self, update_status: bool = True):
+        self._sync_restart_pending = False
+        launching = getattr(self, "_sync_launch_future", None)
+        self._sync_launch_future = None
+        launch_poll_id = getattr(self, "_sync_launch_poll_id", None)
+        if launch_poll_id is not None:
+            self.root.after_cancel(launch_poll_id)
+            self._sync_launch_poll_id = None
         self._bulb_recovery_token = None
         future = getattr(self, "_sync_start_future", None)
         self._sync_start_future = None
@@ -1695,19 +1790,27 @@ class WizLightModernGUI(AnimationMixin):
             self._bulb_recovery_monitor_id = None
         engine, self.screen_sync = self.screen_sync, None
         transport, self._screen_sync_transport = self._screen_sync_transport, None
-        try:
-            try:
-                if engine:
-                    engine.stop()
-            finally:
-                if transport:
-                    transport.close()
-        finally:
-            if self._screen_sync_debug_id:
-                self.root.after_cancel(self._screen_sync_debug_id)
-                self._screen_sync_debug_id = None
+        if self._screen_sync_debug_id:
+            self.root.after_cancel(self._screen_sync_debug_id)
+            self._screen_sync_debug_id = None
+        stopping = getattr(self, "_sync_stop_future", None)
         if self._closing:
+            poll_id = getattr(self, "_sync_stop_poll_id", None)
+            if poll_id is not None:
+                self.root.after_cancel(poll_id)
+                self._sync_stop_poll_id = None
+            if stopping is not None:
+                self._sync_stop_future = None
+                stopping.result()
+            WizLightModernGUI._release_screen_sync(engine, transport, launching)
             return
+        if engine is not None or transport is not None:
+            stopping = WizLightModernGUI._run_sync_worker(
+                WizLightModernGUI._release_screen_sync, engine, transport, launching,
+            )
+            self._sync_stop_future = stopping
+            # Only Tk's thread schedules and handles the completion callback.
+            self._sync_stop_poll_id = self.root.after(25, self._poll_sync_stop, stopping)
         self._set_sync_running_ui(False)
         self._refresh_screen_sync_debug()
         if update_status:
@@ -1724,6 +1827,8 @@ class WizLightModernGUI(AnimationMixin):
     def _toggle_screen_sync_from_primary(self):
         if ((self.screen_sync and self.screen_sync.is_running)
                 or getattr(self, "_sync_start_future", None) is not None
+                or getattr(self, "_sync_launch_future", None) is not None
+                or getattr(self, "_sync_restart_pending", False)
                 or getattr(self, "_bulb_recovery_token", None) is not None):
             self.screen_sync_switch.deselect()
         else:
@@ -1829,6 +1934,7 @@ class WizLightModernGUI(AnimationMixin):
     def _exclude_bulb_before_power_off(self, ip: str):
         if self.screen_sync_switch.get():
             self._set_bulb_screen_sync(ip, False)
+        return getattr(self, "_sync_stop_future", None)
     
     # === System Tray ===
     

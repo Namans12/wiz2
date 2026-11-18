@@ -1,5 +1,7 @@
 """Bulb Dashboard with status cards for WizLight GUI."""
 
+import asyncio
+from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
@@ -268,7 +270,7 @@ class BulbDashboard(ctk.CTkFrame):
         run_async: Callable,
         on_bulb_select: Optional[Callable[[str], None]] = None,
         on_screen_sync_change: Optional[Callable[[str, bool], None]] = None,
-        before_power_off: Optional[Callable[[str], None]] = None,
+        before_power_off: Optional[Callable[[str], Optional[Future]]] = None,
     ):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
@@ -376,11 +378,16 @@ class BulbDashboard(ctk.CTkFrame):
 
     def _toggle_bulb(self, ip: str, turn_on: bool):
         """Set a specific bulb's power to the opposite of its displayed state."""
+        stopping = None
         if not turn_on and self.before_power_off:
-            self.before_power_off(ip)
+            stopping = self.before_power_off(ip)
 
         async def toggle():
             try:
+                if stopping is not None:
+                    # Stale retry packets from the old sync session must drain
+                    # before sending the manual power-off.
+                    await asyncio.shield(asyncio.wrap_future(stopping))
                 if turn_on:
                     await self.controller.turn_on(ip)
                 else:

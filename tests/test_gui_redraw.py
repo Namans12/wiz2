@@ -159,9 +159,10 @@ def test_capture_callback_sends_without_calling_tk_from_worker(monkeypatch):
         controller=controller, _async_runner=SimpleNamespace(submit=Mock()),
         _set_sync_running_ui=Mock(), _screen_sync_debug_id=None,
         _refresh_screen_sync_debug=Mock(), _set_status=Mock(),
-        _schedule_bulb_recovery_monitor=Mock(), root=Mock(),
+        _schedule_bulb_recovery_monitor=Mock(), _poll_sync_launch=Mock(), root=Mock(),
     )
     WizLightModernGUI._finish_sync_start(gui, ["192.0.2.1"], ["192.0.2.1"], ScreenSyncConfig())
+    gui._sync_launch_future.result(timeout=2)
     gui.root.after.reset_mock()
     gui.screen_sync.on_color_change({"all": (25, 100, 200)})
     transport.send.assert_called_once_with({"192.0.2.1": (25, 100, 200)}, 180)

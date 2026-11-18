@@ -1,10 +1,14 @@
 """Desktop startup must not block the UI or revive a cancelled session."""
 
 from concurrent.futures import Future
+import asyncio
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from src.gui.modern_app import WizLightModernGUI
+from src.gui.components.dashboard import BulbDashboard
 from src.core.async_runtime import BackgroundAsyncLoop
 from src.core.config import BulbConfig, Config
 
@@ -67,6 +71,30 @@ def test_individual_power_off_excludes_bulb_and_replaces_live_targets(tmp_path):
     app._dashboard.set_screen_sync_enabled.assert_called_once_with("one", False)
     app._stop_screen_sync.assert_called_once_with(update_status=False)
     app._start_screen_sync.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_individual_power_off_waits_for_old_sync_transport():
+    stopping = Future()
+    app, _ = _app()
+    app._set_bulb_screen_sync = Mock()
+    app._sync_stop_future = stopping
+    tasks = []
+    dashboard = SimpleNamespace(
+        before_power_off=lambda ip: WizLightModernGUI._exclude_bulb_before_power_off(app, ip),
+        controller=SimpleNamespace(turn_off=AsyncMock()), _bulbs=[],
+        _run_async=lambda coroutine: tasks.append(asyncio.create_task(coroutine)),
+    )
+
+    BulbDashboard._toggle_bulb(dashboard, "lamp", False)
+    app._set_bulb_screen_sync.assert_called_once_with("lamp", False)
+    try:
+        await asyncio.sleep(0)
+        dashboard.controller.turn_off.assert_not_awaited()
+    finally:
+        stopping.set_result(None)
+        await tasks[0]
+    dashboard.controller.turn_off.assert_awaited_once_with("lamp")
 
 
 def test_completed_preflight_starts_once_and_stale_callback_is_ignored():
