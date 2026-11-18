@@ -18,6 +18,7 @@ class BulbInfo:
     color: Optional[tuple[int, int, int]] = None
     color_temp: Optional[int] = None
     reachable: bool = True
+    screen_sync_enabled: bool = True
 
 
 class BulbCard(ctk.CTkFrame):
@@ -33,13 +34,15 @@ class BulbCard(ctk.CTkFrame):
         self,
         parent,
         bulb: BulbInfo,
-        on_toggle: Callable[[str], None],
+        on_toggle: Callable[[str, bool], None],
         on_click: Optional[Callable[[str], None]] = None,
+        on_screen_sync_change: Optional[Callable[[str, bool], None]] = None,
     ):
         super().__init__(parent, corner_radius=12)
         self.bulb = bulb
         self.on_toggle = on_toggle
         self.on_click = on_click
+        self.on_screen_sync_change = on_screen_sync_change
         
         self._build_ui()
         self._update_state()
@@ -135,10 +138,29 @@ class BulbCard(ctk.CTkFrame):
             fg_color=("#3B8ED0", "#1F6AA5")
         )
         self._brightness_bar.place(relx=0, rely=0, relheight=1, relwidth=0.5)
+
+        if self.on_screen_sync_change:
+            self._sync_checkbox = ctk.CTkCheckBox(
+                self, text="Include in screen sync",
+                command=self._on_screen_sync_change,
+            )
+            self._sync_checkbox.pack(anchor="w", padx=12, pady=(0, 12))
+            self.set_screen_sync_enabled(self.bulb.screen_sync_enabled)
     
     def _on_toggle_click(self):
         """Handle toggle button click."""
-        self.on_toggle(self.bulb.ip)
+        self.on_toggle(self.bulb.ip, not self.bulb.is_on)
+
+    def _on_screen_sync_change(self):
+        self.on_screen_sync_change(self.bulb.ip, bool(self._sync_checkbox.get()))
+
+    def set_screen_sync_enabled(self, enabled: bool):
+        if not hasattr(self, "_sync_checkbox"):
+            return
+        if enabled:
+            self._sync_checkbox.select()
+        else:
+            self._sync_checkbox.deselect()
     
     def _update_state(self):
         """Update UI to reflect current bulb state."""
@@ -245,11 +267,15 @@ class BulbDashboard(ctk.CTkFrame):
         controller: BulbController,
         run_async: Callable,
         on_bulb_select: Optional[Callable[[str], None]] = None,
+        on_screen_sync_change: Optional[Callable[[str, bool], None]] = None,
+        before_power_off: Optional[Callable[[str], None]] = None,
     ):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
         self._run_async = run_async
         self.on_bulb_select = on_bulb_select
+        self.on_screen_sync_change = on_screen_sync_change
+        self.before_power_off = before_power_off
         
         self._cards: Dict[str, BulbCard] = {}
         self._bulbs: List[BulbInfo] = []
@@ -306,6 +332,10 @@ class BulbDashboard(ctk.CTkFrame):
         elif not bulbs and not self._cards:
             # Ensure the empty state is visible on the first visit.
             self._rebuild_cards()
+        else:
+            for current, updated in zip(self._bulbs, bulbs):
+                if current.screen_sync_enabled != updated.screen_sync_enabled:
+                    self.set_screen_sync_enabled(current.ip, updated.screen_sync_enabled)
         
         if self._auto_refresh:
             self.refresh_status()
@@ -332,20 +362,33 @@ class BulbDashboard(ctk.CTkFrame):
                 self._grid,
                 bulb,
                 on_toggle=self._toggle_bulb,
-                on_click=self.on_bulb_select
+                on_click=self.on_bulb_select,
+                on_screen_sync_change=self.on_screen_sync_change,
             )
             card.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
             self._cards[bulb.ip] = card
     
-    def _toggle_bulb(self, ip: str):
-        """Toggle a specific bulb."""
+    def set_screen_sync_enabled(self, ip: str, enabled: bool):
+        card = self._cards.get(ip)
+        if card:
+            card.bulb.screen_sync_enabled = enabled
+            card.set_screen_sync_enabled(enabled)
+
+    def _toggle_bulb(self, ip: str, turn_on: bool):
+        """Set a specific bulb's power to the opposite of its displayed state."""
+        if not turn_on and self.before_power_off:
+            self.before_power_off(ip)
+
         async def toggle():
             try:
-                new_state = await self.controller.toggle(ip)
+                if turn_on:
+                    await self.controller.turn_on(ip)
+                else:
+                    await self.controller.turn_off(ip)
                 # Update card immediately
                 for bulb in self._bulbs:
                     if bulb.ip == ip:
-                        bulb.is_on = new_state
+                        bulb.is_on = turn_on
                         if ip in self._cards:
                             card = self._cards[ip]
                             card.after(0, lambda b=bulb, c=card: c.update_bulb(b))

@@ -44,6 +44,23 @@ def test_add_bulb_replaces_old_ip_for_same_mac_and_preserves_layout(tmp_path):
     assert reloaded.screen_sync.bulb_layout == {"192.168.1.20": "left"}
 
 
+def test_screen_sync_selection_defaults_to_all_and_follows_bulb_identity(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"bulbs": [
+        {"ip": "old", "name": "Desk", "mac": "aa:bb:cc:dd:ee:ff"},
+        {"ip": "other", "name": "Other"},
+    ]}))
+    config = Config.load(path)
+    assert [bulb.ip for bulb in config.screen_sync_bulbs()] == ["old", "other"]
+    assert config.set_bulb_screen_sync("old", False)
+    config.add_bulb("new", "Desk", "aabbccddeeff", preserve_name=True)
+    config.add_bulb("old", "Replacement", "11:22:33:44:55:66")
+    config = Config.load(path)
+    assert [bulb.ip for bulb in config.screen_sync_bulbs()] == ["other", "old"]
+    assert config.set_bulb_screen_sync("new", True)
+    assert len(Config.load(path).screen_sync_bulbs()) == 3
+
+
 def test_remove_bulbs_prunes_layout_entries(tmp_path):
     config_path = tmp_path / "wizlight" / "config.json"
     config = Config.load(config_path)

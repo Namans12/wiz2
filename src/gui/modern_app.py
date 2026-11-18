@@ -292,6 +292,8 @@ class WizLightModernGUI(AnimationMixin):
             self.controller,
             self._run_async,
             on_bulb_select=self._on_bulb_select,
+            on_screen_sync_change=self._set_bulb_screen_sync,
+            before_power_off=self._exclude_bulb_before_power_off,
         )
         self._dashboard.pack(fill="both", expand=True)
         self._current_view = ""
@@ -1274,6 +1276,8 @@ class WizLightModernGUI(AnimationMixin):
                     pass
         if hasattr(self, "layout_frame"):
             self._refresh_screen_sync_layout_controls()
+        if getattr(self, "_current_view", None) == "bulbs":
+            self._update_dashboard()
 
     def _discover_bulbs(self):
         self._set_status("Discovering...")
@@ -1283,7 +1287,7 @@ class WizLightModernGUI(AnimationMixin):
                 bulbs = await self.controller.discover()
                 for index, bulb in enumerate(bulbs, 1):
                     self.config.add_bulb(bulb["ip"], f"Bulb {index}", bulb["mac"], preserve_name=True)
-                self.root.after(0, self._update_bulb_status)
+                self.root.after(0, self._refresh_after_bulb_config_change)
                 self.root.after(0, lambda: self._set_status(f"Found {len(bulbs)} bulb(s)"))
             except Exception as exc:
                 message = f"Error: {exc}"
@@ -1312,7 +1316,7 @@ class WizLightModernGUI(AnimationMixin):
                 self.root.after(0, lambda: self._set_status(f"No WiZ bulb answered at {ip}"))
                 return
             self.config.add_bulb(ip, f"Bulb {len(self.config.bulbs) + 1}", mac, preserve_name=True)
-            self.root.after(0, self._update_bulb_status)
+            self.root.after(0, self._refresh_after_bulb_config_change)
             self.root.after(0, lambda: self._set_status(f"Added bulb at {ip}"))
 
         self._run_async(add())
@@ -1329,7 +1333,7 @@ class WizLightModernGUI(AnimationMixin):
             try:
                 stale_ips = await self.controller.find_stale_bulbs(configured_ips)
                 removed = self.config.remove_bulbs(stale_ips)
-                self.root.after(0, self._update_bulb_status)
+                self.root.after(0, self._refresh_after_bulb_config_change)
                 if removed:
                     self.root.after(0, lambda: self._set_status(f"Removed {removed} stale bulb(s)"))
                 else:
@@ -1339,6 +1343,13 @@ class WizLightModernGUI(AnimationMixin):
                 self.root.after(0, lambda msg=message: self._set_status(msg))
 
         self._run_async(prune())
+
+    def _refresh_after_bulb_config_change(self):
+        self._update_bulb_status()
+        targets = {(bulb.ip, mac_identity(bulb.mac)) for bulb in self.config.screen_sync_bulbs()}
+        if self.screen_sync_switch.get() and targets != getattr(self, "_sync_requested_targets", set()):
+            self._stop_screen_sync(update_status=False)
+            self._start_screen_sync()
 
     def _turn_off(self):
         ips = self._get_bulb_ips()
@@ -1420,10 +1431,18 @@ class WizLightModernGUI(AnimationMixin):
             return
         if getattr(self, "_sync_start_future", None) is not None:
             return
-        configured_ips = self._get_bulb_ips()
+        bulbs = copy.deepcopy(self.config.screen_sync_bulbs())
+        if not bulbs:
+            self.screen_sync_switch.deselect()
+            self._set_sync_running_ui(False)
+            self.config.screen_sync.enabled = False
+            self.config.save()
+            self._set_status("Select at least one bulb in Bulbs to start screen sync")
+            return
+        configured_ips = [bulb.ip for bulb in bulbs]
+        self._sync_requested_targets = {(bulb.ip, mac_identity(bulb.mac)) for bulb in bulbs}
         self._save_screen_sync_settings()
         settings = copy.deepcopy(self.config.screen_sync)
-        bulbs = copy.deepcopy(tuple(self.config.bulbs))
 
         async def prepare():
             ips = await asyncio.wait_for(refresh_verified_targets(self.controller, bulbs), 6.0)
@@ -1468,8 +1487,8 @@ class WizLightModernGUI(AnimationMixin):
             self._set_status(f"Sync preflight failed: {exc}")
             return
         if not ips:
-            if any(mac_identity(bulb.mac) for bulb in self.config.bulbs):
-                self._recover_sync_bulbs()
+            if any(mac_identity(bulb.mac) for bulb in self.config.screen_sync_bulbs()):
+                self._recover_sync_bulbs(target_ips=set(configured_ips))
                 return
             self.screen_sync_switch.deselect()
             self._set_sync_running_ui(False)
@@ -1615,7 +1634,7 @@ class WizLightModernGUI(AnimationMixin):
         engine = self.screen_sync
         if self._closing or not engine or not engine.is_running:
             return
-        bulbs = tuple(self.config.bulbs)
+        bulbs = tuple(self.config.screen_sync_bulbs())
 
         async def poll():
             results = await asyncio.gather(
@@ -1786,7 +1805,7 @@ class WizLightModernGUI(AnimationMixin):
         """Update dashboard with current bulbs."""
         if self._dashboard:
             bulbs = [
-                BulbInfo(ip=b.ip, name=b.name)
+                BulbInfo(ip=b.ip, name=b.name, screen_sync_enabled=b.screen_sync_enabled)
                 for b in self.config.bulbs
             ]
             self._dashboard.start_auto_refresh(interval_ms=5000)
@@ -1796,6 +1815,19 @@ class WizLightModernGUI(AnimationMixin):
         """Handle bulb selection from dashboard."""
         self._switch_view("lights")
         self._set_status(f"Selected: {ip}")
+
+    def _set_bulb_screen_sync(self, ip: str, enabled: bool):
+        if not self.config.set_bulb_screen_sync(ip, enabled):
+            return
+        if self._dashboard:
+            self._dashboard.set_screen_sync_enabled(ip, enabled)
+        if self.screen_sync_switch.get():
+            self._stop_screen_sync(update_status=False)
+            self._start_screen_sync()
+
+    def _exclude_bulb_before_power_off(self, ip: str):
+        if self.screen_sync_switch.get():
+            self._set_bulb_screen_sync(ip, False)
     
     # === System Tray ===
     

@@ -108,7 +108,7 @@ async def test_recovery_accepts_only_fully_verified_address_swap():
     controller = FakeController([
         {"ip": "two", "mac": left.mac}, {"ip": "one", "mac": right.mac},
     ], {"two": SimpleNamespace(mac=left.mac), "one": SimpleNamespace(mac=right.mac)})
-    result = await recover_saved_bulbs(controller, [left, right])
+    result = await recover_saved_bulbs(controller, [left, right], target_ips={"one"})
     assert {(item.old_ip, item.new_ip) for item in result} == {("one", "two"), ("two", "one")}
     controller.states["one"] = SimpleNamespace(mac="00:00:00:00:00:01")
     assert await recover_saved_bulbs(controller, [left, right]) == []
@@ -141,12 +141,14 @@ def test_verified_swap_preserves_names_and_zone_assignments(tmp_path):
     config = Config.load(tmp_path / "config.json")
     config.add_bulb("one", "Left", "aa:bb:cc:dd:ee:ff")
     config.add_bulb("two", "Right", "11:22:33:44:55:66")
+    config.set_bulb_screen_sync("one", False)
     config.screen_sync.bulb_layout = {"one": "left", "two": "right"}
     moves = [("one", "two", "aa:bb:cc:dd:ee:ff"), ("two", "one", "11:22:33:44:55:66")]
     assert config.reassign_bulb_addresses(moves[:1]) == 0
     assert config.reassign_bulb_addresses(moves) == 2
     reloaded = Config.load(tmp_path / "config.json")
     assert [(bulb.ip, bulb.name) for bulb in reloaded.bulbs] == [("two", "Left"), ("one", "Right")]
+    assert [bulb.ip for bulb in reloaded.screen_sync_bulbs()] == ["one"]
     assert reloaded.screen_sync.bulb_layout == {"two": "left", "one": "right"}
 
 

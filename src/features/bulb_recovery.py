@@ -83,12 +83,22 @@ async def recover_saved_bulbs(controller, bulbs, *, discovery_timeout: float = 6
         if len(entries) != 1 or len(addresses) != 1:
             continue
         bulb = entries[0]
-        if target_ips is not None and bulb.ip not in target_ips:
-            continue
         address = next(iter(addresses))
         if address == bulb.ip:
             continue
         requests.append((bulb, identity, address))
+    if target_ips is not None:
+        # A target can move into an occupied address only if its occupant
+        # moves too. Include those dependencies without probing other lights.
+        by_ip = {bulb.ip: address for bulb, _, address in requests}
+        needed = set(target_ips)
+        pending = list(target_ips)
+        while pending:
+            address = by_ip.get(pending.pop())
+            if address in by_ip and address not in needed:
+                needed.add(address)
+                pending.append(address)
+        requests = [request for request in requests if request[0].ip in needed]
     states = await asyncio.gather(
         *(fetch_fresh_identity(controller, address) for _, _, address in requests),
         return_exceptions=True,

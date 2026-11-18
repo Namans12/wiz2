@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 from src.gui.modern_app import WizLightModernGUI
 from src.core.async_runtime import BackgroundAsyncLoop
+from src.core.config import BulbConfig, Config
 
 
 def _app():
@@ -21,7 +22,8 @@ def _app():
     root.after.return_value = "poll"
     app = SimpleNamespace(
         _closing=False, screen_sync=None, _async_runner=runner, root=root,
-        config=SimpleNamespace(bulbs=[], screen_sync=SimpleNamespace()),
+        config=SimpleNamespace(screen_sync_bulbs=lambda: [BulbConfig("lamp", "Lamp")],
+                               screen_sync=SimpleNamespace(), save=Mock()),
         screen_sync_switch=SimpleNamespace(get=lambda: True, deselect=Mock()),
         _get_bulb_ips=lambda: [], _save_screen_sync_settings=Mock(),
         _set_status=Mock(), _set_sync_running_ui=Mock(), _finish_sync_start=Mock(),
@@ -37,6 +39,34 @@ def test_start_schedules_preflight_without_waiting():
     app._async_runner.run.assert_not_called()
     app.root.after.assert_called_once()
     assert not future.done()
+
+
+def test_no_selected_bulbs_skips_preflight_and_resets_switch():
+    app, _ = _app()
+    app.config.screen_sync_bulbs = lambda: []
+    WizLightModernGUI._start_screen_sync(app)
+    app._async_runner.submit.assert_not_called()
+    app.screen_sync_switch.deselect.assert_called_once()
+    assert app.config.screen_sync.enabled is False
+
+
+def test_individual_power_off_excludes_bulb_and_replaces_live_targets(tmp_path):
+    config = Config.load(tmp_path / "config.json")
+    config.add_bulb("one", "Desk")
+    config.add_bulb("two", "Wall")
+    app, _ = _app()
+    app.config = config
+    app._dashboard = Mock()
+    app._stop_screen_sync = Mock()
+    app._start_screen_sync = Mock()
+    app._set_bulb_screen_sync = lambda *args: WizLightModernGUI._set_bulb_screen_sync(app, *args)
+
+    WizLightModernGUI._exclude_bulb_before_power_off(app, "one")
+
+    assert [bulb.ip for bulb in Config.load(config._config_path).screen_sync_bulbs()] == ["two"]
+    app._dashboard.set_screen_sync_enabled.assert_called_once_with("one", False)
+    app._stop_screen_sync.assert_called_once_with(update_status=False)
+    app._start_screen_sync.assert_called_once()
 
 
 def test_completed_preflight_starts_once_and_stale_callback_is_ignored():

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.core.async_runtime import BackgroundAsyncLoop
 from src.core.bulb_controller import BulbController
 from src.core.config import Config
+from src.features.bulb_recovery import refresh_verified_targets
 from src.features.screen_sync import build_bulb_color_map, effective_screen_sync_mode, resolve_active_regions
 from src.features.screen_sync_v2 import OptimizedScreenSync, build_optimized_capture_config
 from src.features.fast_udp_sender import FastBulbSenderPool
@@ -22,6 +23,10 @@ def main():
     config = Config.load()
     if not config.bulbs:
         print("No bulbs configured. Run 'wizlight discover' first.")
+        return
+    bulbs = config.screen_sync_bulbs()
+    if not bulbs:
+        print("No bulbs selected for screen sync. Select bulbs in the desktop app.")
         return
     controller = BulbController()
     runner = BackgroundAsyncLoop()
@@ -35,8 +40,7 @@ def main():
         running = False
 
     try:
-        configured_ips = [bulb.ip for bulb in config.bulbs]
-        ips = runner.run(controller.refresh_screen_sync_targets(configured_ips), timeout=6.0)
+        ips = runner.run(refresh_verified_targets(controller, bulbs), timeout=6.0)
         if not ips:
             print("No reachable bulbs available for screen sync.")
             return

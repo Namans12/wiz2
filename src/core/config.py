@@ -5,7 +5,7 @@ import hashlib
 import math
 import os
 import tempfile
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from threading import RLock
 from typing import Optional
@@ -34,6 +34,7 @@ class BulbConfig:
     ip: str
     name: str
     mac: Optional[str] = None
+    screen_sync_enabled: bool = True
 
 
 COLOR_ALGORITHMS = ("auto", "weighted", "kmeans", "histogram")
@@ -257,6 +258,7 @@ class Config:
                 ip=bulb["ip"].strip(),
                 name=bulb.get("name") if isinstance(bulb.get("name"), str) else "WiZ Bulb",
                 mac=bulb.get("mac") if isinstance(bulb.get("mac"), str) else None,
+                screen_sync_enabled=bulb.get("screen_sync_enabled") is not False,
             ))
         screen_sync = _settings_from_json(ScreenSyncConfig, data.get("screen_sync", {}))
         clap = _settings_from_json(ClapConfig, data.get("clap", {}))
@@ -298,12 +300,33 @@ class Config:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
 
+    def screen_sync_bulbs(self) -> list[BulbConfig]:
+        return [bulb for bulb in self.bulbs if bulb.screen_sync_enabled]
+
+    def set_bulb_screen_sync(self, ip: str, enabled: bool) -> bool:
+        """Persist participation for a saved bulb and report whether it changed."""
+        for bulb in self.bulbs:
+            if bulb.ip == ip and bulb.screen_sync_enabled != enabled:
+                bulb.screen_sync_enabled = enabled
+                self.save()
+                return True
+        return False
+
     def add_bulb(self, ip: str, name: str, mac: Optional[str] = None, *, preserve_name: bool = False) -> None:
         """Add a bulb to configuration."""
 
         preserved_region = self.screen_sync.bulb_layout.get(ip)
         normalized_mac = mac.lower() if mac else None
         identity = mac_identity(mac)
+        at_address = next((bulb for bulb in self.bulbs if bulb.ip == ip), None)
+        known_bulb = next(
+            (bulb for bulb in self.bulbs if identity and mac_identity(bulb.mac) == identity),
+            None,
+        )
+        if known_bulb is None and at_address is not None:
+            address_identity = mac_identity(at_address.mac)
+            if not identity or not address_identity:
+                known_bulb = at_address
         stale_ips = {ip}
         for bulb in self.bulbs:
             if bulb.ip == ip or (identity and mac_identity(bulb.mac) == identity):
@@ -323,7 +346,10 @@ class Config:
             self.screen_sync.bulb_layout.pop(stale_ip, None)
         if preserved_region:
             self.screen_sync.bulb_layout[ip] = preserved_region
-        self.bulbs.append(BulbConfig(ip=ip, name=name, mac=normalized_mac or mac))
+        self.bulbs.append(BulbConfig(
+            ip=ip, name=name, mac=normalized_mac or mac,
+            screen_sync_enabled=known_bulb.screen_sync_enabled if known_bulb is not None else True,
+        ))
         self.save()
 
     def reassign_bulb_addresses(self, moves: list[tuple[str, str, str]]) -> int:
@@ -343,8 +369,7 @@ class Config:
                     or not new or old == new or (new in by_ip and new not in old_ips)):
                 return 0
         mapping = dict(zip(old_ips, new_ips))
-        self.bulbs = [BulbConfig(ip=mapping.get(bulb.ip, bulb.ip), name=bulb.name, mac=bulb.mac)
-                      for bulb in self.bulbs]
+        self.bulbs = [replace(bulb, ip=mapping.get(bulb.ip, bulb.ip)) for bulb in self.bulbs]
         self.screen_sync.bulb_layout = {
             mapping.get(ip, ip): region for ip, region in self.screen_sync.bulb_layout.items()
             if ip not in new_ips or ip in old_ips
