@@ -80,20 +80,29 @@ def main() -> None:
     parser.add_argument("--order", default="ABBA", help="Segments: A = link off, B = link on (default: ABBA)")
     parser.add_argument("--countdown", type=float, default=8.0, help="Seconds of black before the first segment")
     parser.add_argument("--out", type=Path, help="Write the run log as JSON")
+    parser.add_argument("--color-check", action="store_true",
+                        help="Display a fixed sequence of color patches with the monitored link on")
+    parser.add_argument("--model", choices=("physical", "heuristic"), help="Override color model for this run")
     args = parser.parse_args()
     order = args.order.upper()
+    patches = ["#ff0000", "#00ff00", "#0000ff", "#00ffff", "#ff00ff", "#ffff00",
+               "#ff8000", "#ffb090", "#808080", "#a09d9b", "#9ba0a0", "#ffffff", "#202020", "#000000"]
+    if args.color_check:
+        order, args.cuts = "B", len(patches)
     if not order or set(order) - {"A", "B"} or not 0.5 <= args.hold <= 30 or not 2 <= args.cuts <= 200:
         parser.error("--order uses only A and B; --hold is 0.5-30 s; --cuts is 2-200")
 
     config = Config.load()
     settings = copy.deepcopy(config.screen_sync)
+    if args.model:
+        settings.mixing_model = args.model
     if args.monitor is not None:
         settings.monitor = args.monitor
     with mss.mss() as capture:
         monitors = capture.monitors
         geometry = monitors[min(max(1, settings.monitor), len(monitors) - 1)] if len(monitors) > 1 else monitors[0]
 
-    candidates = args.ip or [bulb.ip for bulb in config.bulbs]
+    candidates = args.ip or [bulb.ip for bulb in config.screen_sync_bulbs()]
     priors = {ip: _ask(ip, {"method": "getPilot", "params": {}}).get("result") for ip in candidates}
     ips = [ip for ip, prior in priors.items() if prior]
     if not ips:
@@ -126,12 +135,12 @@ def main() -> None:
     label = tk.Label(root, font=("Arial", 20), bg=BLACK, fg="#808080")
     label.place(relx=0.5, rely=0.92, anchor="center")
     log: dict = {"order": order, "hold": args.hold, "ips": ips, "segments": [],
-                 "capture_error": None}
+                 "mixing_model": settings.mixing_model, "color_check": args.color_check, "capture_error": None}
     stopped = {"value": False}
 
     def show(colour: str, text: str) -> None:
         root.configure(bg=colour)
-        label.configure(bg=colour, text=text, fg="#ffffff" if colour != GREEN else "#000000")
+        label.configure(bg=colour, text="" if args.color_check else text, fg="#ffffff" if colour != GREEN else "#000000")
 
     def open_segment(kind: str) -> dict:
         holder["transport"] = ScreenSyncTransport(
@@ -177,11 +186,19 @@ def main() -> None:
                 # confirms the pattern covered the captured monitor.
                 seen = engine.debug_snapshot["target_colors"].get("all")
                 segment["changes"][-1]["engine_target_at_end"] = list(seen) if seen else None
-                expected = (255, 0, 0) if segment["changes"][-1]["colour"] == "red" else (0, 0, 255)
-                if seen is None or sum((a - b) ** 2 for a, b in zip(seen, expected)) > 80 ** 2:
+                if args.color_check:
+                    expected = tuple(bytes.fromhex(segment["changes"][-1]["colour"][1:]))
+                    peak = max(expected)
+                    expected = tuple(round(v * 255 / peak) for v in expected) if peak else expected
+                    observed = seen
+                    segment["changes"][-1]["display_rgb"] = list(bytes.fromhex(segment["changes"][-1]["colour"][1:]))
+                else:
+                    observed = seen
+                    expected = (255, 0, 0) if segment["changes"][-1]["colour"] == "red" else (0, 0, 255)
+                if observed is None or sum((a - b) ** 2 for a, b in zip(observed, expected)) > 80 ** 2:
                     log["capture_error"] = (
                         f"Capture did not retain the displayed {segment['changes'][-1]['colour']} "
-                        f"frame: observed {seen}. Recording is not valid for latency comparison."
+                        f"frame: observed {observed}. Recording is not valid for latency comparison."
                     )
                     print(log["capture_error"], flush=True)
                     finish()
@@ -191,10 +208,10 @@ def main() -> None:
                 show(GREEN, f"segment {index + 1}/{len(order)} done")
                 root.after(4000, lambda: run_segment(index + 1))
                 return
-            colour = RED if cut % 2 == 0 else BLUE
+            colour = patches[cut] if args.color_check else (RED if cut % 2 == 0 else BLUE)
             show(colour, f"segment {index + 1}/{len(order)} ({kind})  cut {cut + 1}/{args.cuts}")
             root.update_idletasks()
-            segment["changes"].append({"at": time.perf_counter(), "colour": "red" if colour == RED else "blue"})
+            segment["changes"].append({"at": time.perf_counter(), "colour": colour if args.color_check else ("red" if colour == RED else "blue")})
             root.after(int(args.hold * 1000), lambda: step(cut + 1))
 
         step(0)
