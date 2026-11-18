@@ -54,6 +54,7 @@ def _reset_gui_state(gui):
     gui.config.screen_sync.bulb_layout = {}
     gui.config.screen_sync.mode = "single"
     gui.config.screen_sync.mixing_model = "heuristic"
+    gui.physical_color_trim_var.set(False)
     gui._screen_layout_vars = {}
     gui.sync_mode_value.set("Single bulb")
     gui.mixing_model_value.set("Standard")
@@ -139,10 +140,15 @@ def test_mixing_model_hint_updates_on_toggle(gui):
     gui.mixing_model_value.set("Standard")
     gui._on_mixing_model_change()
     assert "proven default" in gui.mixing_model_hint.cget("text")
+    assert gui.physical_color_trim_checkbox.cget("state") == "disabled"
 
     gui.mixing_model_value.set("Physical (experimental)")
     gui._on_mixing_model_change()
     assert "Not proven better" in gui.mixing_model_hint.cget("text")
+    assert gui.physical_color_trim_checkbox.cget("state") == "normal"
+    gui.physical_color_trim_checkbox.toggle()
+    gui._save_screen_sync_settings()
+    assert gui.config.screen_sync.physical_color_trim
 
 
 @pytest.mark.parametrize("size", ["860x580", "1080x780"])

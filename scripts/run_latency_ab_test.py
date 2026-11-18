@@ -83,6 +83,8 @@ def main() -> None:
     parser.add_argument("--color-check", action="store_true",
                         help="Display a fixed sequence of color patches with the monitored link on")
     parser.add_argument("--model", choices=("physical", "heuristic"), help="Override color model for this run")
+    parser.add_argument("--physical-color-trim", action=argparse.BooleanOptionalAction, default=None,
+                        help="Override the optional physical color corrections for this run")
     args = parser.parse_args()
     order = args.order.upper()
     patches = ["#ff0000", "#00ff00", "#0000ff", "#00ffff", "#ff00ff", "#ffff00",
@@ -96,6 +98,8 @@ def main() -> None:
     settings = copy.deepcopy(config.screen_sync)
     if args.model:
         settings.mixing_model = args.model
+    if args.physical_color_trim is not None:
+        settings.physical_color_trim = args.physical_color_trim
     if args.monitor is not None:
         settings.monitor = args.monitor
     with mss.mss() as capture:
@@ -135,7 +139,9 @@ def main() -> None:
     label = tk.Label(root, font=("Arial", 20), bg=BLACK, fg="#808080")
     label.place(relx=0.5, rely=0.92, anchor="center")
     log: dict = {"order": order, "hold": args.hold, "ips": ips, "segments": [],
-                 "mixing_model": settings.mixing_model, "color_check": args.color_check, "capture_error": None}
+                 "mixing_model": settings.mixing_model,
+                 "physical_color_trim": settings.mixing_model == "physical" and settings.physical_color_trim,
+                 "color_check": args.color_check, "capture_error": None}
     stopped = {"value": False}
 
     def show(colour: str, text: str) -> None:

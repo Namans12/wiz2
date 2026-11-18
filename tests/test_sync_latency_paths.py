@@ -267,3 +267,49 @@ def test_changing_opposite_zone_does_not_shift_tint():
     changed = engine._extract_colors(frame)
     assert original["left"] == changed["left"]
     assert original["right"] != changed["right"]
+
+
+def test_optional_physical_trim_changes_two_recorded_patches_without_affecting_dimming():
+    from src.core.config import ScreenSyncConfig
+
+    patches = (
+        (255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 255, 255),
+        (255, 0, 255), (255, 255, 0), (255, 128, 0), (255, 176, 144),
+        (128, 128, 128), (160, 157, 155), (155, 160, 160), (255, 255, 255),
+        (32, 32, 32), (0, 0, 0),
+    )
+    for patch in patches:
+        frame = np.full((90, 160, 3), patch, dtype=np.uint8)
+        outputs = []
+        for model, trim in (("physical", False), ("physical", True), ("heuristic", True)):
+            settings = ScreenSyncConfig(mixing_model=model, physical_color_trim=trim, use_gpu=False)
+            config = sync_module.build_optimized_capture_config(settings, ())
+            engine = OptimizedScreenSync(lambda _: None, config)
+            if patch == (0, 0, 0):
+                engine._black_since = sync_module.time.perf_counter() - 1
+            outputs.append((engine._extract_colors(frame)["all"], engine.output_brightness))
+        (original, level), (tuned, tuned_level), (heuristic, heuristic_level) = outputs
+        assert level == tuned_level == heuristic_level
+        assert original == heuristic
+        if patch == (255, 128, 0):
+            assert tuned[0] == 255 and tuned[1] > original[1] and tuned[2] == 0
+        elif patch == (32, 32, 32):
+            assert tuned[0] < tuned[1] < tuned[2] == 255
+        else:
+            assert tuned == original
+
+
+def test_physical_shadow_trim_uses_zone_value_and_respects_constant_brightness():
+    frame = np.full((90, 160, 3), 255, dtype=np.uint8)
+    frame[:, :80] = 32
+    for mode in ("follow", "constant"):
+        engine = _engine(
+            mode="zones", active_regions=("left", "right"), ignore_letterbox=False,
+            parallel_regions=False, physical_color_trim=True, brightness_mode=mode,
+        )
+        colors = engine._extract_colors(frame)
+        assert colors["right"] == (255, 255, 255)
+        if mode == "follow":
+            assert colors["left"][0] < colors["left"][1] < colors["left"][2] == 255
+        else:
+            assert colors["left"] == (255, 255, 255)

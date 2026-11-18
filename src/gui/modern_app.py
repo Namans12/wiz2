@@ -441,6 +441,7 @@ class WizLightModernGUI(AnimationMixin):
                 "Standard",
             )
         )
+        self.physical_color_trim_var = ctk.BooleanVar(value=self.config.screen_sync.physical_color_trim)
         self.sync_profile_labels = {
             "Auto": "auto",
             "Cinema (calm)": "cinema",
@@ -556,6 +557,14 @@ class WizLightModernGUI(AnimationMixin):
             text_color=("gray40", "gray60"),
         )
         self.mixing_model_hint.pack(fill="x", padx=14, pady=(0, 10))
+        self.physical_color_trim_checkbox = ctk.CTkCheckBox(
+            settings,
+            text="Tune orange and dark gray",
+            variable=self.physical_color_trim_var,
+            command=self._queue_screen_sync_settings_save,
+            state="normal" if self.config.screen_sync.mixing_model == "physical" else "disabled",
+        )
+        self.physical_color_trim_checkbox.pack(anchor="w", padx=14, pady=(0, 10))
 
         ctk.CTkLabel(settings, text="Sync Feel", anchor="w").pack(
             fill="x", padx=14, pady=(2, 4)
@@ -914,6 +923,7 @@ class WizLightModernGUI(AnimationMixin):
             self.mixing_model_value.get(),
             "heuristic",
         )
+        settings.physical_color_trim = bool(self.physical_color_trim_var.get())
         settings.use_gpu = bool(self.use_gpu_var.get())
         settings.adaptive_fps = bool(self.adaptive_fps_var.get())
         settings.predictive_smoothing = bool(self.predictive_smoothing_var.get())
@@ -1028,6 +1038,8 @@ class WizLightModernGUI(AnimationMixin):
 
     def _on_mixing_model_change(self, _value=None):
         self.mixing_model_hint.configure(text=self._mixing_model_hint_text())
+        physical = self.mixing_model_labels.get(self.mixing_model_value.get()) == "physical"
+        self.physical_color_trim_checkbox.configure(state="normal" if physical else "disabled")
         self._queue_screen_sync_settings_save()
 
     def _set_status(self, msg: str):
