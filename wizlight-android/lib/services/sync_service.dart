@@ -87,7 +87,7 @@ class SyncSettings {
 
   Map<String, Object> toMethodArgs(List<WizBulb> bulbs) {
     return <String, Object>{
-      'bulbsJson': WizBulb.encodeList(bulbs),
+      'bulbsJson': WizBulb.encodeList(WizBulb.syncTargets(bulbs)),
       'mode': mode,
       'minFps': minFps,
       'maxFps': maxFps,

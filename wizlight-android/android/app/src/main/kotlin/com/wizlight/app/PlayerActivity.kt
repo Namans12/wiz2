@@ -13,7 +13,6 @@ import android.view.TextureView
 import android.view.WindowManager
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
-import org.json.JSONArray
 
 /**
  * USB media player front-end. Plays a local (non-DRM) media URI with ExoPlayer,
@@ -47,7 +46,7 @@ class PlayerActivity : Activity() {
     private var sampleThread: HandlerThread? = null
     private var sampleHandler: Handler? = null
 
-    private var isSyncing = false
+    @Volatile private var isSyncing = false
     private val framePending = AtomicBoolean(false)
     private var sessionId = ""
     private var sessionFailure: String? = null
@@ -71,7 +70,7 @@ class PlayerActivity : Activity() {
         setContentView(textureView)
 
         sessionId = intent.getStringExtra("sessionId") ?: ""
-        if (!SyncSessionRegistry.attach(sessionId) { runOnUiThread { finish() } }) {
+        if (!SyncSessionRegistry.attach(sessionId, ::updateTargets) { runOnUiThread { finish() } }) {
             finish()
             return
         }
@@ -122,7 +121,7 @@ class PlayerActivity : Activity() {
             intent.getStringExtra(ScreenCaptureService.EXTRA_SYNC_PROFILE),
         )
         engine.brightnessFollow = intent.getBooleanExtra(ScreenCaptureService.EXTRA_BRIGHTNESS_FOLLOW, true)
-        engine.bulbTargets = parseBulbs(intent.getStringExtra(ScreenCaptureService.EXTRA_BULBS_JSON) ?: "[]")
+        engine.bulbTargets = parseSyncTargets(intent.getStringExtra(ScreenCaptureService.EXTRA_BULBS_JSON) ?: "[]")
         engine.effectiveMode = "single"
         engine.configureAutoFromDisplay(
             this,
@@ -167,17 +166,12 @@ class PlayerActivity : Activity() {
         SyncBridge.post("onSyncUpdate", payload)
     }
 
-    private fun parseBulbs(rawJson: String): List<ColorSyncEngine.BulbTarget> {
-        val bulbs = mutableListOf<ColorSyncEngine.BulbTarget>()
-        val array = JSONArray(rawJson)
-        for (index in 0 until array.length()) {
-            val item = array.optJSONObject(index) ?: continue
-            val ip = item.optString("ip")
-            if (ip.isBlank()) continue
-            val region = RegionLayout.normalize(item.optString("region"))
-            bulbs.add(ColorSyncEngine.BulbTarget(ip = ip, region = region))
-        }
-        return bulbs
+    private fun updateTargets(targets: List<ColorSyncEngine.BulbTarget>, complete: (Boolean) -> Unit) {
+        val worker = sampleHandler?.looper
+        if (worker == null || !Handler(worker).post {
+                if (isSyncing) engine.updateTargets(targets, "single")
+                complete(isSyncing)
+            }) complete(false)
     }
 
     override fun onPause() {

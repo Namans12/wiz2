@@ -65,9 +65,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _refreshSession();
   }
 
-  Future<void> _saveBulbs(List<WizBulb> bulbs) async {
-    setState(() => _bulbs = bulbs.toList(growable: false));
-    await _settingsService.saveBulbs(_bulbs);
+  Future<bool> _saveBulbs(List<WizBulb> bulbs, {String? turnOffIp}) async {
+    if (_transitioning) return false;
+    setState(() => _busy = true);
+    try {
+      final targets = WizBulb.syncTargets(bulbs);
+      final previousTargets = WizBulb.syncTargets(_bulbs);
+      if ((_syncRunning || _playerRunning) &&
+          WizBulb.encodeList(targets) != WizBulb.encodeList(previousTargets)) {
+        if (targets.isEmpty) {
+          if (_playerRunning) {
+            await _captureService.stopMedia();
+          } else {
+            await _captureService.stopCapture();
+          }
+          await _refreshSession();
+        } else {
+          await _captureService.updateTargets(targets);
+        }
+      }
+      await _settingsService.saveBulbs(bulbs);
+      if (!mounted) return false;
+      setState(() => _bulbs = bulbs.toList(growable: false));
+      if (turnOffIp != null) {
+        final confirmed = await _bulbService.turnOff(turnOffIp);
+        if (mounted) {
+          setState(() {
+            _status = confirmed
+                ? 'Bulb turned off'
+                : 'Bulb did not confirm power off';
+          });
+        }
+      }
+      return true;
+    } catch (error) {
+      if (mounted) setState(() => _status = 'Bulb settings: $error');
+      return false;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _saveSettings(SyncSettings settings) async {
@@ -89,7 +125,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         setState(() => _status = 'No bulbs found. Add by IP instead.');
         return;
       }
-      await _saveBulbs(WizBulb.merge(_bulbs, discovered));
+      if (!await _saveBulbs(WizBulb.merge(_bulbs, discovered))) return;
       if (!mounted) {
         return;
       }
@@ -139,7 +175,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     final nextBulbs = <WizBulb>[
-      ..._bulbs,
       _bulbService.fromManualIp(ip, index: _bulbs.length + 1),
     ];
     await _saveBulbs(WizBulb.merge(_bulbs, nextBulbs));
@@ -183,6 +218,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool get _transitioning =>
       _busy || _sessionState == 'starting' || _sessionState == 'stopping';
 
+  List<WizBulb> _requireSyncTargets() {
+    if (_bulbs.isEmpty) throw StateError('Add at least one bulb first');
+    final targets = WizBulb.syncTargets(_bulbs);
+    if (targets.isEmpty) {
+      throw StateError('Include at least one bulb in screen sync');
+    }
+    return targets;
+  }
+
   Future<void> _toggleSync() async {
     if (_transitioning) return;
     setState(() => _busy = true);
@@ -195,7 +239,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (_playerRunning) {
         throw StateError('Stop the player before starting screen capture');
       }
-      if (_bulbs.isEmpty) throw StateError('Add at least one bulb first');
+      final targets = _requireSyncTargets();
       final granted = await _captureService.requestPermission();
       if (!mounted) return;
       if (!granted) throw StateError('Screen capture permission denied');
@@ -204,7 +248,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _status = 'Starting screen capture...';
       });
       final accepted = await _captureService.startCapture(
-          bulbs: _bulbs, settings: _settings);
+          bulbs: targets, settings: _settings);
       if (!accepted) throw StateError('Capture start was rejected');
       await _refreshSession();
     } catch (error) {
@@ -226,7 +270,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (_syncRunning) {
         throw StateError('Stop screen capture before starting the player');
       }
-      if (_bulbs.isEmpty) throw StateError('Add at least one bulb first');
+      final targets = _requireSyncTargets();
       final uri = replayUri ?? await _captureService.pickMedia();
       if (!mounted || uri == null || uri.isEmpty) return;
       _lastMediaUri = uri;
@@ -235,7 +279,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _status = 'Starting local player...';
       });
       final accepted = await _captureService.playMedia(
-          mediaUri: uri, bulbs: _bulbs, settings: _settings);
+          mediaUri: uri, bulbs: targets, settings: _settings);
       if (!accepted) throw StateError('Player start was rejected');
       await _refreshSession();
     } catch (error) {
@@ -565,33 +609,75 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _buildBulbTile(WizBulb bulb) {
     return Card(
-      child: ListTile(
-        leading: const Icon(Icons.lightbulb),
-        title: Text(bulb.name),
-        subtitle: Text(bulb.ip),
-        trailing: DropdownButton<String>(
-          value: bulb.region,
-          items: const <DropdownMenuItem<String>>[
-            DropdownMenuItem(value: 'left', child: Text('Left')),
-            DropdownMenuItem(value: 'right', child: Text('Right')),
-            DropdownMenuItem(value: 'top', child: Text('Top')),
-            DropdownMenuItem(value: 'bottom', child: Text('Bottom')),
-            DropdownMenuItem(value: 'center', child: Text('Center')),
-          ],
-          onChanged: (value) {
-            if (value == null) {
-              return;
-            }
-            final next = _bulbs
-                .map(
-                  (item) =>
-                      item.ip == bulb.ip ? item.copyWith(region: value) : item,
-                )
-                .toList(growable: false);
-            _saveBulbs(next);
-          },
+      child: Column(children: [
+        ListTile(
+          leading: const Icon(Icons.lightbulb),
+          title: Text(bulb.name),
+          subtitle: Text(bulb.ip),
+          trailing: DropdownButton<String>(
+            value: bulb.region,
+            items: const <DropdownMenuItem<String>>[
+              DropdownMenuItem(value: 'left', child: Text('Left')),
+              DropdownMenuItem(value: 'right', child: Text('Right')),
+              DropdownMenuItem(value: 'top', child: Text('Top')),
+              DropdownMenuItem(value: 'bottom', child: Text('Bottom')),
+              DropdownMenuItem(value: 'center', child: Text('Center')),
+            ],
+            onChanged: _transitioning
+                ? null
+                : (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    final next = _bulbs
+                        .map(
+                          (item) => item.ip == bulb.ip
+                              ? item.copyWith(region: value)
+                              : item,
+                        )
+                        .toList(growable: false);
+                    _saveBulbs(next);
+                  },
+          ),
         ),
-      ),
+        Row(
+          children: [
+            Expanded(
+              child: CheckboxListTile(
+                title: const Text('Include in screen sync'),
+                controlAffinity: ListTileControlAffinity.leading,
+                value: bulb.screenSyncEnabled,
+                onChanged: _transitioning
+                    ? null
+                    : (value) {
+                        if (value == null) return;
+                        _saveBulbs([
+                          for (final item in _bulbs)
+                            item.ip == bulb.ip
+                                ? item.copyWith(screenSyncEnabled: value)
+                                : item,
+                        ]);
+                      },
+              ),
+            ),
+            IconButton(
+              tooltip: 'Turn off ${bulb.name}',
+              icon: const Icon(Icons.power_settings_new),
+              onPressed: _transitioning
+                  ? null
+                  : () {
+                      final syncing = _syncRunning || _playerRunning;
+                      _saveBulbs([
+                        for (final item in _bulbs)
+                          syncing && item.ip == bulb.ip
+                              ? item.copyWith(screenSyncEnabled: false)
+                              : item,
+                      ], turnOffIp: bulb.ip);
+                    },
+            ),
+          ],
+        ),
+      ]),
     );
   }
 
@@ -858,7 +944,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 'Scene: ${((stats?.sceneNeutral ?? 0) * 100).toStringAsFixed(0)}% neutral, luma ${(stats?.sceneLuma ?? 0).toStringAsFixed(2)}'),
             Text('Frames: ${stats?.framesProcessed ?? 0}'),
             Text('Replayed frames: ${stats?.replayedFrames ?? 0}'),
-            Text('Since last new frame: ${stats?.freshFrameAgeMs == null ? '-' : '${stats!.freshFrameAgeMs} ms'}'),
+            Text(
+                'Since last new frame: ${stats?.freshFrameAgeMs == null ? '-' : '${stats!.freshFrameAgeMs} ms'}'),
             if (color != null) ...<Widget>[
               const SizedBox(height: 12),
               Row(

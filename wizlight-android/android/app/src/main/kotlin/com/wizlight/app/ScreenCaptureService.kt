@@ -25,7 +25,6 @@ import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
-import org.json.JSONArray
 import java.util.ArrayDeque
 import kotlin.math.max
 import kotlin.math.min
@@ -181,12 +180,12 @@ class ScreenCaptureService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 sessionId = intent.getStringExtra("sessionId") ?: ""
-                if (!SyncSessionRegistry.attach(sessionId) { mainHandler.post { stopCapture(); stopSelf() } }) {
+                if (!SyncSessionRegistry.attach(sessionId, ::updateTargets) { mainHandler.post { stopCapture(); stopSelf() } }) {
                     stopSelf()
                     return START_NOT_STICKY
                 }
                 try {
-                bulbTargets = parseBulbs(intent.getStringExtra(EXTRA_BULBS_JSON) ?: "[]")
+                bulbTargets = parseSyncTargets(intent.getStringExtra(EXTRA_BULBS_JSON) ?: "[]")
                 requestedMode = intent.getStringExtra(EXTRA_MODE) ?: "single"
                 engine.minFps = intent.getIntExtra(EXTRA_MIN_FPS, 10).coerceIn(4, 30)
                 engine.maxFps = intent.getIntExtra(EXTRA_MAX_FPS, 24).coerceIn(engine.minFps, 30)
@@ -420,17 +419,19 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    private fun parseBulbs(rawJson: String): List<ColorSyncEngine.BulbTarget> {
-        val bulbs = mutableListOf<ColorSyncEngine.BulbTarget>()
-        val array = JSONArray(rawJson)
-        for (index in 0 until array.length()) {
-            val item = array.optJSONObject(index) ?: continue
-            val ip = item.optString("ip")
-            if (ip.isBlank()) continue
-            val region = RegionLayout.normalize(item.optString("region"))
-            bulbs.add(ColorSyncEngine.BulbTarget(ip = ip, region = region))
-        }
-        return bulbs
+    private fun updateTargets(targets: List<ColorSyncEngine.BulbTarget>, complete: (Boolean) -> Unit) {
+        val worker = captureHandler?.looper
+        // Share the capture looper, but let this acknowledgement survive cancellation of frame callbacks.
+        if (worker == null || !Handler(worker).post {
+                if (isRunning) {
+                    bulbTargets = targets
+                    latestGrids = null
+                    engine.updateTargets(targets, resolveEffectiveMode(requestedMode, targets))
+                    complete(true)
+                } else {
+                    complete(false)
+                }
+            }) complete(false)
     }
 
     private fun resolveEffectiveMode(mode: String, bulbs: List<ColorSyncEngine.BulbTarget>): String {

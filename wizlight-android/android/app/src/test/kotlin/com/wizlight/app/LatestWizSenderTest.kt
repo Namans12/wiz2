@@ -9,6 +9,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LatestWizSenderTest {
+    @Test fun targetChangeDropsOldBatchAndRetries() {
+        val calls = Collections.synchronizedList(mutableListOf<String>())
+        val fresh = CountDownLatch(1)
+        lateinit var sender: LatestWizSender
+        sender = LatestWizSender({ ip, _ ->
+            calls.add(ip)
+            if (ip == "old") {
+                sender.invalidate()
+                sender.offer("remaining", byteArrayOf(1))
+            }
+            if (ip == "remaining") fresh.countDown()
+        }, {})
+        try {
+            sender.offerBatch(linkedMapOf("old" to byteArrayOf(1), "excluded" to byteArrayOf(2)))
+            assertTrue(fresh.await(2, TimeUnit.SECONDS))
+        } finally {
+            sender.close()
+        }
+        assertEquals(1, calls.count { it == "old" })
+        assertFalse(calls.contains("excluded"))
+    }
+
     @Test fun batchSendsEveryFirstPacketBeforeAnyRetries() {
         val calls = Collections.synchronizedList(mutableListOf<String>())
         val firstRetries = CountDownLatch(3)

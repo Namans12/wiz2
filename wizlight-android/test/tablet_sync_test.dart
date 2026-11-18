@@ -21,6 +21,31 @@ void main() {
     expect(restored.region, bulb.region);
   });
 
+  test('selection defaults to included and follows the physical bulb in a swap',
+      () {
+    final desk = WizBulb.fromJson({
+      'ip': '192.168.1.4',
+      'name': 'Desk',
+      'mac': 'CC:40:85:E2:D2:28',
+    });
+    expect(desk.screenSyncEnabled, isTrue);
+    const wall = WizBulb(ip: '192.168.1.5', name: 'Wall', mac: 'AABBCCDDEEFF');
+    final moved = WizBulb.merge([
+      desk.copyWith(screenSyncEnabled: false),
+      wall
+    ], [
+      const WizBulb(ip: '192.168.1.5', name: 'New 1', mac: 'cc4085e2d228'),
+      const WizBulb(ip: '192.168.1.4', name: 'New 2', mac: 'aa-bb-cc-dd-ee-ff'),
+    ]);
+    final restored = WizBulb.decodeList(WizBulb.encodeList(moved));
+    expect(
+        restored.singleWhere((bulb) => bulb.name == 'Desk').screenSyncEnabled,
+        isFalse);
+    final args = const SyncSettings().toMethodArgs(restored);
+    final nativeTargets = WizBulb.decodeList(args['bulbsJson']! as String);
+    expect(nativeTargets.single.ip, '192.168.1.4');
+  });
+
   test('SyncRuntimeStats primary color averages per-bulb output', () {
     const runtime = SyncRuntimeStats(
       mode: 'zones',

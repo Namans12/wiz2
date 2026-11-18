@@ -70,6 +70,14 @@ class ScreenCaptureService {
     await waitUntilStopped();
   }
 
+  Future<void> updateTargets(List<WizBulb> bulbs) async {
+    final accepted = await _channel.invokeMethod<bool>('updateTargets', {
+      'sessionId': _sessionId,
+      'bulbsJson': WizBulb.encodeList(WizBulb.syncTargets(bulbs)),
+    });
+    if (accepted != true) throw StateError('Could not update sync lights');
+  }
+
   /// Opens the system document picker for a video file (USB drives appear here
   /// on Google TV). Returns the picked content URI, or null if cancelled.
   Future<String?> pickMedia() async {

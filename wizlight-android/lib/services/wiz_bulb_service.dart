@@ -13,7 +13,10 @@ bool _validDiscoveryAddress(String address) {
   if (numbers.any((value) => value == null || value < 0 || value > 255)) {
     return false;
   }
-  return numbers[0] != 0 && numbers[0] != 127 && numbers[0]! < 224 && numbers[3] != 255;
+  return numbers[0] != 0 &&
+      numbers[0] != 127 &&
+      numbers[0]! < 224 &&
+      numbers[3] != 255;
 }
 
 @visibleForTesting
@@ -60,6 +63,7 @@ class WizBulbService {
       void sendProbe() {
         socket.send(payload, InternetAddress('255.255.255.255'), wizPort);
       }
+
       sendProbe();
       retryTimer = Timer.periodic(const Duration(milliseconds: 600), (_) {
         try {
@@ -77,7 +81,14 @@ class WizBulbService {
     }
   }
 
-  Future<bool> probe(String ip) async {
+  Future<bool> probe(String ip) =>
+      _request(ip, 'getPilot', const {}, (result) => true);
+
+  Future<bool> turnOff(String ip) => _request(ip, 'setPilot',
+      const {'state': false}, (result) => result['success'] == true);
+
+  Future<bool> _request(String ip, String method, Map<String, Object> params,
+      bool Function(Map result) succeeded) async {
     if (!WizBulb.isValidIp(ip)) return false;
     final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
     StreamSubscription<RawSocketEvent>? subscription;
@@ -93,10 +104,12 @@ class WizBulbService {
         }
         try {
           final message = jsonDecode(utf8.decode(packet.data));
-          if (message is Map && message['result'] is Map) reply.complete(true);
+          if (message is Map && message['result'] is Map) {
+            reply.complete(succeeded(message['result'] as Map));
+          }
         } catch (_) {/* Keep waiting for a valid response. */}
       });
-      socket.send(utf8.encode('{"method":"getPilot","params":{}}'),
+      socket.send(utf8.encode(jsonEncode({'method': method, 'params': params})),
           InternetAddress(ip), wizPort);
       return await reply.future
           .timeout(const Duration(seconds: 2), onTimeout: () => false);

@@ -28,6 +28,11 @@ class MainActivity : FlutterActivity() {
                 "requestPermission" -> requestScreenCapturePermission(result)
                 "startCapture" -> startScreenCapture(call, result)
                 "stopCapture" -> stopScreenCapture(call, result)
+                "updateTargets" -> {
+                    SyncSessionRegistry.updateTargets(
+                        call.argument<String>("sessionId") ?: "", readSyncTargets(call),
+                    ) { accepted -> result.success(accepted) }
+                }
                 "pickMedia" -> pickMedia(result)
                 "playMedia" -> playMedia(call, result)
                 "stopMedia" -> {
@@ -52,7 +57,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun startScreenCapture(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
-        if (ScreenCaptureService.hasProjectionPermission().not()) {
+        if (readSyncTargets(call).isEmpty() || !ScreenCaptureService.hasProjectionPermission()) {
             result.success(false)
             return
         }
@@ -101,7 +106,7 @@ class MainActivity : FlutterActivity() {
 
     private fun playMedia(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
         val uri = call.argument<String>("mediaUri")
-        if (uri.isNullOrBlank()) {
+        if (uri.isNullOrBlank() || readSyncTargets(call).isEmpty()) {
             result.success(false)
             return
         }
@@ -122,6 +127,13 @@ class MainActivity : FlutterActivity() {
             result.success(false)
         }
     }
+
+    private fun readSyncTargets(call: io.flutter.plugin.common.MethodCall): List<ColorSyncEngine.BulbTarget> =
+        try {
+            parseSyncTargets(call.argument<String>("bulbsJson") ?: "[]")
+        } catch (_: org.json.JSONException) {
+            emptyList()
+        }
 
     private fun Intent.putCommonSyncExtras(call: io.flutter.plugin.common.MethodCall) {
         putExtra("sessionId", call.argument<String>("sessionId") ?: "")

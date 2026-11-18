@@ -7,9 +7,11 @@ internal class LatestWizSender(
     private val retryGapMs: Long = 3L,
 ) : AutoCloseable {
     private val lock = Object()
+    private val transmitLock = Any()
     private val pending = LinkedHashMap<String, ByteArray>()
     private val lastSent = mutableMapOf<String, ByteArray>()
     private var closed = false
+    private var generation = 0L
     private val worker = Thread({ run() }, "WizLatestSender").apply {
         isDaemon = true
         start()
@@ -24,20 +26,27 @@ internal class LatestWizSender(
 
     fun offer(ip: String, payload: ByteArray): Boolean = offerBatch(mapOf(ip to payload))
 
+    /** Drop queued packets and finish any transmission that already started. */
+    fun invalidate() = synchronized(transmitLock) {
+        synchronized(lock) {
+            generation++
+            pending.clear()
+        }
+    }
+
     private fun run() {
         try {
             while (true) {
-                val batch = synchronized(lock) {
+                val (batch, version) = synchronized(lock) {
                     while (!closed && pending.isEmpty()) lock.wait()
                     if (closed) return
-                    LinkedHashMap(pending).also { pending.clear() }
+                    LinkedHashMap(pending).also { pending.clear() } to generation
                 }
                 val retries = mutableListOf<Pair<String, ByteArray>>()
                 // Deliver first packets to every light before retrying any one.
                 for ((ip, payload) in batch) {
-                    if (isObsolete(ip)) continue
                     val changed = lastSent[ip]?.contentEquals(payload) != true
-                    if (send(ip, payload)) {
+                    if (sendCurrent(ip, payload, version)) {
                         lastSent[ip] = payload
                         if (changed) retries.add(ip to payload)
                     }
@@ -45,7 +54,7 @@ internal class LatestWizSender(
                 repeat(2) {
                     if (retries.isNotEmpty()) Thread.sleep(retryGapMs)
                     for ((ip, payload) in retries) {
-                        if (!isObsolete(ip)) send(ip, payload)
+                        sendCurrent(ip, payload, version)
                     }
                 }
             }
@@ -54,8 +63,9 @@ internal class LatestWizSender(
         }
     }
 
-    private fun isObsolete(ip: String): Boolean = synchronized(lock) {
-        closed || pending.containsKey(ip)
+    private fun sendCurrent(ip: String, payload: ByteArray, version: Long): Boolean = synchronized(transmitLock) {
+        val obsolete = synchronized(lock) { closed || generation != version || pending.containsKey(ip) }
+        !obsolete && send(ip, payload)
     }
 
     private fun send(ip: String, payload: ByteArray): Boolean {

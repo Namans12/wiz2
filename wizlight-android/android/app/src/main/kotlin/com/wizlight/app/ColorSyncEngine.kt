@@ -244,6 +244,17 @@ class ColorSyncEngine {
         udpSocket = null
     }
 
+    // Called on the same worker that submits capture frames.
+    fun updateTargets(targets: List<BulbTarget>, mode: String) {
+        if (targets == bulbTargets && mode == effectiveMode) return
+        outputSender?.invalidate()
+        bulbTargets = targets
+        effectiveMode = mode
+        lastSentColors.clear()
+        lastSentBrightness.clear()
+        lastSubmitAtMs = 0L
+    }
+
     // ── Detection (shared by both front-ends) ───────────────────────────────────
     fun detectDeviceProfileFromBuild() {
         val manufacturer = Build.MANUFACTURER.lowercase()
