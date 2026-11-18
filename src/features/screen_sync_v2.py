@@ -1629,10 +1629,11 @@ class OptimizedScreenSync:
         self,
         content: np.ndarray,
         region: str,
-        neutral: float,
     ) -> tuple[str, tuple[int, int, int], float, float]:
         """Process a single region (for parallel execution)."""
         region_image = crop_relative_region(content, region)
+        region_saturation, _, region_value = _scene_stats(region_image)
+        neutral = _neutral_strength(region_saturation)
         color = self._extract_color(region_image)
         effective_boost = adaptive_color_boost(color, self.config.color_boost)
         effective_boost = 1.0 + (effective_boost - 1.0) * (1.0 - neutral)
@@ -1640,7 +1641,6 @@ class OptimizedScreenSync:
         adapted = _apply_content_adaptation(enhanced, neutral)
         # Each zone dims with its own part of the picture: a dark left edge
         # must not light as brightly as a bright right edge.
-        _, _, region_value = _scene_stats(region_image)
         return region, adapted, effective_boost, region_value
 
     def _extract_colors(self, image: np.ndarray) -> dict[str, tuple[int, int, int]]:
@@ -1720,7 +1720,7 @@ class OptimizedScreenSync:
         if self._executor and self.config.parallel_regions:
             # Parallel processing
             futures = [
-                self._executor.submit(self._process_region, content, region, neutral)
+                self._executor.submit(self._process_region, content, region)
                 for region in self.config.active_regions
             ]
             boosts: list[float] = []
@@ -1745,7 +1745,7 @@ class OptimizedScreenSync:
             # Sequential processing
             boosts = []
             for region in self.config.active_regions:
-                _, color, effective_boost, region_value = self._process_region(content, region, neutral)
+                _, color, effective_boost, region_value = self._process_region(content, region)
                 colors[region] = color
                 region_values[region] = region_value
                 boosts.append(effective_boost)

@@ -256,3 +256,14 @@ def test_each_zone_dims_with_its_own_part_of_the_picture():
     levels = brightness_for_bulbs(engine, ["a", "b"], "zones", {"a": "left", "b": "right"})
     assert levels == {"a": left, "b": right}
     assert brightness_for_bulbs(engine, ["a", "b"], "single", {}) == engine.output_brightness
+
+
+def test_changing_opposite_zone_does_not_shift_tint():
+    engine = _engine(mode="zones", active_regions=("left", "right"),
+                     parallel_regions=False, ignore_letterbox=False)
+    frame = np.full((90, 160, 3), (160, 157, 155), dtype=np.uint8)
+    original = engine._extract_colors(frame)
+    frame[:, 80:] = (0, 0, 255)
+    changed = engine._extract_colors(frame)
+    assert original["left"] == changed["left"]
+    assert original["right"] != changed["right"]
