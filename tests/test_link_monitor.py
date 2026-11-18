@@ -259,3 +259,19 @@ def test_local_addresses_skip_loopback_and_link_local(monkeypatch):
     addresses = network.local_ipv4_addresses()
     assert "10.0.0.7" in addresses
     assert not any(address.startswith(("127.", "169.254.")) for address in addresses)
+
+
+def test_link_keeps_reply_outage_history_after_connection_recovers(bulb, monkeypatch):
+    monitor = udp.BulbLinkMonitor("127.0.0.1")
+    try:
+        assert _wait(lambda: monitor.stats["replies"] > 3)
+        with monitor._lock:
+            monitor._last_reply_at -= 1.25
+        assert _wait(lambda: monitor.stats["reply_gaps_over_1s"] == 1)
+        assert monitor.stats["max_reply_gap_ms"] >= 1250
+        monkeypatch.setattr(udp, "_LINK_IDLE_PAUSE", 0)
+        assert _wait(lambda: monitor.stats["paused"])
+        assert monitor.stats["current_reply_gap_ms"] is None
+        assert monitor.stats["reply_gaps_over_1s"] == 1
+    finally:
+        monitor.stop()

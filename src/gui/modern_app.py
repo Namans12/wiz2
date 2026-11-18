@@ -1241,13 +1241,17 @@ class WizLightModernGUI(AnimationMixin):
         parts = []
         for link in stats:
             if not link.get("reachable"):
-                parts.append(f"{link['ip']}: no reply")
+                gap = link.get("current_reply_gap_ms")
+                elapsed = f" for {gap / 1000:.1f}s" if gap is not None else ""
+                parts.append(f"{link['ip']}: no reply{elapsed}")
                 continue
             text = f"{link['ip']}: {link['rtt_ms']:.0f} ms"
             if link.get("awake_pct") is not None:
                 text += f", awake {link['awake_pct']:.0f}%"
             if link.get("confirm_ms") is not None:
                 text += f", state confirmed in {link['confirm_ms']:.0f} ms ({link['confirmed']}/{link['updates']})"
+            if link.get("reply_gaps_over_1s"):
+                text += f", longest reply gap {link['max_reply_gap_ms'] / 1000:.1f}s"
             if link.get("stale_events"):
                 text += f", stale recoveries {link['recoveries']}/{link['stale_events']}"
             if link.get("rssi") is not None:

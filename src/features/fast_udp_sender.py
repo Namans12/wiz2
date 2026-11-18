@@ -437,6 +437,8 @@ class BulbLinkMonitor:
         self._expected: Optional[_Expectation] = None
         self._last_activity = time.perf_counter()
         self._last_reply_at = 0.0
+        self._reply_gaps = 0
+        self._longest_reply_gap = 0.0
         self._rtts: deque = deque(maxlen=240)
         self._confirm_ms: deque = deque(maxlen=60)
         self._queries = 0
@@ -511,7 +513,10 @@ class BulbLinkMonitor:
         try:
             while not self._stop_event.is_set():
                 if time.perf_counter() - self._last_activity > _LINK_IDLE_PAUSE:
-                    self._paused = True
+                    if not self._paused:
+                        with self._lock:
+                            self._last_reply_at = 0.0
+                            self._paused = True
                     self._wake_event.clear()
                     if time.perf_counter() - self._last_activity > _LINK_IDLE_PAUSE:
                         self._wake_event.wait(0.5)
@@ -545,6 +550,10 @@ class BulbLinkMonitor:
                         self._timeouts += 1
                     else:
                         self._replies += 1
+                        if self._last_reply_at:
+                            gap = now - self._last_reply_at
+                            self._longest_reply_gap = max(self._longest_reply_gap, gap)
+                            self._reply_gaps += int(gap >= 1.0)
                         self._last_reply_at = now
                         self._last_error = None
                         self._rtts.append((now - sent_at) * 1000.0)
@@ -623,6 +632,9 @@ class BulbLinkMonitor:
                 "ip": self.ip,
                 "reachable": bool(self._last_reply_at) and now - self._last_reply_at < 1.5,
                 "paused": self._paused,
+                "reply_gaps_over_1s": self._reply_gaps,
+                "max_reply_gap_ms": self._longest_reply_gap * 1000 if self._longest_reply_gap else None,
+                "current_reply_gap_ms": (now - self._last_reply_at) * 1000 if self._last_reply_at else None,
                 "queries": self._queries,
                 "replies": self._replies,
                 "timeouts": self._timeouts,
