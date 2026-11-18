@@ -779,7 +779,9 @@ def build_optimized_capture_config(
         max_fps=max_fps,
         color_algorithm=color_algorithm,
         predictive_smoothing=bool(getattr(settings, "predictive_smoothing", True)),
-        parallel_regions=len(tuple(active_regions)) > 1,
+        # For two zones, per-frame thread handoff cost more CPU and time than
+        # sequential extraction in a benchmark of decoded film frames.
+        parallel_regions=len(tuple(active_regions)) > 2,
         sync_profile=str(getattr(settings, "sync_profile", "auto")),
         brightness_follow=bool(getattr(settings, "brightness_follow", True)),
         brightness_mode=str(getattr(settings, "brightness_mode", None) or ("follow" if getattr(settings, "brightness_follow", True) else "constant")),
