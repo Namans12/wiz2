@@ -84,7 +84,7 @@ def main() -> None:
                         help="Display a fixed sequence of color patches with the monitored link on")
     parser.add_argument("--model", choices=("physical", "heuristic"), help="Override color model for this run")
     parser.add_argument("--physical-color-trim", action=argparse.BooleanOptionalAction, default=None,
-                        help="Override the optional physical color corrections for this run")
+                        help="Override physical orange tuning for this run")
     args = parser.parse_args()
     order = args.order.upper()
     patches = ["#ff0000", "#00ff00", "#0000ff", "#00ffff", "#ff00ff", "#ffff00",

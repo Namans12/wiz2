@@ -559,7 +559,7 @@ class WizLightModernGUI(AnimationMixin):
         self.mixing_model_hint.pack(fill="x", padx=14, pady=(0, 10))
         self.physical_color_trim_checkbox = ctk.CTkCheckBox(
             settings,
-            text="Tune orange and dark gray",
+            text="Tune orange",
             variable=self.physical_color_trim_var,
             command=self._queue_screen_sync_settings_save,
             state="normal" if self.config.screen_sync.mixing_model == "physical" else "disabled",

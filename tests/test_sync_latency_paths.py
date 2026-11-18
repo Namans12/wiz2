@@ -269,7 +269,7 @@ def test_changing_opposite_zone_does_not_shift_tint():
     assert original["right"] != changed["right"]
 
 
-def test_optional_physical_trim_changes_two_recorded_patches_without_affecting_dimming():
+def test_physical_orange_trim_preserves_the_other_recorded_patches_and_dimming():
     from src.core.config import ScreenSyncConfig
 
     patches = (
@@ -292,24 +292,21 @@ def test_optional_physical_trim_changes_two_recorded_patches_without_affecting_d
         assert level == tuned_level == heuristic_level
         assert original == heuristic
         if patch == (255, 128, 0):
-            assert tuned[0] == 255 and tuned[1] > original[1] and tuned[2] == 0
-        elif patch == (32, 32, 32):
-            assert tuned[0] < tuned[1] < tuned[2] == 255
+            assert tuned == (255, 148, 0)
         else:
             assert tuned == original
 
 
-def test_physical_shadow_trim_uses_zone_value_and_respects_constant_brightness():
-    frame = np.full((90, 160, 3), 255, dtype=np.uint8)
-    frame[:, :80] = 32
+def test_physical_orange_trim_preserves_dark_gray_in_other_zone():
+    frame = np.full((90, 160, 3), 32, dtype=np.uint8)
+    frame[:, :80] = (255, 128, 0)
     for mode in ("follow", "constant"):
         engine = _engine(
             mode="zones", active_regions=("left", "right"), ignore_letterbox=False,
-            parallel_regions=False, physical_color_trim=True, brightness_mode=mode,
+            parallel_regions=False, physical_color_trim=False, brightness_mode=mode,
         )
-        colors = engine._extract_colors(frame)
-        assert colors["right"] == (255, 255, 255)
-        if mode == "follow":
-            assert colors["left"][0] < colors["left"][1] < colors["left"][2] == 255
-        else:
-            assert colors["left"] == (255, 255, 255)
+        original = engine._extract_colors(frame)
+        engine.config.physical_color_trim = True
+        tuned = engine._extract_colors(frame)
+        assert tuned["right"] == original["right"] == (255, 255, 255)
+        assert tuned["left"][1] > original["left"][1]

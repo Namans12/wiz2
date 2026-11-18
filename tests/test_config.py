@@ -161,6 +161,16 @@ def test_mixing_model_defaults_to_heuristic_and_accepts_physical():
     assert ScreenSyncConfig(mixing_model="not-a-real-model").mixing_model == "heuristic"
 
 
+def test_physical_orange_trim_defaults_on_and_respects_saved_opt_out(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"screen_sync":{"mixing_model":"physical"}}', encoding="utf-8")
+    config = Config.load(config_path)
+    assert config.screen_sync.physical_color_trim
+    config.screen_sync.physical_color_trim = False
+    config.save()
+    assert not Config.load(config_path).screen_sync.physical_color_trim
+
+
 def test_load_old_config_applies_new_clap_defaults(tmp_path):
     config_path = tmp_path / "wizlight" / "config.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)

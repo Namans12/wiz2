@@ -353,29 +353,15 @@ def _normalize_to_full_drive(
     )
 
 
-def _trim_physical_color(
-    color: tuple[int, int, int], scene_value: float, follow: bool,
-) -> tuple[int, int, int]:
-    """Apply the optional camera-guided orange and cool-shadow adjustments."""
+def _trim_physical_orange(color: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Add green around orange, tapering toward red, yellow and pastels."""
     r, g, b = color
-    peak = max(color)
-    if peak < 8:
+    if r < 8 or not (0 < g < r) or b >= r * 0.14:
         return color
 
-    if r == peak and 0 < g < r and b < r * 0.14:
-        # Orange peaks near g/r=0.5. Fade out toward red, yellow and pastels.
-        hue_weight = max(0.0, 1.0 - abs(g / r - 0.5) / 0.17)
-        weight = hue_weight * (1.0 - b / (0.14 * r))
-        return r, round(g + r * 0.08 * weight), b
-
-    if follow and scene_value < 0.28:
-        neutral_weight = max(0.0, 1.0 - (peak - min(color)) / (peak * 0.06))
-        shadow_weight = min(1.0, scene_value / 0.10, (0.28 - scene_value) / 0.15)
-        weight = neutral_weight * shadow_weight
-        if weight > 0:
-            # Keep peak drive and dimming; blend toward a cooler RGB mix.
-            return round(r + (peak * 0.80 - r) * weight), round(g + (peak * 0.87 - g) * weight), max(b, peak)
-    return color
+    hue_weight = max(0.0, 1.0 - abs(g / r - 0.5) / 0.17)
+    weight = hue_weight * (1.0 - b / (0.14 * r))
+    return r, round(g + r * 0.08 * weight), b
 
 
 def _edge_mask(height: int, width: int, edge_weight: float) -> np.ndarray:
@@ -814,7 +800,7 @@ def build_optimized_capture_config(
         sync_brightness=int(getattr(settings, "sync_brightness", 180)),
         physical_color_trim=(
             getattr(settings, "mixing_model", None) == "physical"
-            and bool(getattr(settings, "physical_color_trim", False))
+            and bool(getattr(settings, "physical_color_trim", True))
         ),
     )
 
@@ -1754,7 +1740,7 @@ class OptimizedScreenSync:
             self._finalize_output_brightness(raw_brightness, follow, peak, "all")
             self._publish_output_brightness(("all",))
             if self.config.physical_color_trim:
-                adapted = _trim_physical_color(adapted, avg_value, follow)
+                adapted = _trim_physical_orange(adapted)
             return {"all": _normalize_to_full_drive(adapted)}
 
         # Zone mode - process regions
@@ -1810,9 +1796,7 @@ class OptimizedScreenSync:
         self._publish_output_brightness(tuple(colors))
         if self.config.physical_color_trim:
             return {
-                region: _normalize_to_full_drive(
-                    _trim_physical_color(color, region_values.get(region, avg_value), follow)
-                )
+                region: _normalize_to_full_drive(_trim_physical_orange(color))
                 for region, color in colors.items()
             }
         return {region: _normalize_to_full_drive(color) for region, color in colors.items()}

@@ -118,8 +118,8 @@ class ScreenSyncConfig:
     # and its stated, unverified spectral assumptions. Try it live; it is
     # not proven better without a colorimeter.
     mixing_model: str = "heuristic"
-    # Optional display-specific orange and shadow correction for physical sync.
-    physical_color_trim: bool = False
+    # Orange correction for physical sync. Keep the stored key for compatibility.
+    physical_color_trim: bool = True
     # Hold each bulb's Wi-Fi radio awake during sync with a chain of read-only
     # status queries, and use the replies to confirm delivery. Measured on a
     # WiZ ESP25 bulb: updates arrive in about 18 ms instead of about 117 ms.
