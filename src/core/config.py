@@ -312,6 +312,36 @@ class Config:
                 return True
         return False
 
+    def add_discovered_bulbs(self, devices: list[dict]) -> None:
+        """Merge a discovery snapshot by identity, including simultaneous address swaps."""
+        from collections import Counter
+
+        entries = [(device["ip"], mac_identity(device["mac"])) for device in devices
+                   if device.get("ip") and device.get("mac")]
+        ips = Counter(ip for ip, _ in entries)
+        identities = Counter(mac for _, mac in entries)
+        discovered = {mac: ip for ip, mac in entries if mac and ips[ip] == identities[mac] == 1}
+        if not discovered:
+            return
+        by_address = {ip: mac for mac, ip in discovered.items()}
+        merged, layout = [], {}
+        for bulb in self.bulbs:
+            identity = mac_identity(bulb.mac) or by_address.get(bulb.ip)
+            if identity in discovered:
+                updated = replace(bulb, ip=discovered.pop(identity), mac=identity)
+            elif bulb.ip in by_address:
+                continue  # Address is now occupied by a different lamp.
+            else:
+                updated = bulb
+            merged.append(updated)
+            if bulb.ip in self.screen_sync.bulb_layout:
+                layout[updated.ip] = self.screen_sync.bulb_layout[bulb.ip]
+        for mac, ip in discovered.items():
+            merged.append(BulbConfig(ip, f"Bulb {len(merged) + 1}", mac))
+        self.bulbs = merged
+        self.screen_sync.bulb_layout = layout
+        self.save()
+
     def add_bulb(self, ip: str, name: str, mac: Optional[str] = None, *, preserve_name: bool = False) -> None:
         """Add a bulb to configuration."""
 

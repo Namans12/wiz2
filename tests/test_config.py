@@ -184,3 +184,16 @@ def test_load_old_config_applies_new_clap_defaults(tmp_path):
     assert config.clap.threshold == 0.055
     assert config.clap.rms_threshold == 0.01
     assert config.clap.double_clap_window == 0.85
+
+
+def test_discover_swapped_bulbs_preserves_exclusion_and_zones(tmp_path):
+    config = Config.load(tmp_path / "config.json")
+    config.add_bulb("192.0.2.1", "Left", "000000000001")
+    config.add_bulb("192.0.2.2", "Right", "000000000002")
+    config.set_bulb_screen_sync("192.0.2.2", False)
+    config.screen_sync.bulb_layout = {"192.0.2.1": "left", "192.0.2.2": "right"}
+    config.add_discovered_bulbs([{"ip": "192.0.2.1", "mac": "000000000002"},
+                                 {"ip": "192.0.2.2", "mac": "000000000001"}])
+    reloaded = Config.load(config._config_path)
+    assert [(b.name, b.ip) for b in reloaded.screen_sync_bulbs()] == [("Left", "192.0.2.2")]
+    assert reloaded.screen_sync.bulb_layout == {"192.0.2.1": "right", "192.0.2.2": "left"}
