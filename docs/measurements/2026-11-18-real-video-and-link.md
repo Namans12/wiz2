@@ -19,6 +19,25 @@ desktop capture configuration now defaults to sequential extraction for
 two zones. Three or more zones and callers explicitly requesting parallel
 extraction keep the parallel path.
 
+## BGRA conversion after GPU readback
+
+The sampler now gathers each contiguous 8-bit BGRA source pixel as one
+32-bit word and writes three RGB output channels. Sampling indices, channel
+order and output pixels are unchanged. An A/B replay used five decoded
+film frames, resized to each display resolution and converted to BGRA before
+timing. Each alternating block converted 200 frames. The benchmark ran
+alongside the live job and its timing includes contention on this PC.
+
+| Frame size | Previous median | Packed median | Previous CPU per frame | Packed CPU per frame |
+|---|---:|---:|---:|---:|
+| 1920×1080 | 3.90–5.57 ms | 2.58–2.80 ms | 3.98–5.16 ms | 2.66–2.81 ms |
+| 3840×2400 | 15.02 ms | 6.01–6.23 ms | 13.98–15.23 ms | 6.41–6.56 ms |
+
+Outputs were byte-identical on the film frames. The existing sampling
+tests also cover odd edges, noncontiguous views and alternating pixel
+lines. These figures measure CPU conversion after readback. Direct3D
+staging-map time and optical latency were outside this benchmark.
+
 ## Controlled sender recovery
 
 A localhost WiZ responder applied `setPilot` and reported its state on

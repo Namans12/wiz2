@@ -831,6 +831,16 @@ def _downscale_for_processing(frame: np.ndarray, *, bgra: bool = False) -> np.nd
         return np.ascontiguousarray(frame[:, :, channels])
     indices = _distributed_sample_indices(height, width, step)
     if frame.flags.c_contiguous:
+        if bgra and frame.dtype == np.uint8 and frame.shape[2] == 4:
+            # Gather each BGRA pixel as one word and recover its original
+            # byte order before copying just the three output channels.
+            packed = frame.view(np.uint32).reshape(-1)
+            pixels = packed[indices].view(np.uint8).reshape(*indices.shape, 4)
+            rgb = np.empty((*indices.shape, 3), dtype=np.uint8)
+            rgb[..., 0] = pixels[..., 2]
+            rgb[..., 1] = pixels[..., 1]
+            rgb[..., 2] = pixels[..., 0]
+            return rgb
         return np.ascontiguousarray(frame.reshape(-1, frame.shape[2])[indices, channels])
     rows, cols = np.divmod(indices, width)
     return np.ascontiguousarray(frame[rows, cols, channels])
