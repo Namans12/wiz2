@@ -23,7 +23,7 @@ void main() {
 
   test('selection defaults to included and follows the physical bulb in a swap',
       () {
-    final desk = WizBulb.fromJson({
+    final desk = WizBulb.fromJson(const {
       'ip': '192.168.1.4',
       'name': 'Desk',
       'mac': 'CC:40:85:E2:D2:28',
