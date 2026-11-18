@@ -1295,8 +1295,7 @@ class WizLightModernGUI(AnimationMixin):
         async def discover():
             try:
                 bulbs = await self.controller.discover()
-                for index, bulb in enumerate(bulbs, 1):
-                    self.config.add_bulb(bulb["ip"], f"Bulb {index}", bulb["mac"], preserve_name=True)
+                self.config.add_discovered_bulbs(bulbs)
                 self.root.after(0, self._refresh_after_bulb_config_change)
                 self.root.after(0, lambda: self._set_status(f"Found {len(bulbs)} bulb(s)"))
             except Exception as exc:
