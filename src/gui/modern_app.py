@@ -225,6 +225,7 @@ class WizLightModernGUI(AnimationMixin):
             button = ctk.CTkButton(
                 sidebar, text=label, height=46, anchor="w", corner_radius=10,
                 font=("Segoe UI", 13), fg_color="transparent", hover_color="#263C58",
+                text_color="#A5B7CF",
                 command=lambda name=view: self._switch_view(name),
             )
             button.pack(fill="x", padx=10, pady=4)
@@ -1782,18 +1783,18 @@ class WizLightModernGUI(AnimationMixin):
         if view == self._current_view:
             return
 
+        previous_view = self._current_view
+        if previous_view:
+            self._view_buttons[previous_view].configure(
+                fg_color="transparent", text_color="#A5B7CF",
+            )
+
         self._current_view = view
         title, subtitle = self._page_labels[view]
         self._page_title_var.set(title)
         self._page_subtitle_var.set(subtitle)
 
-        for name, button in self._view_buttons.items():
-            active = name == view
-            button.configure(
-                fg_color="#244D7B" if active else "transparent",
-                text_color="#FFFFFF" if active else "#A5B7CF",
-                border_width=0,
-            )
+        self._view_buttons[view].configure(fg_color="#244D7B", text_color="#FFFFFF")
         self._view_frames[view]._parent_frame.tkraise()
 
         if view == "bulbs":

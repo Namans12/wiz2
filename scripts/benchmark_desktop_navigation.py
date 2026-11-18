@@ -32,16 +32,20 @@ def main() -> int:
         app = modern_app.WizLightModernGUI()
         try:
             app.root.update()
+            views = ("lights", "bulbs", "tools", "sync")
             samples = []
+            callback_samples = []
             for index in range(args.iterations):
                 started = time.perf_counter()
-                app._switch_view(("sync", "lights", "tools")[index % 3])
+                app._view_buttons[views[index % len(views)]].invoke()
+                callback_samples.append((time.perf_counter() - started) * 1000)
                 app.root.update()
                 samples.append((time.perf_counter() - started) * 1000)
             ordered = sorted(samples)
             print(json.dumps({
                 "scope": "synthetic page navigation and Tk event processing; no capture, network or lights",
                 "iterations": len(samples),
+                "callback_median_ms": round(statistics.median(callback_samples), 2),
                 "median_ms": round(statistics.median(samples), 2),
                 "p95_ms": round(ordered[min(len(ordered) - 1, (95 * len(ordered) + 99) // 100 - 1)], 2),
                 "max_ms": round(max(samples), 2),

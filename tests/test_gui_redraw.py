@@ -97,6 +97,34 @@ def test_scroll_repaint_requests_are_coalesced():
     assert frame._repaint_after_id == "paint"
 
 
+def test_view_switch_redraws_only_the_two_changed_navigation_buttons():
+    views = ("sync", "lights", "bulbs", "tools")
+    gui = SimpleNamespace(
+        _current_view="sync",
+        _page_labels={"lights": ("Light controls", "Control your lights")},
+        _page_title_var=Mock(),
+        _page_subtitle_var=Mock(),
+        _view_buttons={view: Mock() for view in views},
+        _view_frames={view: SimpleNamespace(_parent_frame=Mock()) for view in views},
+        _dashboard=Mock(),
+    )
+
+    WizLightModernGUI._switch_view(gui, "lights")
+    WizLightModernGUI._switch_view(gui, "lights")
+
+    assert gui._current_view == "lights"
+    gui._view_buttons["sync"].configure.assert_called_once_with(
+        fg_color="transparent", text_color="#A5B7CF",
+    )
+    gui._view_buttons["lights"].configure.assert_called_once_with(
+        fg_color="#244D7B", text_color="#FFFFFF",
+    )
+    gui._view_buttons["bulbs"].configure.assert_not_called()
+    gui._view_buttons["tools"].configure.assert_not_called()
+    gui._view_frames["lights"]._parent_frame.tkraise.assert_called_once()
+    gui._dashboard.stop_auto_refresh.assert_called_once()
+
+
 def test_animation_and_tray_compatibility_helpers_remain_available():
     assert ease_in_out_quad(0.5) == 0.5
     widget = Mock()
