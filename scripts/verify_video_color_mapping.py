@@ -184,9 +184,9 @@ def detect_scene_times(
     return scene_times, duration
 
 
-def load_saved_camera_settings(ip: str) -> tuple[Optional[int], Optional[tuple[int, int, int, int]]]:
+def load_saved_camera_settings(ip: str, mac: Optional[str] = None) -> tuple[Optional[int], Optional[tuple[int, int, int, int]]]:
     store = CalibrationStore()
-    table = store.load_any((ip, "cc4085e2d228"))
+    table = store.load_for_bulb(mac, ip)
     if table is None:
         return None, None
     roi = tuple(table.roi) if table.roi else None
@@ -281,15 +281,6 @@ def main() -> int:
     if not video_path.exists():
         raise RuntimeError(f"Video not found: {video_path}")
 
-    saved_camera_index, saved_roi = load_saved_camera_settings(args.ip)
-    camera_index = args.camera if args.camera is not None else saved_camera_index
-    roi = parse_roi(args.roi) if args.roi else saved_roi
-
-    if camera_index is None:
-        raise RuntimeError("No camera index provided and no saved calibration camera was found.")
-    if roi is None:
-        raise RuntimeError("No ROI provided and no saved calibration ROI was found.")
-
     output_root = Path(args.output_dir).expanduser().resolve() / video_path.stem
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -305,6 +296,15 @@ def main() -> int:
     try:
         startup_timeout = max(10.0, args.command_timeout)
         profile = runner.run(controller.get_color_profile(args.ip), timeout=startup_timeout)
+        saved_camera_index, saved_roi = load_saved_camera_settings(args.ip, profile.mac)
+        camera_index = args.camera if args.camera is not None else saved_camera_index
+        roi = parse_roi(args.roi) if args.roi else saved_roi
+
+        if camera_index is None:
+            raise RuntimeError("No camera index provided and no saved calibration camera was found.")
+        if roi is None:
+            raise RuntimeError("No ROI provided and no saved calibration ROI was found.")
+
         previous_state = None
         try:
             previous_state = runner.run(controller.get_state(args.ip), timeout=startup_timeout)

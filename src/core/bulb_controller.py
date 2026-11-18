@@ -222,7 +222,7 @@ class BulbController:
     ) -> Optional[BulbCalibrationTable]:
         """Load a saved calibration table using MAC first, then IP fallback."""
 
-        calibration = self._calibration_store.load_any((mac, ip))
+        calibration = self._calibration_store.load_for_bulb(mac, ip)
         if calibration is None:
             return None
 
@@ -239,7 +239,7 @@ class BulbController:
     ) -> Optional[BulbCalibrationTable]:
         """Load a saved video-tone correction table using MAC first, then IP fallback."""
 
-        tone_lut = self._tone_store.load_any((mac, ip))
+        tone_lut = self._tone_store.load_for_bulb(mac, ip)
         if tone_lut is None:
             return None
 

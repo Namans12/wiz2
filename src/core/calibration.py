@@ -212,6 +212,17 @@ class CalibrationStore:
             return None
         return BulbCalibrationTable.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
+    def load_for_bulb(self, mac: Optional[str], ip: Optional[str]) -> Optional[BulbCalibrationTable]:
+        """Prefer the lamp identity and reject another lamp's old DHCP entry."""
+        from .device_identity import mac_identity
+
+        identity = mac_identity(mac)
+        for key in dict.fromkeys((identity, mac, ip)):
+            table = self.load(key)
+            if table and (not identity or not table.bulb_mac or mac_identity(table.bulb_mac) == identity):
+                return table
+        return None
+
     def load_any(self, keys: Sequence[Optional[str]]) -> Optional[BulbCalibrationTable]:
         for key in keys:
             table = self.load(key)

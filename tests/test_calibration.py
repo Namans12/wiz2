@@ -205,3 +205,12 @@ def test_camera_feed_has_signal_accepts_visible_roi():
     frame = np.zeros((20, 20, 3), dtype=np.uint8)
     frame[5:10, 5:10] = 32
     assert camera_feed_has_signal(FakeCamera(frame), roi=(5, 5, 5, 5), frame_count=3)
+
+
+def test_wrong_bulb_never_inherits_a_calibration_after_dhcp_reassignment(tmp_path):
+    store = CalibrationStore(tmp_path)
+    ip = "192.0.2.8"
+    store.save(BulbCalibrationTable(key=ip, bulb_mac="000000000001"))
+    assert store.load_for_bulb("000000000002", ip) is None
+    store.save(BulbCalibrationTable(key="000000000002", bulb_mac="000000000002"))
+    assert store.load_for_bulb("00:00:00:00:00:02", ip).key == "000000000002"
