@@ -68,6 +68,9 @@ class BulbCalibrationTable:
     notes: str = ""
     strength: float = 0.45
     samples: list[CalibrationSample] = field(default_factory=list)
+    # Optional user-selected RGBW/RGBWW white drive, separate from a measured
+    # inverse-color table. It is not a calibrated colorimetric reference.
+    neutral_white_payload: Optional[tuple[int, ...]] = None
 
     def __post_init__(self) -> None:
         normalized_samples: list[CalibrationSample] = []
@@ -77,6 +80,8 @@ class BulbCalibrationTable:
             else:
                 normalized_samples.append(CalibrationSample(**sample))
         self.samples = normalized_samples
+        if self.neutral_white_payload is not None:
+            self.neutral_white_payload = tuple(int(value) for value in self.neutral_white_payload)
 
     @property
     def sample_count(self) -> int:
@@ -101,6 +106,7 @@ class BulbCalibrationTable:
             notes=data.get("notes", ""),
             strength=float(data.get("strength", 0.45)),
             samples=[CalibrationSample(**sample) for sample in data.get("samples", [])],
+            neutral_white_payload=data.get("neutral_white_payload"),
         )
 
     def _sample_arrays(self) -> tuple[np.ndarray, np.ndarray]:
@@ -205,6 +211,17 @@ class CalibrationStore:
         if not path.exists():
             return None
         return BulbCalibrationTable.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+    def load_for_bulb(self, mac: Optional[str], ip: Optional[str]) -> Optional[BulbCalibrationTable]:
+        """Prefer the lamp identity and reject another lamp's old DHCP entry."""
+        from .device_identity import mac_identity
+
+        identity = mac_identity(mac)
+        for key in dict.fromkeys((identity, mac, ip)):
+            table = self.load(key)
+            if table and (not identity or not table.bulb_mac or mac_identity(table.bulb_mac) == identity):
+                return table
+        return None
 
     def load_any(self, keys: Sequence[Optional[str]]) -> Optional[BulbCalibrationTable]:
         for key in keys:

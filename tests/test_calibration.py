@@ -34,6 +34,30 @@ def test_calibration_store_round_trip(tmp_path):
     assert loaded.samples[1].measured_rgb == (250, 8, 8)
 
 
+def test_user_white_balance_round_trip_and_mapping(tmp_path):
+    store = CalibrationStore(tmp_path)
+    table = BulbCalibrationTable(key="lamp", neutral_white_payload=(180, 255, 180, 160))
+    store.save(table)
+    loaded = store.load("lamp")
+    assert loaded.neutral_white_payload == (180, 255, 180, 160)
+    mapper = BulbGamutMapper(BulbColorProfile(white_channels=1), calibration=loaded)
+    plain = BulbGamutMapper(BulbColorProfile(white_channels=1))
+    assert mapper.map_rgb((255, 255, 255)) == (180, 255, 180, 160)
+    assert mapper.map_rgb((0, 0, 0)) == (0, 0, 0, 0)
+    assert mapper.map_rgb((255, 0, 0)) == plain.map_rgb((255, 0, 0))
+    gray = mapper.map_rgb((128, 128, 128))
+    assert all(abs(actual - expected) <= 1 for actual, expected in zip(gray, (90, 128, 90, 80)))
+
+
+def test_white_balance_ignores_incompatible_or_invalid_payload():
+    profile = BulbColorProfile(white_channels=2)
+    plain = BulbGamutMapper(profile)
+    for payload in ((180, 255, 180, 160), (0, 0, 0, 0, 0), (0, 0, 0, 0, 300)):
+        mapper = BulbGamutMapper(profile, calibration=BulbCalibrationTable(
+            key="lamp", neutral_white_payload=payload))
+        assert mapper.map_rgb((255, 255, 255)) == plain.map_rgb((255, 255, 255))
+
+
 def test_tone_calibration_store_uses_tone_suffix(tmp_path):
     store = ToneCalibrationStore(tmp_path)
     table = BulbCalibrationTable(
@@ -158,6 +182,18 @@ def test_camera_feed_has_signal_rejects_black_frames():
     assert not camera_feed_has_signal(FakeCamera(frame), frame_count=3)
 
 
+def test_camera_feed_rejects_sparse_centered_loading_spinner():
+    from scripts.calibrate_bulb_camera import frame_has_signal
+
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    yy, xx = np.ogrid[:720, :1280]
+    radius = (xx - 640) ** 2 + (yy - 360) ** 2
+    frame[(radius >= 62 ** 2) & (radius <= 70 ** 2)] = 255
+    assert not frame_has_signal(frame)
+    frame[:] = 32
+    assert frame_has_signal(frame)
+
+
 def test_camera_feed_has_signal_accepts_visible_roi():
     class FakeCamera:
         def __init__(self, frame):
@@ -169,3 +205,12 @@ def test_camera_feed_has_signal_accepts_visible_roi():
     frame = np.zeros((20, 20, 3), dtype=np.uint8)
     frame[5:10, 5:10] = 32
     assert camera_feed_has_signal(FakeCamera(frame), roi=(5, 5, 5, 5), frame_count=3)
+
+
+def test_wrong_bulb_never_inherits_a_calibration_after_dhcp_reassignment(tmp_path):
+    store = CalibrationStore(tmp_path)
+    ip = "192.0.2.8"
+    store.save(BulbCalibrationTable(key=ip, bulb_mac="000000000001"))
+    assert store.load_for_bulb("000000000002", ip) is None
+    store.save(BulbCalibrationTable(key="000000000002", bulb_mac="000000000002"))
+    assert store.load_for_bulb("00:00:00:00:00:02", ip).key == "000000000002"

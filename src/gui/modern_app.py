@@ -1,14 +1,25 @@
 """Modern GUI for WizLight using CustomTkinter."""
 
+import asyncio
+import copy
 import gc
+import ipaddress
+import json
+import sys
 from concurrent.futures import Future
+from pathlib import Path
+from threading import Thread
+from tkinter import filedialog
 from typing import Optional
 
 import customtkinter as ctk
 
 from ..core.async_runtime import BackgroundAsyncLoop
 from ..core.bulb_controller import BulbController, PRESETS, apply_preset
-from ..core.config import COLOR_ALGORITHMS, Config, SCREEN_SYNC_MODES, SCREEN_SYNC_REGIONS
+from ..core.config import Config, SCREEN_SYNC_REGIONS
+from ..core.diagnostics import build_diagnostics_report
+from ..core.device_identity import mac_identity
+from ..features.bulb_recovery import fetch_fresh_identity, recover_saved_bulbs, refresh_verified_targets
 from ..features.clap_detector import ClapConfig, ClapDetector
 from ..features.screen_sync import (
     average_colors,
@@ -19,10 +30,11 @@ from ..features.screen_sync import (
 )
 from ..features.screen_sync_v2 import OptimizedScreenSync, build_optimized_capture_config
 from ..features.fast_udp_sender import FastBulbSenderPool
-from ..features.sync_dispatcher import CoalescingAsyncDispatcher
+from ..features.sync_transport import ScreenSyncTransport, brightness_for_bulbs
+from ..features.sync_preflight import prepare_screen_sync_mapping
 
 # Import new components
-from .components.animations import AnimationMixin, animate_value, ease_out_cubic
+from .components.animations import AnimationMixin
 from .components.color_wheel import ColorWheelPicker
 from .components.dashboard import BulbDashboard, BulbInfo
 from .components.smooth_scrollable_frame import SmoothScrollableFrame
@@ -35,45 +47,23 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 UNASSIGNED_REGION = "(Unassigned)"
+# Keep-awake link health: a bulb silent this long triggers the address poll
+# early instead of waiting for the 30 s timer.
+LINK_CHECK_INTERVAL_MS = 3000
+LINK_EARLY_RECOVERY_S = 5.0
 
-
-class ModernColorPicker(ctk.CTkToplevel):
-    """Minimal RGB picker (legacy fallback)."""
-
-    def __init__(self, parent, callback):
-        super().__init__(parent)
-        self.callback = callback
-        self.title("Pick Color")
-        self.geometry("300x320")
-        self.resizable(False, False)
-
-        self.r_var = ctk.IntVar(value=255)
-        self.g_var = ctk.IntVar(value=255)
-        self.b_var = ctk.IntVar(value=255)
-
-        for label, variable in (("Red", self.r_var), ("Green", self.g_var), ("Blue", self.b_var)):
-            ctk.CTkLabel(self, text=label, font=("Segoe UI", 13)).pack(pady=(12, 4))
-            ctk.CTkSlider(self, from_=0, to=255, variable=variable, command=self._update_preview).pack(
-                fill="x", padx=20
-            )
-
-        self.preview = ctk.CTkFrame(self, width=90, height=90, corner_radius=14)
-        self.preview.pack(pady=18)
-        self._update_preview(None)
-
-        ctk.CTkButton(self, text="Apply", command=self._apply).pack(fill="x", padx=20, pady=(0, 16))
-
-    def _update_preview(self, _):
-        color = f"#{self.r_var.get():02x}{self.g_var.get():02x}{self.b_var.get():02x}"
-        self.preview.configure(fg_color=color)
-
-    def _apply(self):
-        self.callback(self.r_var.get(), self.g_var.get(), self.b_var.get())
-        self.destroy()
 
 
 class WizLightModernGUI(AnimationMixin):
     """Modern GUI application for WizLight."""
+
+    @staticmethod
+    def _asset_path(*parts: str) -> Path:
+        if getattr(sys, "frozen", False):
+            base = Path(getattr(sys, "_MEIPASS", Path.cwd()))
+        else:
+            base = Path(__file__).resolve().parents[2]
+        return base.joinpath(*parts)
 
     @staticmethod
     def _surface_color(widget) -> str | tuple[str, str]:
@@ -85,8 +75,8 @@ class WizLightModernGUI(AnimationMixin):
         self.config = Config.load()
         self.controller = BulbController()
         self.screen_sync: Optional[OptimizedScreenSync] = None
-        self._screen_sync_dispatcher: Optional[CoalescingAsyncDispatcher] = None
-        self._screen_sync_fast_sender: Optional[FastBulbSenderPool] = None
+        self._screen_sync_transport: Optional[ScreenSyncTransport] = None
+        self._closing = False
         self.clap_detector: Optional[ClapDetector] = None
         self._async_runner = BackgroundAsyncLoop()
         self._pending_tasks: list[Future] = []
@@ -95,6 +85,11 @@ class WizLightModernGUI(AnimationMixin):
         self._screen_sync_settings_save_id = None
         self._screen_sync_reconfigure_id = None
         self._screen_sync_debug_id = None
+        self._sync_launch_future: Optional[Future] = None
+        self._sync_launch_poll_id = None
+        self._sync_stop_future: Optional[Future] = None
+        self._sync_stop_poll_id = None
+        self._sync_restart_pending = False
         self._screen_layout_vars: dict[str, ctk.StringVar] = {}
         self._monitor_options = self._load_monitor_options()
         self._monitor_label_to_index = {
@@ -107,16 +102,33 @@ class WizLightModernGUI(AnimationMixin):
         
         # Dashboard
         self._dashboard: Optional[BulbDashboard] = None
-        self._current_view = "controls"  # "controls" or "dashboard"
+        self._current_view = "sync"
 
         self.root = ctk.CTk()
         self.root.title("WizLight")
-        self.root.geometry("520x920")
+        self.root.configure(fg_color="#0D1422")
+        scale = self.root._get_window_scaling()
+        width = min(1080, int((self.root.winfo_screenwidth() - 80) / scale))
+        height = min(780, int((self.root.winfo_screenheight() - 100) / scale))
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(min(860, width), min(580, height))
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._apply_window_icon()
 
         self._build_ui()
         self._update_bulb_status()
         self._setup_system_tray()
+        if self.config._load_warning:
+            self._set_status(self.config._load_warning)
+
+    def _apply_window_icon(self) -> None:
+        icon_path = self._asset_path("packaging", "assets", "wizlight.ico")
+        if not icon_path.exists():
+            return
+        try:
+            self.root.iconbitmap(str(icon_path))
+        except Exception:
+            pass
 
     def _load_monitor_options(self) -> list[dict[str, int | str]]:
         try:
@@ -125,6 +137,9 @@ class WizLightModernGUI(AnimationMixin):
             return [{"index": 0, "label": "Primary monitor"}]
 
     def _run_async(self, coro):
+        if self._closing:
+            coro.close()
+            return
         future = self._async_runner.submit(coro)
         self._pending_tasks.append(future)
         self._pending_tasks = [task for task in self._pending_tasks if not task.done()]
@@ -132,166 +147,252 @@ class WizLightModernGUI(AnimationMixin):
     def _get_bulb_ips(self) -> list[str]:
         return [bulb.ip for bulb in self.config.bulbs]
 
+    def _card(self, parent, title: str, subtitle: str | None = None):
+        card = ctk.CTkFrame(parent, corner_radius=14, fg_color="#192638",
+                            border_width=1, border_color="#2B3A52")
+        card.pack(fill="x", pady=(0, 12))
+        header = ctk.CTkFrame(card, fg_color=self._surface_color(card))
+        header.pack(fill="x", padx=14, pady=(14, 8))
+        ctk.CTkLabel(header, text=title, font=("Segoe UI", 16, "bold")).pack(anchor="w")
+        if subtitle:
+            ctk.CTkLabel(
+                header,
+                text=subtitle,
+                text_color=("gray35", "gray70"),
+                justify="left",
+                wraplength=460,
+            ).pack(anchor="w", pady=(2, 0))
+        return card
+
+    def _slider_control(
+        self,
+        parent,
+        label: str,
+        value_text: str,
+        from_: float,
+        to: float,
+        command,
+        value: float,
+        steps: int | None = None,
+    ):
+        row = ctk.CTkFrame(parent, fg_color=self._surface_color(parent))
+        row.pack(fill="x", padx=14, pady=(0, 10))
+        label_var = ctk.StringVar(value=f"{label}: {value_text}")
+        ctk.CTkLabel(row, textvariable=label_var, anchor="w").pack(fill="x")
+        slider = ctk.CTkSlider(
+            row,
+            from_=from_,
+            to=to,
+            number_of_steps=steps,
+            command=command,
+        )
+        slider.set(value)
+        slider.pack(fill="x", pady=(4, 0))
+        return label_var, slider
+
+    def _metric_tile(self, parent, key: str, label: str, value: str = "-"):
+        tile = ctk.CTkFrame(parent, corner_radius=10, border_width=1,
+                            fg_color="#111D2E", border_color="#2B3A52")
+        ctk.CTkLabel(tile, text=label, text_color=("gray35", "gray70"), font=("Segoe UI", 11)).pack(
+            anchor="w", padx=10, pady=(8, 0)
+        )
+        variable = ctk.StringVar(value=value)
+        ctk.CTkLabel(tile, textvariable=variable, font=("Segoe UI", 17, "bold")).pack(
+            anchor="w", padx=10, pady=(0, 8)
+        )
+        self._sync_metric_vars[key] = variable
+        return tile
+
+    def _sync_status_color(self, status: str) -> str:
+        status_lower = status.lower()
+        if "error" in status_lower or "failed" in status_lower:
+            return "#B91C1C"
+        if "recover" in status_lower or "restart" in status_lower or "warm" in status_lower:
+            return "#B7791F"
+        if self.screen_sync and self.screen_sync.is_running:
+            return "#17803D"
+        return "#5F6368"
+
     def _build_ui(self):
         self._main_container = ctk.CTkFrame(self.root, fg_color="transparent")
-        self._main_container.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Header with view toggle
-        header = ctk.CTkFrame(self._main_container)
-        header.pack(fill="x", pady=(0, 12))
-        ctk.CTkLabel(header, text="WizLight", font=("Segoe UI", 26, "bold")).pack(side="left", padx=12, pady=12)
-        
-        # View toggle buttons
-        view_toggle = ctk.CTkFrame(header, fg_color="transparent")
-        view_toggle.pack(side="right", padx=12)
-        
-        self._controls_btn = ctk.CTkButton(
-            view_toggle, text="Controls", width=80,
-            command=lambda: self._switch_view("controls"),
-            fg_color=("#3B8ED0", "#1F6AA5")
-        )
-        self._controls_btn.pack(side="left", padx=(0, 4))
-        
-        self._dashboard_btn = ctk.CTkButton(
-            view_toggle, text="Dashboard", width=80,
-            command=lambda: self._switch_view("dashboard"),
-            fg_color="transparent", border_width=1
-        )
-        self._dashboard_btn.pack(side="left", padx=(0, 8))
-        
-        # Minimize to tray button
+        self._main_container.pack(fill="both", expand=True, padx=16, pady=16)
+        sidebar = ctk.CTkFrame(self._main_container, width=164, corner_radius=14,
+                              fg_color="#111D2E")
+        sidebar.pack(side="left", fill="y", padx=(0, 16))
+        sidebar.pack_propagate(False)
+        ctk.CTkLabel(sidebar, text="WizLight", font=("Segoe UI", 25, "bold")).pack(
+            anchor="w", padx=16, pady=(24, 0))
+        ctk.CTkLabel(sidebar, text="Light, in sync.", text_color="#91A4BF").pack(
+            anchor="w", padx=16, pady=(2, 28))
+        self._page_labels = {
+            "sync": ("Screen sync", "Set the mood, then let your screen lead."),
+            "lights": ("Light controls", "Color, brightness and presets for your room."),
+            "bulbs": ("Your bulbs", "Connect and manage lights on your local network."),
+            "tools": ("Tools & help", "Setup guides and diagnostics when you need them."),
+        }
+        self._view_buttons = {}
+        for index, (view, (label, _)) in enumerate(self._page_labels.items(), start=1):
+            button = ctk.CTkButton(
+                sidebar, text=label, height=46, anchor="w", corner_radius=10,
+                font=("Segoe UI", 13), fg_color="transparent", hover_color="#263C58",
+                text_color="#A5B7CF",
+                command=lambda name=view: self._switch_view(name),
+            )
+            button.pack(fill="x", padx=10, pady=4)
+            self._view_buttons[view] = button
+            self.root.bind(f"<Control-Key-{index}>",
+                           lambda event, name=view: self._switch_view(name))
+        ctk.CTkLabel(sidebar, text="Local control\nCtrl + 1–4 to navigate", justify="left",
+                     text_color="#91A4BF", font=("Segoe UI", 11)).pack(
+                         side="bottom", anchor="w", padx=16, pady=20)
         if is_tray_available():
             self._tray_btn = ctk.CTkButton(
-                view_toggle, text="⊟", width=32,
-                command=self._minimize_to_tray,
-                fg_color="transparent", border_width=1
-            )
-            self._tray_btn.pack(side="left")
-        
-        self.status_label = ctk.CTkLabel(header, text="", text_color="gray")
-        self.status_label.pack(side="right", padx=12)
-        
-        # Controls view (scrollable)
-        self._controls_frame = SmoothScrollableFrame(
-            self._main_container,
-            fg_color=("gray92", "gray14"),
+                sidebar, text="Minimize to tray", height=36,
+                command=self._minimize_to_tray, fg_color="transparent", border_width=1)
+            self._tray_btn.pack(side="bottom", fill="x", padx=10, pady=6)
+        workspace = ctk.CTkFrame(self._main_container, fg_color="transparent")
+        workspace.pack(side="left", fill="both", expand=True)
+        self._page_title_var = ctk.StringVar()
+        self._page_subtitle_var = ctk.StringVar()
+        ctk.CTkLabel(workspace, textvariable=self._page_title_var,
+                     font=("Segoe UI", 25, "bold")).pack(anchor="w", pady=(4, 0))
+        ctk.CTkLabel(workspace, textvariable=self._page_subtitle_var,
+                     text_color="#A5B7CF").pack(anchor="w", pady=(0, 16))
+        status_bar = ctk.CTkFrame(workspace, corner_radius=12, fg_color="#111D2E")
+        status_bar.pack(side="bottom", fill="x", pady=(12, 0))
+        self.status_indicator = ctk.CTkFrame(
+            status_bar, width=12, height=12, corner_radius=6, fg_color="#5F6368"
         )
-        self._controls_frame.pack(fill="both", expand=True)
-        
-        # Dashboard view (hidden initially)
-        self._dashboard_frame = ctk.CTkFrame(self._main_container, fg_color="transparent")
-        
-        # Build controls view content
+        self.status_indicator.pack(side="left", padx=(12, 8), pady=10)
+        self.status_label = ctk.CTkLabel(
+            status_bar, text="Ready", text_color="#C6D5E8", anchor="w",
+            wraplength=470, justify="left"
+        )
+        self.status_label.pack(side="left", fill="x", expand=True, padx=(0, 12), pady=8)
+        self.header_bulbs_var = ctk.StringVar(value="Bulbs: 0")
+        self.header_monitor_var = ctk.StringVar(value="Monitor: -")
+        self.header_runtime_var = ctk.StringVar(value="Sync: idle")
+        summary_row = ctk.CTkFrame(workspace, fg_color="transparent")
+        summary_row.pack(fill="x", pady=(0, 10))
+        for variable in (self.header_bulbs_var, self.header_monitor_var, self.header_runtime_var):
+            badge = ctk.CTkFrame(summary_row, fg_color="#18283D", corner_radius=9)
+            badge.pack(side="left", padx=(0, 8))
+            ctk.CTkLabel(
+                badge, textvariable=variable, text_color="#CBD9EA",
+                font=("Segoe UI", 11), height=28,
+            ).pack(padx=10)
+
+        self._view_host = ctk.CTkFrame(workspace, fg_color="transparent")
+        self._view_host.pack(fill="both", expand=True)
+        self._view_frames: dict[str, ctk.CTkFrame] = {
+            "sync": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
+            "lights": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
+            "bulbs": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
+            "tools": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
+        }
+        self._view_host.grid_rowconfigure(0, weight=1)
+        self._view_host.grid_columnconfigure(0, weight=1)
+        for frame in self._view_frames.values():
+            frame.grid(row=0, column=0, sticky="nsew")
+        self._controls_frame = self._view_frames["sync"]
+        self._dashboard_frame = ctk.CTkFrame(self._view_frames["bulbs"], fg_color="transparent")
+
         self._build_controls_view()
-        
-        # Build dashboard
         self._dashboard = BulbDashboard(
             self._dashboard_frame,
             self.controller,
             self._run_async,
-            on_bulb_select=self._on_bulb_select
+            on_bulb_select=self._on_bulb_select,
+            on_screen_sync_change=self._set_bulb_screen_sync,
+            before_power_off=self._exclude_bulb_before_power_off,
         )
         self._dashboard.pack(fill="both", expand=True)
+        self._current_view = ""
+        self._switch_view("sync")
     
     def _build_controls_view(self):
-        """Build the main controls view."""
-        main = self._controls_frame
+        """Build Sync, Lights, Bulbs, and Tools views."""
+        sync = self._view_frames["sync"]
+        lights = self._view_frames["lights"]
+        bulbs_view = self._view_frames["bulbs"]
+        tools = self._view_frames["tools"]
 
-        bulbs = ctk.CTkFrame(main)
-        bulbs.pack(fill="x", pady=(0, 12))
-        bulb_actions = ctk.CTkFrame(bulbs, fg_color=self._surface_color(bulbs))
-        bulb_actions.pack(side="right", padx=12, pady=12)
+        cockpit = self._card(sync, "Screen Sync", "Match your lights to movies, games and everyday screen content.")
+        action_row = ctk.CTkFrame(cockpit, fg_color=self._surface_color(cockpit))
+        action_row.pack(fill="x", padx=14, pady=(0, 12))
+        self.sync_primary_button = ctk.CTkButton(
+            action_row,
+            text="Start Screen Sync",
+            height=42,
+            command=self._toggle_screen_sync_from_primary,
+            font=("Segoe UI", 14, "bold"),
+        )
+        self.sync_primary_button.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.screen_sync_switch = ctk.CTkSwitch(
+            action_row,
+            text="Sync",
+            command=self._toggle_screen_sync,
+        )
+        # Keep switch state for tray callbacks; the primary button is the visible sync action.
+        self.clap_switch = ctk.CTkSwitch(
+            action_row,
+            text="Clap control",
+            command=self._toggle_clap_detection,
+        )
+        self.clap_switch.pack(side="left")
+
         ctk.CTkButton(
-            bulb_actions,
-            text="Remove Stale",
-            command=self._remove_stale_bulbs,
-            width=120,
-        ).pack(side="right")
-        ctk.CTkButton(
-            bulb_actions,
-            text="Discover",
-            command=self._discover_bulbs,
-            width=110,
-        ).pack(side="right", padx=(0, 8))
-        ctk.CTkLabel(bulbs, text="Configured Bulbs", font=("Segoe UI", 16, "bold")).pack(
-            anchor="w", padx=12, pady=(12, 4)
+            cockpit, text="Picture settings ↓", height=32, fg_color="transparent",
+            border_width=1, command=self._scroll_to_sync_settings,
+        ).pack(anchor="w", padx=14, pady=(0, 12))
+
+        self._live_details_open = False
+        self._live_details_button = ctk.CTkButton(
+            cockpit, text="Show live details  ▾", height=32, anchor="w",
+            fg_color="transparent", hover_color="#263C58",
+            command=self._toggle_live_details,
         )
-        self.bulb_info = ctk.CTkLabel(bulbs, text="No bulbs found", justify="left", text_color="gray")
-        self.bulb_info.pack(anchor="w", padx=12, pady=(0, 12))
+        self._live_details_button.pack(fill="x", padx=14, pady=(0, 8))
+        self._live_details = ctk.CTkFrame(cockpit, fg_color=self._surface_color(cockpit))
 
-        controls = ctk.CTkFrame(main)
-        controls.pack(fill="x", pady=(0, 12))
-        ctk.CTkLabel(controls, text="Quick Controls", font=("Segoe UI", 16, "bold")).pack(
-            anchor="w", padx=12, pady=(12, 8)
-        )
-        button_row = ctk.CTkFrame(controls, fg_color=self._surface_color(controls))
-        button_row.pack(fill="x", padx=12, pady=(0, 12))
-        ctk.CTkButton(button_row, text="ON", command=self._turn_on, width=90).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(button_row, text="OFF", command=self._turn_off, width=90).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(button_row, text="Toggle", command=self._toggle, width=90).pack(side="left")
+        preview_grid = ctk.CTkFrame(self._live_details, fg_color=self._surface_color(cockpit))
+        preview_grid.pack(fill="x", padx=14, pady=(0, 12))
+        preview_grid.columnconfigure((0, 1), weight=1, uniform="preview")
+        self.sync_target_preview = self._color_panel(preview_grid, "Target", "RGB(-)")
+        self.sync_target_preview.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.sync_output_preview = self._color_panel(preview_grid, "Output", "RGB(-)")
+        self.sync_output_preview.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        self.brightness_label = ctk.CTkLabel(controls, text="Brightness: 50%")
-        self.brightness_label.pack(anchor="w", padx=12)
-        self.brightness_slider = ctk.CTkSlider(controls, from_=0, to=255, command=self._on_brightness_change)
-        self.brightness_slider.set(128)
-        self.brightness_slider.pack(fill="x", padx=12, pady=(0, 12))
+        self._sync_metric_vars: dict[str, ctk.StringVar] = {}
+        metric_grid = ctk.CTkFrame(self._live_details, fg_color=self._surface_color(cockpit))
+        metric_grid.pack(fill="x", padx=14, pady=(0, 12))
+        for column in range(3):
+            metric_grid.columnconfigure(column, weight=1, uniform="metric")
+        for index, (key, label) in enumerate(
+            (
+                ("fps", "FPS"),
+                ("frame", "Frame ms"),
+                ("send", "Send Hz"),
+                ("motion", "Motion"),
+                ("capture", "Capture"),
+                ("status", "Status"),
+            )
+        ):
+            self._metric_tile(metric_grid, key, label).grid(
+                row=index // 3,
+                column=index % 3,
+                sticky="nsew",
+                padx=4,
+                pady=4,
+            )
 
-        color_row = ctk.CTkFrame(controls, fg_color=self._surface_color(controls))
-        color_row.pack(fill="x", padx=12, pady=(0, 8))
-        self.color_preview = ctk.CTkFrame(color_row, width=42, height=42, corner_radius=10, fg_color="#ffffff")
-        self.color_preview.pack(side="left", padx=(0, 10))
-        self.color_preview.pack_propagate(False)
-        ctk.CTkButton(color_row, text="Pick Color", command=self._pick_color).pack(side="left", padx=(0, 8))
-        self.preset_menu = ctk.CTkOptionMenu(
-            color_row,
-            values=[name.title() for name in PRESETS],
-            command=self._apply_preset_from_menu,
-        )
-        self.preset_menu.pack(side="left", fill="x", expand=True)
-        self.preset_menu.set("Preset")
-
-        self.temp_label = ctk.CTkLabel(controls, text="Color Temp: 4000K")
-        self.temp_label.pack(anchor="w", padx=12)
-        self.temp_slider = ctk.CTkSlider(controls, from_=2200, to=6500, command=self._on_temp_change)
-        self.temp_slider.set(4000)
-        self.temp_slider.pack(fill="x", padx=12, pady=(0, 12))
-
-        features = ctk.CTkFrame(main)
-        features.pack(fill="x", pady=(0, 12))
-        ctk.CTkLabel(features, text="Features", font=("Segoe UI", 16, "bold")).pack(
-            anchor="w", padx=12, pady=(12, 8)
-        )
-        screen_row = ctk.CTkFrame(features, fg_color=self._surface_color(features))
-        screen_row.pack(fill="x", padx=12, pady=(0, 8))
-        ctk.CTkLabel(screen_row, text="Screen Sync").pack(side="left")
-        self.screen_sync_switch = ctk.CTkSwitch(screen_row, text="", command=self._toggle_screen_sync)
-        self.screen_sync_switch.pack(side="right")
-        clap_row = ctk.CTkFrame(features, fg_color=self._surface_color(features))
-        clap_row.pack(fill="x", padx=12, pady=(0, 12))
-        ctk.CTkLabel(clap_row, text="Clap Detection").pack(side="left")
-        self.clap_switch = ctk.CTkSwitch(clap_row, text="", command=self._toggle_clap_detection)
-        self.clap_switch.pack(side="right")
-
-        settings = ctk.CTkFrame(main)
-        settings.pack(fill="x", pady=(0, 12))
-        ctk.CTkLabel(settings, text="Screen Sync Settings", font=("Segoe UI", 16, "bold")).pack(
-            anchor="w", padx=12, pady=(12, 8)
-        )
-
-        self.mode_menu = ctk.CTkOptionMenu(
-            settings,
-            values=[mode.title() for mode in SCREEN_SYNC_MODES],
-            command=self._queue_screen_sync_settings_save,
-        )
-        self.mode_menu.pack(fill="x", padx=12, pady=(0, 8))
-        self.mode_menu.set(self.config.screen_sync.mode.title())
-
+        settings = self._card(sync, "Picture settings", "Only the controls that matter while watching video.")
+        self._sync_settings_card = settings
         self.monitor_menu = ctk.CTkOptionMenu(
             settings,
             values=[str(option["label"]) for option in self._monitor_options],
             command=self._queue_screen_sync_settings_save,
         )
-        self.monitor_menu.pack(fill="x", padx=12, pady=(0, 8))
         selected_monitor = next(
             (
                 str(option["label"])
@@ -301,6 +402,7 @@ class WizLightModernGUI(AnimationMixin):
             str(self._monitor_options[0]["label"]),
         )
         self.monitor_menu.set(selected_monitor)
+        self.monitor_menu.pack(fill="x", padx=14, pady=(0, 10))
 
         self.fps_value = ctk.IntVar(value=self.config.screen_sync.max_fps)
         self.min_fps_value = ctk.IntVar(value=self.config.screen_sync.min_fps)
@@ -312,102 +414,405 @@ class WizLightModernGUI(AnimationMixin):
         self.use_gpu_var = ctk.BooleanVar(value=self.config.screen_sync.use_gpu)
         self.adaptive_fps_var = ctk.BooleanVar(value=self.config.screen_sync.adaptive_fps)
         self.predictive_smoothing_var = ctk.BooleanVar(value=self.config.screen_sync.predictive_smoothing)
-
-        self.fps_label = ctk.CTkLabel(settings, text=f"Max FPS: {self.fps_value.get()}")
-        self.fps_label.pack(anchor="w", padx=12)
-        self.fps_slider = ctk.CTkSlider(settings, from_=4, to=60, number_of_steps=56, command=self._on_fps_change)
-        self.fps_slider.set(self.fps_value.get())
-        self.fps_slider.pack(fill="x", padx=12, pady=(0, 8))
-
-        self.min_fps_label = ctk.CTkLabel(settings, text=f"Min FPS: {self.min_fps_value.get()}")
-        self.min_fps_label.pack(anchor="w", padx=12)
-        self.min_fps_slider = ctk.CTkSlider(
-            settings,
-            from_=4,
-            to=30,
-            number_of_steps=26,
-            command=self._on_min_fps_change,
+        self.keep_awake_var = ctk.BooleanVar(value=self.config.screen_sync.keep_awake)
+        self.color_source_labels = {
+            "Auto (detect)": "auto",
+            "Standard / sRGB": "srgb",
+            "Display P3 OLED": "display-p3",
+            "Rec.2020 HDR": "rec2020",
+        }
+        self.color_source_value = ctk.StringVar(
+            value=next(
+                (
+                    label
+                    for label, key in self.color_source_labels.items()
+                    if key == self.config.screen_sync.source_color_space
+                ),
+                "Auto (detect)",
+            )
         )
-        self.min_fps_slider.set(self.min_fps_value.get())
-        self.min_fps_slider.pack(fill="x", padx=12, pady=(0, 8))
-
-        self.smoothing_label = ctk.CTkLabel(settings, text=f"Smoothing: {self.smoothing_value.get():.2f}")
-        self.smoothing_label.pack(anchor="w", padx=12)
-        self.smoothing_slider = ctk.CTkSlider(settings, from_=0.05, to=0.75, command=self._on_smoothing_change)
-        self.smoothing_slider.set(self.smoothing_value.get())
-        self.smoothing_slider.pack(fill="x", padx=12, pady=(0, 8))
-
-        self.boost_label = ctk.CTkLabel(settings, text=f"Color Boost: {self.boost_value.get():.2f}x")
-        self.boost_label.pack(anchor="w", padx=12)
-        self.boost_slider = ctk.CTkSlider(settings, from_=1.0, to=1.8, command=self._on_boost_change)
-        self.boost_slider.set(self.boost_value.get())
-        self.boost_slider.pack(fill="x", padx=12, pady=(0, 8))
-
-        self.min_brightness_label = ctk.CTkLabel(
-            settings,
-            text=f"Min Brightness: {self.min_brightness_value.get()}",
+        self.mixing_model_labels = {
+            "Standard": "heuristic",
+            "Physical (experimental)": "physical",
+        }
+        self.mixing_model_value = ctk.StringVar(
+            value=next(
+                (
+                    label
+                    for label, key in self.mixing_model_labels.items()
+                    if key == self.config.screen_sync.mixing_model
+                ),
+                "Standard",
+            )
         )
-        self.min_brightness_label.pack(anchor="w", padx=12)
-        self.min_brightness_slider = ctk.CTkSlider(
-            settings,
-            from_=0,
-            to=80,
-            number_of_steps=80,
-            command=self._on_min_brightness_change,
+        self.physical_color_trim_var = ctk.BooleanVar(value=self.config.screen_sync.physical_color_trim)
+        self.sync_profile_labels = {
+            "Auto": "auto",
+            "Cinema (calm)": "cinema",
+            "Action (fast)": "action",
+        }
+        self.sync_profile_value = ctk.StringVar(
+            value=next(
+                (
+                    label
+                    for label, key in self.sync_profile_labels.items()
+                    if key == self.config.screen_sync.sync_profile
+                ),
+                "Auto",
+            )
         )
-        self.min_brightness_slider.set(self.min_brightness_value.get())
-        self.min_brightness_slider.pack(fill="x", padx=12, pady=(0, 8))
+        self.sync_mode_labels = {
+            "Single bulb": "single",
+            "Left / Right zones": "zones",
+        }
+        self.sync_mode_value = ctk.StringVar(
+            value=next(
+                (
+                    label
+                    for label, key in self.sync_mode_labels.items()
+                    if key == self.config.screen_sync.mode
+                ),
+                "Single bulb",
+            )
+        )
+        self.brightness_mode_labels = {
+            "Follow video": "follow",
+            "Constant": "constant",
+        }
+        self.brightness_mode_value = ctk.StringVar(
+            value=next(
+                (
+                    label
+                    for label, key in self.brightness_mode_labels.items()
+                    if key == self.config.screen_sync.brightness_mode
+                ),
+                "Follow video",
+            )
+        )
+        self.sync_brightness_value = ctk.IntVar(
+            value=self.config.screen_sync.sync_brightness
+        )
 
-        self.algorithm_menu = ctk.CTkOptionMenu(
+        self.fps_label, self.fps_slider = self._slider_control(
             settings,
-            values=[algorithm.title() for algorithm in COLOR_ALGORITHMS],
-            variable=self.algorithm_value,
+            "Responsiveness",
+            f"{self.fps_value.get()} FPS",
+            12,
+            30,
+            self._on_fps_change,
+            min(30, max(12, self.fps_value.get())),
+            18,
+        )
+        self.smoothing_label, self.smoothing_slider = self._slider_control(
+            settings,
+            "Smoothness",
+            f"{self.smoothing_value.get():.2f}",
+            0.05,
+            0.55,
+            self._on_smoothing_change,
+            min(0.55, self.smoothing_value.get()),
+        )
+        self.boost_label, self.boost_slider = self._slider_control(
+            settings,
+            "Color Punch",
+            f"{self.boost_value.get():.2f}x",
+            1.0,
+            1.45,
+            self._on_boost_change,
+            min(1.45, self.boost_value.get()),
+        )
+        self.min_brightness_label, self.min_brightness_slider = self._slider_control(
+            settings,
+            "Dark Scene Floor",
+            str(self.min_brightness_value.get()),
+            0,
+            60,
+            self._on_min_brightness_change,
+            min(60, self.min_brightness_value.get()),
+            60,
+        )
+
+        ctk.CTkLabel(settings, text="Color Source", anchor="w").pack(
+            fill="x", padx=14, pady=(2, 4)
+        )
+        self.color_source_menu = ctk.CTkOptionMenu(
+            settings,
+            values=list(self.color_source_labels.keys()),
+            variable=self.color_source_value,
             command=self._queue_screen_sync_settings_save,
         )
-        self.algorithm_menu.pack(fill="x", padx=12, pady=(0, 8))
+        self.color_source_menu.pack(fill="x", padx=14, pady=(0, 10))
 
-        advanced_flags = ctk.CTkFrame(settings, fg_color=self._surface_color(settings))
-        advanced_flags.pack(fill="x", padx=12, pady=(0, 8))
-        ctk.CTkCheckBox(
-            advanced_flags,
-            text="Adaptive FPS",
-            variable=self.adaptive_fps_var,
-            command=self._queue_screen_sync_settings_save,
-        ).pack(side="left", padx=(0, 8))
-        ctk.CTkCheckBox(
-            advanced_flags,
-            text="Predictive",
-            variable=self.predictive_smoothing_var,
-            command=self._queue_screen_sync_settings_save,
-        ).pack(side="left")
-
-        ctk.CTkCheckBox(
+        ctk.CTkLabel(settings, text="Color Mixing", anchor="w").pack(
+            fill="x", padx=14, pady=(2, 4)
+        )
+        self.mixing_model_menu = ctk.CTkSegmentedButton(
             settings,
-            text="Use GPU capture when available",
+            values=list(self.mixing_model_labels.keys()),
+            variable=self.mixing_model_value,
+            command=self._on_mixing_model_change,
+        )
+        self.mixing_model_menu.pack(fill="x", padx=14, pady=(0, 4))
+        self.mixing_model_hint = ctk.CTkLabel(
+            settings,
+            text=self._mixing_model_hint_text(),
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray60"),
+        )
+        self.mixing_model_hint.pack(fill="x", padx=14, pady=(0, 10))
+        self.physical_color_trim_checkbox = ctk.CTkCheckBox(
+            settings,
+            text="Tune orange",
+            variable=self.physical_color_trim_var,
+            command=self._queue_screen_sync_settings_save,
+            state="normal" if self.config.screen_sync.mixing_model == "physical" else "disabled",
+        )
+        self.physical_color_trim_checkbox.pack(anchor="w", padx=14, pady=(0, 10))
+
+        ctk.CTkLabel(settings, text="Sync Feel", anchor="w").pack(
+            fill="x", padx=14, pady=(2, 4)
+        )
+        self.sync_profile_menu = ctk.CTkSegmentedButton(
+            settings,
+            values=list(self.sync_profile_labels.keys()),
+            variable=self.sync_profile_value,
+            command=self._queue_screen_sync_settings_save,
+        )
+        self.sync_profile_menu.pack(fill="x", padx=14, pady=(0, 10))
+
+        ctk.CTkLabel(settings, text="Brightness Mode", anchor="w").pack(
+            fill="x", padx=14, pady=(2, 4)
+        )
+        self.brightness_mode_menu = ctk.CTkSegmentedButton(
+            settings,
+            values=list(self.brightness_mode_labels.keys()),
+            variable=self.brightness_mode_value,
+            command=self._on_brightness_mode_change,
+        )
+        self.brightness_mode_menu.pack(fill="x", padx=14, pady=(0, 4))
+        self.brightness_mode_hint = ctk.CTkLabel(
+            settings,
+            text=self._brightness_mode_hint_text(),
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray60"),
+        )
+        self.brightness_mode_hint.pack(fill="x", padx=14, pady=(0, 6))
+        self.sync_brightness_label, self.sync_brightness_slider = self._slider_control(
+            settings,
+            "Constant Brightness",
+            f"{round(self.sync_brightness_value.get() / 255 * 100)}%",
+            30,
+            255,
+            self._on_sync_brightness_change,
+            self.sync_brightness_value.get(),
+        )
+        self._update_sync_brightness_state()
+
+        flags = ctk.CTkFrame(settings, fg_color=self._surface_color(settings))
+        flags.pack(fill="x", padx=14, pady=(0, 10))
+        ctk.CTkCheckBox(
+            flags,
+            text="Fast GPU capture",
             variable=self.use_gpu_var,
             command=self._queue_screen_sync_settings_save,
-        ).pack(anchor="w", padx=12, pady=(0, 8))
-
+        ).pack(side="left", padx=(0, 10))
+        # Keeps each bulb's Wi-Fi radio listening during sync so updates land
+        # in milliseconds, and confirms delivery from the bulb's replies.
         ctk.CTkCheckBox(
-            settings,
-            text="Ignore black bars / letterboxing",
-            variable=self.ignore_letterbox_var,
+            flags,
+            text="Low-latency link",
+            variable=self.keep_awake_var,
             command=self._queue_screen_sync_settings_save,
-        ).pack(anchor="w", padx=12, pady=(0, 8))
+        ).pack(side="left", padx=(0, 10))
 
         ctk.CTkLabel(
+            flags,
+            text="Black bars ignored automatically",
+            text_color=("gray35", "gray70"),
+        ).pack(side="left")
+        self.ignore_letterbox_var.set(True)
+
+        ctk.CTkButton(
             settings,
-            text="Bulb Layout (zone mode needs at least 2 assigned regions)",
-            text_color="gray",
-        ).pack(anchor="w", padx=12)
-        self.layout_frame = ctk.CTkFrame(settings, fg_color=self._surface_color(settings))
-        self.layout_frame.pack(fill="x", padx=12, pady=(6, 12))
-        self._refresh_screen_sync_layout_controls()
-        self._build_screen_sync_debug(main)
+            text="What do these controls do?",
+            command=self._show_control_guide,
+            fg_color="transparent",
+            border_width=1,
+        ).pack(fill="x", padx=14, pady=(0, 14))
+
+        zone_card = self._card(
+            sync,
+            "Zone Layout",
+            "Split the screen left/right and drive two bulbs independently, or keep one ambient color for all bulbs.",
+        )
+        self.sync_mode_menu = ctk.CTkSegmentedButton(
+            zone_card,
+            values=list(self.sync_mode_labels.keys()),
+            variable=self.sync_mode_value,
+            command=self._on_sync_mode_change,
+        )
+        self.sync_mode_menu.pack(fill="x", padx=14, pady=(0, 4))
+        self.sync_mode_hint = ctk.CTkLabel(
+            zone_card,
+            text=self._sync_mode_hint_text(),
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray60"),
+        )
+        self.sync_mode_hint.pack(fill="x", padx=14, pady=(0, 8))
+        self.layout_frame = ctk.CTkFrame(zone_card, fg_color=self._surface_color(zone_card))
+        self.layout_frame.pack(fill="x", padx=14, pady=(0, 12))
+
+        self.advanced_debug_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            sync,
+            text="Advanced Debug",
+            variable=self.advanced_debug_var,
+            command=self._toggle_advanced_debug,
+        ).pack(anchor="w", padx=4, pady=(0, 8))
+        self._build_screen_sync_debug(sync)
+
+        light_card = self._card(lights, "Lights", "Quick everyday controls for all configured bulbs.")
+        button_row = ctk.CTkFrame(light_card, fg_color=self._surface_color(light_card))
+        button_row.pack(fill="x", padx=14, pady=(0, 12))
+        self.toggle_power_button = ctk.CTkButton(
+            button_row, text="Toggle Power", command=self._toggle, width=140
+        )
+        self.toggle_power_button.pack(side="left", padx=(0, 8))
+        self.turn_off_button = ctk.CTkButton(
+            button_row,
+            text="Turn Off",
+            command=self._turn_off,
+            width=110,
+            fg_color="transparent",
+            border_width=1,
+        )
+        self.turn_off_button.pack(side="left")
+        self.brightness_label_var, self.brightness_slider = self._slider_control(
+            light_card, "Brightness", "50%", 0, 255, self._on_brightness_change, 128, 255
+        )
+        color_row = ctk.CTkFrame(light_card, fg_color=self._surface_color(light_card))
+        color_row.pack(fill="x", padx=14, pady=(0, 12))
+        self.color_preview = ctk.CTkFrame(
+            color_row, width=42, height=42, corner_radius=10, fg_color="#ffffff"
+        )
+        self.color_preview.pack(side="left", padx=(0, 10))
+        self.color_preview.pack_propagate(False)
+        self.pick_color_button = ctk.CTkButton(color_row, text="Pick Color", command=self._pick_color)
+        self.pick_color_button.pack(side="left", padx=(0, 8))
+        self.preset_menu = ctk.CTkOptionMenu(
+            color_row,
+            values=[name.title() for name in PRESETS],
+            command=self._apply_preset_from_menu,
+        )
+        self.preset_menu.pack(side="left", fill="x", expand=True)
+        self.preset_menu.set("Preset")
+        self.temp_label_var, self.temp_slider = self._slider_control(
+            light_card, "Color Temperature", "4000K", 2200, 6500, self._on_temp_change, 4000, 43
+        )
+
+        bulbs = self._card(
+            bulbs_view,
+            "Bulbs",
+            "Discover WiZ bulbs on your local network and remove entries that no longer respond.",
+        )
+        bulb_actions = ctk.CTkFrame(bulbs, fg_color=self._surface_color(bulbs))
+        bulb_actions.pack(fill="x", padx=14, pady=(0, 10))
+        self.discover_button = ctk.CTkButton(
+            bulb_actions, text="Discover Bulbs", command=self._discover_bulbs, width=140
+        )
+        self.discover_button.pack(side="left", padx=(0, 8))
+        self.remove_stale_button = ctk.CTkButton(
+            bulb_actions,
+            text="Remove Stale",
+            command=self._remove_stale_bulbs,
+            width=130,
+            fg_color="transparent",
+            border_width=1,
+        )
+        self.remove_stale_button.pack(side="left")
+        add_row = ctk.CTkFrame(bulbs, fg_color=self._surface_color(bulbs))
+        add_row.pack(fill="x", padx=14, pady=(0, 10))
+        self.add_bulb_entry = ctk.CTkEntry(
+            add_row, placeholder_text="Bulb IP address, e.g. 192.168.1.20", width=260
+        )
+        self.add_bulb_entry.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            add_row,
+            text="Add by IP",
+            command=self._add_bulb_by_ip,
+            width=110,
+            fg_color="transparent",
+            border_width=1,
+        ).pack(side="left")
+        self.bulb_info = ctk.CTkLabel(bulbs, text="No bulbs found", justify="left", text_color="gray")
+        self.bulb_info.pack(anchor="w", padx=14, pady=(0, 14))
+        self._dashboard_frame.pack(fill="both", expand=True, pady=(0, 12))
+
+        tools_card = self._card(tools, "Diagnostics", "Useful checks and setup helpers.")
+        ctk.CTkButton(
+            tools_card,
+            text="Open Monitor Manager",
+            command=self._open_monitor_manager,
+            fg_color="transparent",
+            border_width=1,
+        ).pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkButton(
+            tools_card,
+            text="Screen Sync Guide",
+            command=self._show_control_guide,
+            fg_color="transparent",
+            border_width=1,
+        ).pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkButton(
+            tools_card,
+            text="Export Diagnostics JSON",
+            command=self._export_diagnostics_report,
+            fg_color="transparent",
+            border_width=1,
+        ).pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkLabel(
+            tools_card,
+            text="Calibration and hardware tests are available from the scripts in docs/commands.md.",
+            text_color=("gray35", "gray70"),
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 14))
+
+    def _toggle_live_details(self):
+        """Keep the primary controls compact while retaining live diagnostics."""
+        self._live_details_open = not self._live_details_open
+        if self._live_details_open:
+            self._live_details.pack(fill="x")
+            self._live_details_button.configure(text="Hide live details  ▴")
+        else:
+            self._live_details.pack_forget()
+            self._live_details_button.configure(text="Show live details  ▾")
+
+    def _color_panel(self, parent, title: str, rgb_text: str):
+        panel = ctk.CTkFrame(parent, corner_radius=10, border_width=1,
+                             fg_color="#111D2E", border_color="#2B3A52")
+        ctk.CTkLabel(panel, text=title, text_color=("gray35", "gray70")).pack(
+            anchor="w", padx=12, pady=(10, 0)
+        )
+        swatch = ctk.CTkFrame(panel, height=56, corner_radius=8, fg_color="#000000")
+        swatch.pack(fill="x", padx=12, pady=8)
+        swatch.pack_propagate(False)
+        label_var = ctk.StringVar(value=rgb_text)
+        ctk.CTkLabel(panel, textvariable=label_var, font=("Consolas", 13)).pack(
+            anchor="w", padx=12, pady=(0, 10)
+        )
+        panel._swatch = swatch
+        panel._label_var = label_var
+        return panel
 
     def _build_screen_sync_debug(self, parent):
         card = ctk.CTkFrame(parent)
-        card.pack(fill="x", pady=(0, 12))
+        self.advanced_debug_card = card
+        if self.advanced_debug_var.get():
+            card.pack(fill="x", pady=(0, 12))
         ctk.CTkLabel(card, text="Sync Debug", font=("Segoe UI", 16, "bold")).pack(
             anchor="w", padx=12, pady=(12, 8)
         )
@@ -431,6 +836,7 @@ class WizLightModernGUI(AnimationMixin):
         self.screen_sync_debug_perf = ctk.StringVar(value="FPS: -")
         self.screen_sync_debug_cadence = ctk.StringVar(value="Cadence: -")
         self.screen_sync_debug_motion = ctk.StringVar(value="Motion: -")
+        self.screen_sync_debug_settings = ctk.StringVar(value="Settings: -")
         self.screen_sync_debug_error = ctk.StringVar(value="")
 
         for variable in (
@@ -440,11 +846,18 @@ class WizLightModernGUI(AnimationMixin):
             self.screen_sync_debug_perf,
             self.screen_sync_debug_cadence,
             self.screen_sync_debug_motion,
+            self.screen_sync_debug_settings,
             self.screen_sync_debug_error,
         ):
             ctk.CTkLabel(card, textvariable=variable, anchor="w", justify="left").pack(
                 anchor="w", padx=12, pady=(0, 2)
             )
+
+    def _toggle_advanced_debug(self):
+        if self.advanced_debug_var.get():
+            self.advanced_debug_card.pack(fill="x", pady=(0, 12))
+        else:
+            self.advanced_debug_card.pack_forget()
 
     def _refresh_screen_sync_layout_controls(self):
         for child in self.layout_frame.winfo_children():
@@ -487,22 +900,43 @@ class WizLightModernGUI(AnimationMixin):
             self.root.after_cancel(self._screen_sync_settings_save_id)
             self._screen_sync_settings_save_id = None
         settings = self.config.screen_sync
-        settings.mode = self.mode_menu.get().strip().lower()
+        settings.mode = self.sync_mode_labels.get(self.sync_mode_value.get(), "single")
         settings.monitor = self._monitor_label_to_index.get(self.monitor_menu.get(), settings.monitor)
         settings.fps = int(self.fps_value.get())
         settings.max_fps = int(self.fps_value.get())
-        settings.min_fps = int(self.min_fps_value.get())
+        settings.min_fps = min(max(8, int(self.fps_value.get()) // 2), int(self.fps_value.get()))
         settings.smoothing = float(self.smoothing_value.get())
         settings.color_boost = float(self.boost_value.get())
         settings.min_brightness = int(self.min_brightness_value.get())
-        settings.ignore_letterbox = bool(self.ignore_letterbox_var.get())
-        settings.color_algorithm = self.algorithm_menu.get().strip().lower()
+        settings.ignore_letterbox = True
+        settings.color_algorithm = "auto"
+        settings.source_color_space = self.color_source_labels.get(
+            self.color_source_value.get(),
+            "auto",
+        )
+        settings.sync_profile = self.sync_profile_labels.get(
+            self.sync_profile_value.get(),
+            "auto",
+        )
+        settings.brightness_mode = self.brightness_mode_labels.get(
+            self.brightness_mode_value.get(),
+            "follow",
+        )
+        settings.sync_brightness = int(self.sync_brightness_value.get())
+        settings.mixing_model = self.mixing_model_labels.get(
+            self.mixing_model_value.get(),
+            "heuristic",
+        )
+        settings.physical_color_trim = bool(self.physical_color_trim_var.get())
         settings.use_gpu = bool(self.use_gpu_var.get())
         settings.adaptive_fps = bool(self.adaptive_fps_var.get())
         settings.predictive_smoothing = bool(self.predictive_smoothing_var.get())
+        settings.keep_awake = bool(self.keep_awake_var.get())
         settings.bulb_layout = self._current_screen_layout()
         settings.__post_init__()
         self.config.save()
+        if hasattr(self, "header_monitor_var"):
+            self.header_monitor_var.set(f"Monitor: {self.monitor_menu.get()}")
         if self.screen_sync and self.screen_sync.is_running:
             self._schedule_screen_sync_restart()
 
@@ -510,6 +944,8 @@ class WizLightModernGUI(AnimationMixin):
         if self._screen_sync_settings_save_id:
             self.root.after_cancel(self._screen_sync_settings_save_id)
         self._screen_sync_settings_save_id = self.root.after(180, self._save_screen_sync_settings)
+        if self.screen_sync and self.screen_sync.is_running:
+            self._set_status("Restarting sync...")
 
     def _current_clap_config(self) -> ClapConfig:
         clap = self.config.clap
@@ -527,56 +963,190 @@ class WizLightModernGUI(AnimationMixin):
     def _schedule_screen_sync_restart(self):
         if self._screen_sync_reconfigure_id:
             self.root.after_cancel(self._screen_sync_reconfigure_id)
-        self._screen_sync_reconfigure_id = self.root.after(250, self._restart_screen_sync)
+        self._screen_sync_reconfigure_id = self.root.after(800, self._restart_screen_sync)
 
     def _restart_screen_sync(self):
         self._screen_sync_reconfigure_id = None
         if self.screen_sync and self.screen_sync.is_running:
+            self._set_status("Restarting sync...")
             self._stop_screen_sync(update_status=False)
             self._start_screen_sync()
 
     def _on_fps_change(self, value):
         self.fps_value.set(int(float(value)))
-        self.fps_label.configure(text=f"Max FPS: {self.fps_value.get()}")
+        self.fps_label.set(f"Responsiveness: {self.fps_value.get()} FPS")
         if self.min_fps_value.get() > self.fps_value.get():
             self.min_fps_value.set(self.fps_value.get())
-            self.min_fps_slider.set(self.min_fps_value.get())
-            self.min_fps_label.configure(text=f"Min FPS: {self.min_fps_value.get()}")
-        self._queue_screen_sync_settings_save()
-
-    def _on_min_fps_change(self, value):
-        self.min_fps_value.set(int(float(value)))
-        if self.min_fps_value.get() > self.fps_value.get():
-            self.min_fps_value.set(self.fps_value.get())
-            self.min_fps_slider.set(self.min_fps_value.get())
-        self.min_fps_label.configure(text=f"Min FPS: {self.min_fps_value.get()}")
         self._queue_screen_sync_settings_save()
 
     def _on_smoothing_change(self, value):
         self.smoothing_value.set(float(value))
-        self.smoothing_label.configure(text=f"Smoothing: {self.smoothing_value.get():.2f}")
+        self.smoothing_label.set(f"Smoothness: {self.smoothing_value.get():.2f}")
         self._queue_screen_sync_settings_save()
 
     def _on_boost_change(self, value):
         self.boost_value.set(float(value))
-        self.boost_label.configure(text=f"Color Boost: {self.boost_value.get():.2f}x")
+        self.boost_label.set(f"Color Punch: {self.boost_value.get():.2f}x")
         self._queue_screen_sync_settings_save()
 
     def _on_min_brightness_change(self, value):
         self.min_brightness_value.set(int(float(value)))
-        self.min_brightness_label.configure(text=f"Min Brightness: {self.min_brightness_value.get()}")
+        self.min_brightness_label.set(f"Dark Scene Floor: {self.min_brightness_value.get()}")
+        self._queue_screen_sync_settings_save()
+
+    def _brightness_mode_hint_text(self) -> str:
+        if self.brightness_mode_labels.get(self.brightness_mode_value.get(), "follow") == "follow":
+            return "Bulb brightness tracks the scene; true black turns the bulb off."
+        return "Brightness stays fixed; only the color follows the screen (black holds the last color)."
+
+    def _update_sync_brightness_state(self) -> None:
+        mode = self.brightness_mode_labels.get(self.brightness_mode_value.get(), "follow")
+        # Dark Scene Floor only feeds the follow-mode brightness curve; in
+        # constant mode dimming is pinned by the Constant Brightness slider
+        # and the floor has no effect, so disable it rather than leave a
+        # control that silently does nothing.
+        self.sync_brightness_slider.configure(state="normal" if mode == "constant" else "disabled")
+        self.min_brightness_slider.configure(state="normal" if mode == "follow" else "disabled")
+
+    def _on_brightness_mode_change(self, _value=None):
+        self.brightness_mode_hint.configure(text=self._brightness_mode_hint_text())
+        self._update_sync_brightness_state()
+        self._queue_screen_sync_settings_save()
+
+    def _on_sync_brightness_change(self, value):
+        self.sync_brightness_value.set(int(float(value)))
+        self.sync_brightness_label.set(
+            f"Constant Brightness: {round(self.sync_brightness_value.get() / 255 * 100)}%"
+        )
         self._queue_screen_sync_settings_save()
 
     def _on_layout_change(self, _ip: str):
         self._queue_screen_sync_settings_save()
 
+    def _sync_mode_hint_text(self) -> str:
+        if self.sync_mode_labels.get(self.sync_mode_value.get(), "single") == "zones":
+            return "Assign each bulb Left or Right below. Needs at least 2 bulbs in different zones."
+        return "One ambient color drives every configured bulb."
+
+    def _on_sync_mode_change(self, _value=None):
+        self.sync_mode_hint.configure(text=self._sync_mode_hint_text())
+        self._queue_screen_sync_settings_save()
+
+    def _mixing_model_hint_text(self) -> str:
+        if self.mixing_model_labels.get(self.mixing_model_value.get(), "heuristic") == "physical":
+            return (
+                "Solves the bulb's real LED colors instead of a fixed formula. "
+                "Not proven better -- try it live and compare, then switch back if you prefer Standard."
+            )
+        return "The proven default color mapping."
+
+    def _on_mixing_model_change(self, _value=None):
+        self.mixing_model_hint.configure(text=self._mixing_model_hint_text())
+        physical = self.mixing_model_labels.get(self.mixing_model_value.get()) == "physical"
+        self.physical_color_trim_checkbox.configure(state="normal" if physical else "disabled")
+        self._queue_screen_sync_settings_save()
+
     def _set_status(self, msg: str):
-        self.status_label.configure(text=msg)
+        if self.status_label.cget("text") != msg:
+            self.status_label.configure(text=msg)
+        if hasattr(self, "status_indicator"):
+            color = self._sync_status_color(msg)
+            if self.status_indicator.cget("fg_color") != color:
+                self.status_indicator.configure(fg_color=color)
+
+    def _export_diagnostics_report(self) -> None:
+        report = build_diagnostics_report(
+            platform="windows-desktop",
+            app_version="0.1.0",
+            bulbs=[
+                {"name": bulb.name, "ip": bulb.ip, "mac": bulb.mac}
+                for bulb in self.config.bulbs
+            ],
+            screen_sync_settings=self.config.screen_sync.__dict__,
+            runtime_stats=self.screen_sync.debug_snapshot if self.screen_sync else None,
+            notes=[
+                "WiZ local communication must be enabled on the trusted LAN.",
+                "Hardware color accuracy still requires the camera validation flow.",
+            ],
+        )
+        path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Export WizLight diagnostics",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json")],
+            initialfile="wizlight-diagnostics.json",
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(json.dumps(report, indent=2), encoding="utf-8")
+            self._set_status(f"Diagnostics exported: {path}")
+        except Exception as exc:
+            self._set_status(f"Diagnostics export failed: {exc}")
+
+    def _show_control_guide(self):
+        guide = ctk.CTkToplevel(self.root)
+        guide.title("Screen Sync Guide")
+        guide.geometry("460x430")
+        guide.transient(self.root)
+        guide.grab_set()
+
+        frame = ctk.CTkFrame(guide)
+        frame.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(frame, text="Controls Guide", font=("Segoe UI", 18, "bold")).pack(
+            anchor="w", padx=14, pady=(14, 10)
+        )
+        text = ctk.CTkTextbox(frame, wrap="word", height=280)
+        text.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        text.insert(
+            "1.0",
+            "Responsiveness\n"
+            "Higher FPS reacts faster to video changes but sends more network updates. "
+            "Use 24-28 for YouTube and movies; lower it if the bulb stutters.\n\n"
+            "Smoothness\n"
+            "Lower values are snappier. Higher values reduce flicker but can feel delayed.\n\n"
+            "Color Punch\n"
+            "Adds saturation for richer ambience. Too high can make skin tones and whites look artificial.\n\n"
+            "Dark Scene Floor\n"
+            "Keeps dark scenes visible on the bulb. Lower is more accurate for black scenes; "
+            "higher keeps the room from going too dim.\n\n"
+            "Fast GPU capture\n"
+            "Uses DXCam when it can target your selected monitor. It falls back to MSS capture automatically.\n\n"
+            "Monitor\n"
+            "Choose the display that contains Chrome/YouTube. The tray menu has the same monitor selector.",
+        )
+        text.configure(state="disabled")
+        ctk.CTkButton(frame, text="Close", command=guide.destroy).pack(fill="x", padx=14, pady=(0, 14))
 
     def _format_debug_color(self, color: Optional[tuple[int, int, int]]) -> str:
         if color is None:
             return "-"
         return f"RGB({color[0]}, {color[1]}, {color[2]})"
+
+    def _set_color_panel(self, panel, color: Optional[tuple[int, int, int]]):
+        swatch = "#000000" if color is None else f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
+        label = "RGB(-)" if color is None else self._format_debug_color(color)
+        if panel._swatch.cget("fg_color") != swatch:
+            panel._swatch.configure(fg_color=swatch)
+        if panel._label_var.get() != label:
+            panel._label_var.set(label)
+
+    def _set_metric(self, key: str, value: str):
+        variable = getattr(self, "_sync_metric_vars", {}).get(key)
+        if variable is not None and variable.get() != value:
+            variable.set(value)
+
+    def _set_sync_running_ui(self, running: bool):
+        if getattr(self, "_displayed_sync_running", None) == running:
+            return
+        if hasattr(self, "sync_primary_button"):
+            self.sync_primary_button.configure(
+                text="Stop Screen Sync" if running else "Start Screen Sync",
+                fg_color="#B91C1C" if running else ("#3B8ED0", "#1F6AA5"),
+            )
+        self._displayed_sync_running = running
+        if hasattr(self, "header_runtime_var"):
+            self.header_runtime_var.set("Sync: running" if running else "Sync: idle")
 
     def _refresh_screen_sync_debug(self):
         self._screen_sync_debug_id = None
@@ -587,8 +1157,15 @@ class WizLightModernGUI(AnimationMixin):
             self.screen_sync_debug_perf.set("FPS: -")
             self.screen_sync_debug_cadence.set("Cadence: -")
             self.screen_sync_debug_motion.set("Motion: -")
+            self.screen_sync_debug_settings.set("Settings: -")
             self.screen_sync_debug_error.set("")
             self.screen_sync_debug_preview.configure(fg_color="#000000")
+            self._set_color_panel(self.sync_target_preview, None)
+            self._set_color_panel(self.sync_output_preview, None)
+            for key in ("fps", "frame", "send", "motion", "capture"):
+                self._set_metric(key, "-")
+            self._set_metric("status", "Idle")
+            self._set_sync_running_ui(False)
             return
 
         snapshot = self.screen_sync.debug_snapshot
@@ -600,15 +1177,50 @@ class WizLightModernGUI(AnimationMixin):
         output = current_colors.get("all") or (
             average_colors(tuple(current_colors.values())) if current_colors else None
         )
+        if output is not None:
+            self._update_sync_preview(self.screen_sync, output)
 
+        status = snapshot.get("capture_status") or "OK"
+        # A dark scene and an inaccessible surface can both produce black.
+        if snapshot.get("capture_looks_black"):
+            status = (
+                "Capture looks black — the scene may be dark, "
+                "or this content may not be available for capture"
+            )
+        status_part = f" | {status}" if status != "OK" else ""
+        status_display = "Running" if status == "OK" else status
+        if getattr(self, "_live_details_open", True):
+            self._set_color_panel(self.sync_target_preview, target)
+            self._set_color_panel(self.sync_output_preview, output)
+            self._set_metric("fps", f"{snapshot['currentFps']}/{snapshot['requestedFps']}")
+            self._set_metric("frame", f"{snapshot['average_frame_time_ms']:.1f}")
+            self._set_metric("send", f"{snapshot['send_rate_hz']:.1f}" if snapshot["send_rate_hz"] > 0 else "warm")
+            self._set_metric("motion", f"{snapshot['motion_score']:.3f}")
+            self._set_metric("capture", snapshot["capture_method"].upper())
+            self._set_metric("status", status_display)
+        self._set_sync_running_ui(True)
+        if hasattr(self, "header_runtime_var"):
+            self.header_runtime_var.set(
+                f"{snapshot['capture_method'].upper()} | {snapshot['current_fps']} FPS | {snapshot['send_rate_hz']:.1f} Hz"
+            )
+        indicator_color = self._sync_status_color(status)
+        if self.status_indicator.cget("fg_color") != indicator_color:
+            self.status_indicator.configure(fg_color=indicator_color)
+        if not self.advanced_debug_var.get():
+            self._screen_sync_debug_id = self.root.after(350, self._refresh_screen_sync_debug)
+            return
         self.screen_sync_debug_runtime.set(
-            f"Runtime: {snapshot['capture_method'].upper()} | {snapshot['mode']}"
+            f"Runtime: {snapshot['capture_method'].upper()} | {snapshot['mode']}{status_part}"
         )
         self.screen_sync_debug_target.set(f"Target: {self._format_debug_color(target)}")
         self.screen_sync_debug_output.set(f"Output: {self._format_debug_color(output)}")
-        self.screen_sync_debug_perf.set(
-            f"FPS: {snapshot['current_fps']} | frame {snapshot['average_frame_time_ms']:.1f} ms"
-        )
+        perf_text = f"FPS: {snapshot['current_fps']} | frame {snapshot['average_frame_time_ms']:.1f} ms"
+        if snapshot.get("capture_time_ms") is not None:
+            perf_text += (
+                f" | capture {snapshot['capture_time_ms']:.1f} ms"
+                f" | processing {snapshot['processing_time_ms']:.1f} ms"
+            )
+        self.screen_sync_debug_perf.set(perf_text)
         if snapshot["send_rate_hz"] > 0:
             self.screen_sync_debug_cadence.set(
                 f"Cadence: {snapshot['send_rate_hz']:.1f} Hz | {snapshot['send_interval_ms']:.0f} ms | sends {snapshot['updates_sent']}"
@@ -617,26 +1229,85 @@ class WizLightModernGUI(AnimationMixin):
             self.screen_sync_debug_cadence.set(
                 f"Cadence: warming up | sends {snapshot['updates_sent']}"
             )
+        link_text = self._link_summary()
+        if link_text:
+            self.screen_sync_debug_cadence.set(f"{self.screen_sync_debug_cadence.get()} | {link_text}")
         self.screen_sync_debug_motion.set(
             f"Motion: {snapshot['motion_score']:.3f} | smooth {snapshot['smoothing_factor']:.2f} | predict {snapshot['prediction_weight']:.2f}"
+        )
+        mode_label = "follow" if snapshot.get("brightness_mode") == "follow" else "constant"
+        self.screen_sync_debug_settings.set(
+            f"Settings: boost {snapshot['effectiveColorBoost']:.2f}x | delta {snapshot['deltaThreshold']} | "
+            f"brightness {mode_label} {round(snapshot.get('output_brightness', 255) / 255 * 100)}%"
         )
         self.screen_sync_debug_error.set(
             f"Error: {snapshot['last_error']}" if snapshot["last_error"] else ""
         )
         if output is not None:
-            self.screen_sync_debug_preview.configure(
-                fg_color=f"#{output[0]:02x}{output[1]:02x}{output[2]:02x}"
-            )
+            preview_color = f"#{output[0]:02x}{output[1]:02x}{output[2]:02x}"
+            if self.screen_sync_debug_preview.cget("fg_color") != preview_color:
+                self.screen_sync_debug_preview.configure(fg_color=preview_color)
 
         self._screen_sync_debug_id = self.root.after(350, self._refresh_screen_sync_debug)
 
+    def _link_summary(self) -> str:
+        """One line per bulb on the low-latency link: delay, delivery, signal."""
+        transport = self._screen_sync_transport
+        stats = getattr(getattr(transport, "fast_sender", None), "link_stats", None) or []
+        parts = []
+        for link in stats:
+            if not link.get("reachable"):
+                gap = link.get("current_reply_gap_ms")
+                elapsed = f" for {gap / 1000:.1f}s" if gap is not None else ""
+                parts.append(f"{link['ip']}: no reply{elapsed}")
+                continue
+            text = f"{link['ip']}: {link['rtt_ms']:.0f} ms"
+            if link.get("awake_pct") is not None:
+                text += f", awake {link['awake_pct']:.0f}%"
+            if link.get("confirm_ms") is not None:
+                text += f", state confirmed in {link['confirm_ms']:.0f} ms ({link['confirmed']}/{link['updates']})"
+            if link.get("reply_gaps_over_1s"):
+                text += f", longest reply gap {link['max_reply_gap_ms'] / 1000:.1f}s"
+            if link.get("stale_events"):
+                text += f", stale recoveries {link['recoveries']}/{link['stale_events']}"
+            if link.get("rssi") is not None:
+                text += f", signal {link['rssi']} dBm"
+            parts.append(text)
+        return "Link " + "; ".join(parts) if parts else ""
+
     def _update_bulb_status(self):
+        has_bulbs = bool(self.config.bulbs)
         if self.config.bulbs:
             text = "\n".join([f"- {bulb.name} ({bulb.ip})" for bulb in self.config.bulbs])
             self.bulb_info.configure(text=text, text_color=("gray20", "gray80"))
         else:
             self.bulb_info.configure(text="No bulbs found", text_color="gray")
-        self._refresh_screen_sync_layout_controls()
+        if hasattr(self, "header_bulbs_var"):
+            self.header_bulbs_var.set(f"Bulbs: {len(self.config.bulbs)}")
+        if hasattr(self, "header_monitor_var"):
+            self.header_monitor_var.set(f"Monitor: {self.monitor_menu.get()}")
+        for attr in (
+            "sync_primary_button",
+            "screen_sync_switch",
+            "clap_switch",
+            "toggle_power_button",
+            "turn_off_button",
+            "brightness_slider",
+            "pick_color_button",
+            "preset_menu",
+            "temp_slider",
+            "remove_stale_button",
+        ):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                try:
+                    widget.configure(state="normal" if has_bulbs else "disabled")
+                except Exception:
+                    pass
+        if hasattr(self, "layout_frame"):
+            self._refresh_screen_sync_layout_controls()
+        if getattr(self, "_current_view", None) == "bulbs":
+            self._update_dashboard()
 
     def _discover_bulbs(self):
         self._set_status("Discovering...")
@@ -644,14 +1315,40 @@ class WizLightModernGUI(AnimationMixin):
         async def discover():
             try:
                 bulbs = await self.controller.discover()
-                for index, bulb in enumerate(bulbs, 1):
-                    self.config.add_bulb(bulb["ip"], f"Bulb {index}", bulb["mac"])
-                self.root.after(0, self._update_bulb_status)
+                self.config.add_discovered_bulbs(bulbs)
+                self.root.after(0, self._refresh_after_bulb_config_change)
                 self.root.after(0, lambda: self._set_status(f"Found {len(bulbs)} bulb(s)"))
             except Exception as exc:
-                self.root.after(0, lambda: self._set_status(f"Error: {exc}"))
+                message = f"Error: {exc}"
+                self.root.after(0, lambda msg=message: self._set_status(msg))
 
         self._run_async(discover())
+
+    def _add_bulb_by_ip(self):
+        """Add a bulb that discovery cannot see, after it answers at that address."""
+        text = self.add_bulb_entry.get().strip()
+        try:
+            ip = str(ipaddress.IPv4Address(text))
+        except ValueError:
+            self._set_status("Enter a valid IPv4 address, e.g. 192.168.1.20")
+            return
+        self._set_status(f"Checking {ip}...")
+
+        async def add():
+            try:
+                mac = await fetch_fresh_identity(self.controller, ip)
+            except Exception:
+                mac = None
+            if self._closing:
+                return
+            if mac is None:
+                self.root.after(0, lambda: self._set_status(f"No WiZ bulb answered at {ip}"))
+                return
+            self.config.add_bulb(ip, f"Bulb {len(self.config.bulbs) + 1}", mac, preserve_name=True)
+            self.root.after(0, self._refresh_after_bulb_config_change)
+            self.root.after(0, lambda: self._set_status(f"Added bulb at {ip}"))
+
+        self._run_async(add())
 
     def _remove_stale_bulbs(self):
         configured_ips = self._get_bulb_ips()
@@ -665,21 +1362,23 @@ class WizLightModernGUI(AnimationMixin):
             try:
                 stale_ips = await self.controller.find_stale_bulbs(configured_ips)
                 removed = self.config.remove_bulbs(stale_ips)
-                self.root.after(0, self._update_bulb_status)
+                self.root.after(0, self._refresh_after_bulb_config_change)
                 if removed:
                     self.root.after(0, lambda: self._set_status(f"Removed {removed} stale bulb(s)"))
                 else:
                     self.root.after(0, lambda: self._set_status("No stale bulbs found"))
             except Exception as exc:
-                self.root.after(0, lambda: self._set_status(f"Stale check failed: {exc}"))
+                message = f"Stale check failed: {exc}"
+                self.root.after(0, lambda msg=message: self._set_status(msg))
 
         self._run_async(prune())
 
-    def _turn_on(self):
-        ips = self._get_bulb_ips()
-        if ips:
-            self._run_async(self.controller.turn_on_all(ips))
-            self._set_status("Turned on")
+    def _refresh_after_bulb_config_change(self):
+        self._update_bulb_status()
+        targets = {(bulb.ip, mac_identity(bulb.mac)) for bulb in self.config.screen_sync_bulbs()}
+        if self.screen_sync_switch.get() and targets != getattr(self, "_sync_requested_targets", set()):
+            self._stop_screen_sync(update_status=False)
+            self._start_screen_sync()
 
     def _turn_off(self):
         ips = self._get_bulb_ips()
@@ -695,7 +1394,7 @@ class WizLightModernGUI(AnimationMixin):
 
     def _on_brightness_change(self, value):
         brightness = int(float(value))
-        self.brightness_label.configure(text=f"Brightness: {int((brightness / 255) * 100)}%")
+        self.brightness_label_var.set(f"Brightness: {int((brightness / 255) * 100)}%")
         if self._brightness_debounce_id:
             self.root.after_cancel(self._brightness_debounce_id)
 
@@ -704,7 +1403,7 @@ class WizLightModernGUI(AnimationMixin):
             if ips:
                 self._run_async(self.controller.turn_on_all(ips, brightness))
 
-        self._brightness_debounce_id = self.root.after(100, send)
+        self._brightness_debounce_id = self.root.after(140, send)
 
     def _pick_color(self):
         def on_color(r, g, b):
@@ -743,7 +1442,7 @@ class WizLightModernGUI(AnimationMixin):
 
     def _on_temp_change(self, value):
         kelvin = int(float(value))
-        self.temp_label.configure(text=f"Color Temp: {kelvin}K")
+        self.temp_label_var.set(f"Color Temperature: {kelvin}K")
         if self._temp_debounce_id:
             self.root.after_cancel(self._temp_debounce_id)
 
@@ -752,69 +1451,162 @@ class WizLightModernGUI(AnimationMixin):
             if ips:
                 self._run_async(self.controller.set_color_temp_all(ips, kelvin))
 
-        self._temp_debounce_id = self.root.after(100, send)
+        self._temp_debounce_id = self.root.after(160, send)
 
     def _start_screen_sync(self):
-        configured_ips = self._get_bulb_ips()
+        if self._closing or (self.screen_sync and self.screen_sync.is_running):
+            return
+        if getattr(self, "_sync_stop_future", None) is not None:
+            self._sync_restart_pending = True
+            self._set_status("Waiting for screen sync to stop...")
+            return
+        if getattr(self, "_bulb_recovery_token", None) is not None:
+            return
+        if (getattr(self, "_sync_start_future", None) is not None
+                or getattr(self, "_sync_launch_future", None) is not None):
+            return
+        bulbs = copy.deepcopy(self.config.screen_sync_bulbs())
+        if not bulbs:
+            self.screen_sync_switch.deselect()
+            self._set_sync_running_ui(False)
+            self.config.screen_sync.enabled = False
+            self.config.save()
+            self._set_status("Select at least one bulb in Bulbs to start screen sync")
+            return
+        configured_ips = [bulb.ip for bulb in bulbs]
+        self._sync_requested_targets = {(bulb.ip, mac_identity(bulb.mac)) for bulb in bulbs}
+        self._save_screen_sync_settings()
+        settings = copy.deepcopy(self.config.screen_sync)
+
+        async def prepare():
+            ips = await asyncio.wait_for(refresh_verified_targets(self.controller, bulbs), 6.0)
+            warning = None
+            if ips:
+                try:
+                    await asyncio.wait_for(prepare_screen_sync_mapping(self.controller, ips, settings), 8.0)
+                except Exception as exc:
+                    warning = str(exc) or type(exc).__name__
+            return ips, warning
+
         try:
-            ips = self._async_runner.run(
-                self.controller.refresh_screen_sync_targets(configured_ips),
-                timeout=6.0,
-            )
+            future = self._async_runner.submit(prepare())
         except Exception as exc:
             self.screen_sync_switch.deselect()
+            self._set_sync_running_ui(False)
+            self._set_status(f"Sync preflight failed: {exc}")
+            return
+        self._sync_start_future = future
+        self._set_status("Preparing screen sync...")
+        self._sync_start_poll_id = self.root.after(
+            50, lambda: self._poll_sync_start(future, configured_ips, settings)
+        )
+
+    def _poll_sync_start(self, future, configured_ips, settings):
+        self._sync_start_poll_id = None
+        if self._closing or getattr(self, "_sync_start_future", None) is not future:
+            return
+        if not future.done():
+            self._sync_start_poll_id = self.root.after(
+                50, lambda: self._poll_sync_start(future, configured_ips, settings)
+            )
+            return
+        self._sync_start_future = None
+        if not self.screen_sync_switch.get():
+            return
+        try:
+            ips, warning = future.result()
+        except Exception as exc:
+            self.screen_sync_switch.deselect()
+            self._set_sync_running_ui(False)
             self._set_status(f"Sync preflight failed: {exc}")
             return
         if not ips:
+            if any(mac_identity(bulb.mac) for bulb in self.config.screen_sync_bulbs()):
+                self._recover_sync_bulbs(target_ips=set(configured_ips))
+                return
             self.screen_sync_switch.deselect()
+            self._set_sync_running_ui(False)
             self.config.screen_sync.enabled = False
             self.config.save()
             self._set_status("No reachable bulbs available for screen sync")
             return
+        self._finish_sync_start(ips, configured_ips, settings, warning)
 
-        self._save_screen_sync_settings()
-        settings = self.config.screen_sync
-        try:
-            self._async_runner.run(
-                self.controller.prepare_screen_sync_mappers(ips),
-                timeout=8.0,
-            )
-        except Exception:
-            pass
+    def _finish_sync_start(self, ips, configured_ips, settings, warning=None):
+        # Zones need >=2 bulbs actually assigned to distinct regions; otherwise
+        # fall back to single-bulb ambient (effective_screen_sync_mode enforces
+        # this so a half-configured zone layout doesn't strand a bulb with no
+        # target region).
         active_regions = resolve_active_regions(settings.bulb_layout, ips)
         mode = effective_screen_sync_mode(settings.mode, active_regions)
-        self._screen_sync_dispatcher = CoalescingAsyncDispatcher(
-            self._async_runner.submit,
-            self.controller.set_screen_sync_map,
-        )
-        self._screen_sync_fast_sender = FastBulbSenderPool(
-            max_send_hz=min(28, max(12, settings.max_fps)),
-        )
+        bulb_layout = dict(settings.bulb_layout) if mode == "zones" else {}
+        engine_holder = {}
+        transport = None
 
         def on_color_change(colors_by_target):
-            bulb_colors = build_bulb_color_map(ips, colors_by_target, settings.mode, settings.bulb_layout)
+            engine = engine_holder.get("engine")
+            if self._closing or self.screen_sync is not engine or transport is None:
+                return
+            bulb_colors = build_bulb_color_map(ips, colors_by_target, mode, bulb_layout)
             if bulb_colors:
-                payloads = self.controller.map_screen_sync_payloads_cached(bulb_colors)
-                if self._screen_sync_fast_sender and len(payloads) == len(bulb_colors):
-                    self._screen_sync_fast_sender.send_payload_map(payloads)
-                elif self._screen_sync_dispatcher:
-                    self._screen_sync_dispatcher.submit(bulb_colors)
-            preview = average_colors(tuple(colors_by_target.values()))
-            self.root.after(
-                0,
-                lambda: self.color_preview.configure(
-                    fg_color=f"#{preview[0]:02x}{preview[1]:02x}{preview[2]:02x}"
+                # Brightness rides the setPilot dimming field so hue is always
+                # rendered at full LED drive (colors are value-normalized by
+                # the engine); read it at send time from the engine. In zone
+                # mode each bulb dims with its own part of the picture.
+                brightness = brightness_for_bulbs(engine, ips, mode, bulb_layout) if engine else None
+                transport.send(bulb_colors, brightness)
+
+        try:
+            transport = ScreenSyncTransport(
+                self.controller,
+                self._async_runner.submit,
+                FastBulbSenderPool(
+                    max_send_hz=min(28, max(12, settings.max_fps)), prewarm_ips=ips,
+                    keep_awake=bool(getattr(settings, "keep_awake", False)),
                 ),
             )
-
-        self.screen_sync = OptimizedScreenSync(
-            on_color_change=on_color_change,
-            config=build_optimized_capture_config(settings, active_regions),
+            self._screen_sync_transport = transport
+            self.screen_sync = OptimizedScreenSync(
+                on_color_change=on_color_change,
+                config=build_optimized_capture_config(settings, active_regions),
+            )
+            engine_holder["engine"] = self.screen_sync
+            future = WizLightModernGUI._run_sync_worker(self.screen_sync.start)
+        except Exception as exc:
+            self._handle_sync_launch_error(exc)
+            return
+        self._sync_launch_future = future
+        self._sync_launch_poll_id = self.root.after(
+            25, self._poll_sync_launch, future, ips, configured_ips, settings, mode, warning,
         )
-        self.screen_sync.start()
+
+    def _handle_sync_launch_error(self, exc):
+        self._stop_screen_sync(update_status=False)
+        self.screen_sync_switch.deselect()
+        self.config.screen_sync.enabled = False
+        self.config.save()
+        self._set_status(f"Sync startup failed: {exc}")
+
+    def _poll_sync_launch(self, future, ips, configured_ips, settings, mode, warning):
+        self._sync_launch_poll_id = None
+        if getattr(self, "_sync_launch_future", None) is not future:
+            return
+        if not future.done():
+            self._sync_launch_poll_id = self.root.after(
+                25, self._poll_sync_launch, future, ips, configured_ips, settings, mode, warning,
+            )
+            return
+        self._sync_launch_future = None
+        try:
+            future.result()
+        except Exception as exc:
+            self._handle_sync_launch_error(exc)
+            return
+        self._set_sync_running_ui(True)
         if self._screen_sync_debug_id:
             self.root.after_cancel(self._screen_sync_debug_id)
         self._refresh_screen_sync_debug()
+        self._schedule_link_check()
 
         profile = "cinematic single" if mode == "single" and settings.color_algorithm == "auto" else settings.color_algorithm.upper()
         mapping = self.controller.summarize_screen_sync_mapping(ips)
@@ -822,32 +1614,264 @@ class WizLightModernGUI(AnimationMixin):
         if mapping:
             runtime = f"{runtime} / {mapping}"
         skipped = len(configured_ips) - len(ips)
-        if mode == "zones":
-            self._set_status(
-                f"Screen sync ON ({len(active_regions)} zones, {runtime}{', skipped ' + str(skipped) + ' stale bulb(s)' if skipped else ''})"
+        # Follow mode switches the bulb off on black; coming back then costs
+        # the bulb's own fade-in, which only the WiZ app can change.
+        fade_ms = self.controller.max_fade_ms(ips) if settings.brightness_mode == "follow" else 0
+        if not isinstance(fade_ms, int):
+            fade_ms = 0
+        self._set_status(
+            f"Screen sync ON ({runtime}{', skipped ' + str(skipped) + ' stale bulb(s)' if skipped else ''})"
+            + (f" | profile setup incomplete: {warning}" if warning else "")
+            + (
+                f" | bulb fade is {fade_ms} ms: set Fade in/out to 0 in the WiZ app for faster returns from black"
+                if fade_ms >= 100 else ""
             )
-        elif settings.mode == "zones":
-            self._set_status(
-                f"Screen sync ON (single fallback until 2+ zones are assigned, {runtime}{', skipped ' + str(skipped) + ' stale bulb(s)' if skipped else ''})"
-            )
+        )
+        missing = set(configured_ips) - set(ips)
+        self._sync_active_ips = set(ips)
+        self._sync_missing_ips = set(missing)
+        if missing:
+            self._recover_sync_bulbs(background=True, target_ips=missing)
         else:
-            self._set_status(
-                f"Screen sync ON ({runtime}{', skipped ' + str(skipped) + ' stale bulb(s)' if skipped else ''})"
+            self._schedule_bulb_recovery_monitor()
+
+    def _recover_sync_bulbs(self, *, background=False, target_ips=None):
+        """Search in the background and verify matching saved devices."""
+        token = object()
+        self._bulb_recovery_token = token
+        bulbs = tuple(self.config.bulbs)
+        engine = self.screen_sync if background else None
+        if not background:
+            self._set_status("Searching for saved lights on the local network...")
+
+        async def recover():
+            try:
+                result = await recover_saved_bulbs(self.controller, bulbs, target_ips=target_ips)
+                message = None
+            except Exception as exc:
+                result, message = [], str(exc)
+            if not self._closing:
+                self.root.after(0, lambda: self._finish_bulb_recovery(token, result, message, engine))
+
+        self._run_async(recover())
+
+    def _finish_bulb_recovery(self, token, recovered, error, engine=None):
+        if self._closing or getattr(self, "_bulb_recovery_token", None) is not token:
+            return
+        self._bulb_recovery_token = None
+        if not self.screen_sync_switch.get():
+            return
+        if engine is not None and self.screen_sync is not engine:
+            return
+        moved = self.config.reassign_bulb_addresses(
+            [(item.old_ip, item.new_ip, item.mac) for item in recovered]
+        )
+        if moved:
+            self._update_bulb_status()
+            if engine is not None:
+                self._stop_screen_sync(update_status=False)
+            self._start_screen_sync()
+            return
+        if engine is not None:
+            self._schedule_bulb_recovery_monitor()
+            return
+        self.screen_sync_switch.deselect()
+        self._set_sync_running_ui(False)
+        self.config.screen_sync.enabled = False
+        self.config.save()
+        self._set_status(f"Light search failed: {error}" if error else "No reachable saved lights found")
+
+    def _schedule_bulb_recovery_monitor(self):
+        if self._closing or not self.screen_sync or not self.screen_sync.is_running:
+            return
+        if getattr(self, "_bulb_recovery_monitor_id", None) is None:
+            self._bulb_recovery_monitor_id = self.root.after(30000, self._poll_sync_bulbs)
+
+    def _schedule_link_check(self):
+        if self._closing or not self.screen_sync or not self.screen_sync.is_running:
+            return
+        if getattr(self, "_link_check_id", None) is None:
+            self._link_check_id = self.root.after(LINK_CHECK_INTERVAL_MS, self._check_link_silence)
+
+    def _check_link_silence(self):
+        """Start the address poll early when the keep-awake link loses a bulb."""
+        self._link_check_id = None
+        engine = self.screen_sync
+        if self._closing or not engine or not engine.is_running:
+            return
+        transport = getattr(self, "_screen_sync_transport", None)
+        stats = getattr(getattr(transport, "fast_sender", None), "link_stats", None) or []
+        silent = set()
+        for link in stats:
+            seconds = link.get("silent_for_s")
+            if seconds is not None and seconds >= LINK_EARLY_RECOVERY_S:
+                silent.add(link.get("ip"))
+        alerted = getattr(self, "_link_alerted_ips", set())
+        # A bulb that answered again starts a new outage.
+        alerted &= silent
+        new = silent - alerted
+        if new and getattr(self, "_bulb_recovery_token", None) is None:
+            alerted |= new
+            monitor = getattr(self, "_bulb_recovery_monitor_id", None)
+            if monitor is not None:
+                self.root.after_cancel(monitor)
+                self._bulb_recovery_monitor_id = None
+            self._link_alerted_ips = alerted
+            self._poll_sync_bulbs()
+        else:
+            self._link_alerted_ips = alerted
+        self._schedule_link_check()
+
+    def _poll_sync_bulbs(self):
+        self._bulb_recovery_monitor_id = None
+        engine = self.screen_sync
+        if self._closing or not engine or not engine.is_running:
+            return
+        bulbs = tuple(self.config.screen_sync_bulbs())
+
+        async def poll():
+            results = await asyncio.gather(
+                *(fetch_fresh_identity(self.controller, bulb.ip) for bulb in bulbs),
+                return_exceptions=True,
             )
+            missing = {
+                bulb.ip for bulb, result in zip(bulbs, results)
+                if mac_identity(bulb.mac) and (
+                    not isinstance(result, str) or result != mac_identity(bulb.mac)
+                )
+            }
+            if not self._closing:
+                self.root.after(0, lambda: self._finish_sync_bulb_poll(engine, missing))
+
+        self._run_async(poll())
+
+    def _finish_sync_bulb_poll(self, engine, missing):
+        if self._closing or self.screen_sync is not engine or not engine.is_running:
+            return
+        previous_missing = getattr(self, "_sync_missing_ips", set())
+        returned = previous_missing - missing
+        self._sync_missing_ips = set(missing)
+        if returned - getattr(self, "_sync_active_ips", set()):
+            self._stop_screen_sync(update_status=False)
+            self._start_screen_sync()
+            return
+        if returned:
+            # A reconnected light may have reverted to its own saved scene.
+            # Force a fresh update even when the screen colour has not changed.
+            with engine._stats_lock:
+                engine._last_sent_colors.clear()
+        if missing and getattr(self, "_bulb_recovery_token", None) is None:
+            self._recover_sync_bulbs(background=True, target_ips=missing)
+        else:
+            self._schedule_bulb_recovery_monitor()
+
+    def _update_sync_preview(self, engine, preview):
+        if not self._closing and self.screen_sync is engine:
+            color = f"#{preview[0]:02x}{preview[1]:02x}{preview[2]:02x}"
+            if self.color_preview.cget("fg_color") != color:
+                self.color_preview.configure(fg_color=color)
+
+    @staticmethod
+    def _run_sync_worker(operation, *args):
+        future = Future()
+
+        def run():
+            try:
+                operation(*args)
+            except Exception as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(None)
+
+        Thread(target=run, name="WizLight screen sync lifecycle", daemon=True).start()
+        return future
+
+    @staticmethod
+    def _release_screen_sync(engine, transport, launching):
+        if launching is not None:
+            # Release partially initialized resources even when startup failed.
+            try:
+                launching.result()
+            except Exception:
+                pass
+        try:
+            if engine is not None:
+                engine.stop()
+        finally:
+            if transport is not None:
+                transport.close()
+
+    def _poll_sync_stop(self, future):
+        self._sync_stop_poll_id = None
+        if getattr(self, "_sync_stop_future", None) is not future:
+            return
+        if not future.done():
+            self._sync_stop_poll_id = self.root.after(25, self._poll_sync_stop, future)
+            return
+        self._sync_stop_future = None
+        restart, self._sync_restart_pending = self._sync_restart_pending, False
+        try:
+            future.result()
+        except Exception as exc:
+            if restart:
+                self.screen_sync_switch.deselect()
+                self.config.screen_sync.enabled = False
+                self.config.save()
+            self._set_status(f"Sync cleanup failed: {exc}")
+            return
+        if restart:
+            self._start_screen_sync()
 
     def _stop_screen_sync(self, update_status: bool = True):
-        if self.screen_sync:
-            self.screen_sync.stop()
-            self.screen_sync = None
-        if self._screen_sync_dispatcher:
-            self._screen_sync_dispatcher.close()
-            self._screen_sync_dispatcher = None
-        if self._screen_sync_fast_sender:
-            self._screen_sync_fast_sender.close()
-            self._screen_sync_fast_sender = None
+        self._sync_restart_pending = False
+        launching = getattr(self, "_sync_launch_future", None)
+        self._sync_launch_future = None
+        launch_poll_id = getattr(self, "_sync_launch_poll_id", None)
+        if launch_poll_id is not None:
+            self.root.after_cancel(launch_poll_id)
+            self._sync_launch_poll_id = None
+        self._bulb_recovery_token = None
+        future = getattr(self, "_sync_start_future", None)
+        self._sync_start_future = None
+        if future is not None:
+            future.cancel()
+        poll_id = getattr(self, "_sync_start_poll_id", None)
+        if poll_id is not None:
+            self.root.after_cancel(poll_id)
+            self._sync_start_poll_id = None
+        monitor = getattr(self, "_bulb_recovery_monitor_id", None)
+        if monitor is not None:
+            self.root.after_cancel(monitor)
+            self._bulb_recovery_monitor_id = None
+        link_check = getattr(self, "_link_check_id", None)
+        if link_check is not None:
+            self.root.after_cancel(link_check)
+            self._link_check_id = None
+        self._link_alerted_ips = set()
+        engine, self.screen_sync = self.screen_sync, None
+        transport, self._screen_sync_transport = self._screen_sync_transport, None
         if self._screen_sync_debug_id:
             self.root.after_cancel(self._screen_sync_debug_id)
             self._screen_sync_debug_id = None
+        stopping = getattr(self, "_sync_stop_future", None)
+        if self._closing:
+            poll_id = getattr(self, "_sync_stop_poll_id", None)
+            if poll_id is not None:
+                self.root.after_cancel(poll_id)
+                self._sync_stop_poll_id = None
+            if stopping is not None:
+                self._sync_stop_future = None
+                stopping.result()
+            WizLightModernGUI._release_screen_sync(engine, transport, launching)
+            return
+        if engine is not None or transport is not None:
+            stopping = WizLightModernGUI._run_sync_worker(
+                WizLightModernGUI._release_screen_sync, engine, transport, launching,
+            )
+            self._sync_stop_future = stopping
+            # Only Tk's thread schedules and handles the completion callback.
+            self._sync_stop_poll_id = self.root.after(25, self._poll_sync_stop, stopping)
+        self._set_sync_running_ui(False)
         self._refresh_screen_sync_debug()
         if update_status:
             self._set_status("Screen sync OFF")
@@ -859,6 +1883,17 @@ class WizLightModernGUI(AnimationMixin):
             self._start_screen_sync()
         else:
             self._stop_screen_sync()
+
+    def _toggle_screen_sync_from_primary(self):
+        if ((self.screen_sync and self.screen_sync.is_running)
+                or getattr(self, "_sync_start_future", None) is not None
+                or getattr(self, "_sync_launch_future", None) is not None
+                or getattr(self, "_sync_restart_pending", False)
+                or getattr(self, "_bulb_recovery_token", None) is not None):
+            self.screen_sync_switch.deselect()
+        else:
+            self.screen_sync_switch.select()
+        self._toggle_screen_sync()
 
     def _toggle_clap_detection(self):
         self.config.clap.enabled = bool(self.clap_switch.get())
@@ -880,7 +1915,15 @@ class WizLightModernGUI(AnimationMixin):
                 on_clap=on_clap,
                 config=self._current_clap_config(),
             )
-            self.clap_detector.start()
+            try:
+                self.clap_detector.start()
+            except Exception as exc:
+                self.clap_detector = None
+                self.clap_switch.deselect()
+                self.config.clap.enabled = False
+                self.config.save()
+                self._set_status(f"Microphone could not start: {exc}")
+                return
             mode = "double clap" if self.config.clap.double_clap else "single clap"
             self._set_status(f"Clap detection ON ({mode})")
         else:
@@ -891,42 +1934,67 @@ class WizLightModernGUI(AnimationMixin):
     
     # === View Switching ===
     
+    def _scroll_to_sync_settings(self):
+        self._switch_view("sync")
+        self.root.update_idletasks()
+        canvas = self._controls_frame._parent_canvas
+        bounds = canvas.bbox("all")
+        if bounds and bounds[3] > 0:
+            canvas.yview_moveto(self._sync_settings_card.winfo_y() / bounds[3])
+            self._controls_frame._queue_canvas_repaint()
+
     def _switch_view(self, view: str):
-        """Switch between controls and dashboard views."""
+        """Switch between primary app sections."""
         if view == self._current_view:
             return
-        
+
+        previous_view = self._current_view
+        if previous_view:
+            self._view_buttons[previous_view].configure(
+                fg_color="transparent", text_color="#A5B7CF",
+            )
+
         self._current_view = view
-        
-        if view == "controls":
-            self._dashboard_frame.pack_forget()
-            self._controls_frame.pack(fill="both", expand=True)
-            self._controls_btn.configure(fg_color=("#3B8ED0", "#1F6AA5"))
-            self._dashboard_btn.configure(fg_color="transparent")
-            if self._dashboard:
-                self._dashboard.stop_auto_refresh()
-        else:
-            self._controls_frame.pack_forget()
-            self._dashboard_frame.pack(fill="both", expand=True)
-            self._controls_btn.configure(fg_color="transparent")
-            self._dashboard_btn.configure(fg_color=("#3B8ED0", "#1F6AA5"))
+        title, subtitle = self._page_labels[view]
+        self._page_title_var.set(title)
+        self._page_subtitle_var.set(subtitle)
+
+        self._view_buttons[view].configure(fg_color="#244D7B", text_color="#FFFFFF")
+        self._view_frames[view]._parent_frame.tkraise()
+
+        if view == "bulbs":
             self._update_dashboard()
+        elif self._dashboard:
+            self._dashboard.stop_auto_refresh()
     
     def _update_dashboard(self):
         """Update dashboard with current bulbs."""
         if self._dashboard:
             bulbs = [
-                BulbInfo(ip=b.ip, name=b.name)
+                BulbInfo(ip=b.ip, name=b.name, screen_sync_enabled=b.screen_sync_enabled)
                 for b in self.config.bulbs
             ]
-            self._dashboard.set_bulbs(bulbs)
             self._dashboard.start_auto_refresh(interval_ms=5000)
+            self._dashboard.set_bulbs(bulbs)
     
     def _on_bulb_select(self, ip: str):
         """Handle bulb selection from dashboard."""
-        # Switch to controls view and scroll to bulb
-        self._switch_view("controls")
+        self._switch_view("lights")
         self._set_status(f"Selected: {ip}")
+
+    def _set_bulb_screen_sync(self, ip: str, enabled: bool):
+        if not self.config.set_bulb_screen_sync(ip, enabled):
+            return
+        if self._dashboard:
+            self._dashboard.set_screen_sync_enabled(ip, enabled)
+        if self.screen_sync_switch.get():
+            self._stop_screen_sync(update_status=False)
+            self._start_screen_sync()
+
+    def _exclude_bulb_before_power_off(self, ip: str):
+        if self.screen_sync_switch.get():
+            self._set_bulb_screen_sync(ip, False)
+        return getattr(self, "_sync_stop_future", None)
     
     # === System Tray ===
     
@@ -937,18 +2005,105 @@ class WizLightModernGUI(AnimationMixin):
         
         try:
             self._tray = SystemTrayManager(
-                on_show=self._show_from_tray,
-                on_quit=self._quit_app,
-                on_toggle=self._toggle,
-                on_turn_on=self._turn_on,
-                on_turn_off=self._turn_off,
-                on_preset=self._apply_preset,
+                on_show=lambda: self.root.after(0, self._show_from_tray),
+                on_quit=lambda: self.root.after(0, self._quit_app),
+                on_toggle=lambda: self.root.after(0, self._toggle),
+                on_toggle_screen_sync=lambda: self.root.after(0, self._toggle_screen_sync_from_tray),
+                on_toggle_clap=lambda: self.root.after(0, self._toggle_clap_from_tray),
+                on_brightness=lambda value: self.root.after(0, lambda v=value: self._set_brightness_quick(v)),
+                on_color_temp=lambda value: self.root.after(0, lambda v=value: self._set_temp_quick(v)),
+                on_monitor=lambda index: self.root.after(0, lambda idx=index: self._set_monitor_from_tray(idx)),
+                on_manage_monitors=lambda: self.root.after(0, self._open_monitor_manager),
+                on_preset=lambda preset: self.root.after(0, lambda name=preset: self._apply_preset(name)),
                 presets=list(PRESETS.keys()),
+                monitors=self._monitor_options,
+                icon_path=self._asset_path("packaging", "assets", "wizlight_icon.png"),
             )
             self._tray.start()
         except Exception as e:
             print(f"System tray init failed: {e}")
             self._tray = None
+
+    def _toggle_screen_sync_from_tray(self):
+        if self.screen_sync and self.screen_sync.is_running:
+            self.screen_sync_switch.deselect()
+            self._toggle_screen_sync()
+        else:
+            self.screen_sync_switch.select()
+            self._toggle_screen_sync()
+
+    def _toggle_clap_from_tray(self):
+        if self.clap_detector and self.clap_detector.is_running:
+            self.clap_switch.deselect()
+            self._toggle_clap_detection()
+        else:
+            self.clap_switch.select()
+            self._toggle_clap_detection()
+
+    def _set_brightness_quick(self, brightness: int):
+        brightness = max(0, min(255, int(brightness)))
+        self.brightness_slider.set(brightness)
+        self._on_brightness_change(brightness)
+        self._set_status(f"Brightness: {int((brightness / 255) * 100)}%")
+
+    def _set_temp_quick(self, kelvin: int):
+        kelvin = max(2200, min(6500, int(kelvin)))
+        self.temp_slider.set(kelvin)
+        self._on_temp_change(kelvin)
+        self._set_status(f"Color temperature: {kelvin}K")
+
+    def _set_monitor_from_tray(self, monitor_index: int):
+        selected = next(
+            (
+                str(option["label"])
+                for option in self._monitor_options
+                if int(option["index"]) == int(monitor_index)
+            ),
+            None,
+        )
+        if selected is None:
+            self._set_status("Monitor is no longer available")
+            return
+        self.monitor_menu.set(selected)
+        self._save_screen_sync_settings()
+        self._set_status(f"Screen sync monitor: {selected}")
+
+    def _open_monitor_manager(self):
+        self._show_from_tray()
+        guide = ctk.CTkToplevel(self.root)
+        guide.title("Monitor Selection")
+        guide.geometry("430x260")
+        guide.transient(self.root)
+        guide.grab_set()
+
+        frame = ctk.CTkFrame(guide)
+        frame.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(frame, text="Screen Sync Monitor", font=("Segoe UI", 18, "bold")).pack(
+            anchor="w", padx=14, pady=(14, 8)
+        )
+        ctk.CTkLabel(
+            frame,
+            text="Choose the display that contains Chrome/YouTube. This is the same monitor used by screen sync.",
+            wraplength=360,
+            justify="left",
+            text_color=("gray35", "gray70"),
+        ).pack(anchor="w", padx=14, pady=(0, 12))
+        selector = ctk.CTkOptionMenu(
+            frame,
+            values=[str(option["label"]) for option in self._monitor_options],
+        )
+        selector.set(self.monitor_menu.get())
+        selector.pack(fill="x", padx=14, pady=(0, 12))
+
+        def apply_selection():
+            self.monitor_menu.set(selector.get())
+            self._save_screen_sync_settings()
+            self._set_status(f"Screen sync monitor: {selector.get()}")
+            guide.destroy()
+
+        ctk.CTkButton(frame, text="Use This Monitor", command=apply_selection).pack(
+            fill="x", padx=14, pady=(0, 14)
+        )
     
     def _minimize_to_tray(self):
         """Minimize window to system tray."""
@@ -970,9 +2125,12 @@ class WizLightModernGUI(AnimationMixin):
         self._on_close()
 
     def _on_close(self):
+        if self._closing:
+            return
         # If minimized to tray, just hide
         if self._tray and self._tray.is_running and self._minimized_to_tray:
             return
+        self._closing = True
         
         # Stop tray
         if self._tray:
@@ -982,8 +2140,10 @@ class WizLightModernGUI(AnimationMixin):
         if self._dashboard:
             self._dashboard.stop_auto_refresh()
         
-        if self.screen_sync:
-            self.screen_sync.stop()
+        try:
+            self._stop_screen_sync(update_status=False)
+        except Exception as exc:
+            print(f"Sync cleanup failed: {exc}")
         if self.clap_detector:
             self.clap_detector.stop()
         if self._brightness_debounce_id:
@@ -1006,8 +2166,10 @@ class WizLightModernGUI(AnimationMixin):
             self._async_runner.run(self.controller.close_async(), timeout=2.0)
         finally:
             gc.collect()
-            self._async_runner.shutdown()
-            self.root.destroy()
+            try:
+                self._async_runner.shutdown()
+            finally:
+                self.root.destroy()
 
     def run(self):
         self.root.mainloop()

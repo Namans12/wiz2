@@ -37,6 +37,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ip", help="Bulb IP. Defaults to the first reachable configured bulb.")
     parser.add_argument("--camera", type=int, default=0, help="OpenCV camera index.")
     parser.add_argument(
+        "--exposure",
+        type=float,
+        default=None,
+        help="Lock manual exposure to this value (UVC log2 scale, e.g. -2). "
+        "Omit to leave exposure on auto. Locking is strongly recommended so "
+        "auto-exposure/white-balance don't re-tint measurements.",
+    )
+    parser.add_argument(
+        "--no-lock-wb",
+        action="store_true",
+        help="Leave white balance on auto (default: lock it, which needs a UVC webcam).",
+    )
+    parser.add_argument(
         "--levels",
         default="0,96,176,255",
         help="Comma-separated RGB levels for the calibration lattice.",
@@ -118,11 +131,34 @@ def parse_roi(raw: Optional[str]) -> Optional[tuple[int, int, int, int]]:
     return (x, y, width, height)
 
 
-def open_camera(camera_index: int) -> cv2.VideoCapture:
+def open_camera(
+    camera_index: int,
+    lock_wb: bool = True,
+    exposure: Optional[float] = None,
+) -> cv2.VideoCapture:
     camera = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     if not camera.isOpened():
         camera.release()
         raise RuntimeError(f"Could not open camera index {camera_index}")
+    # Locking WB + exposure is essential: with auto on, the camera re-tints
+    # and re-brightens the whole frame per color, corrupting every reading.
+    if lock_wb:
+        ok = camera.set(cv2.CAP_PROP_AUTO_WB, 0)
+        if not ok:
+            print("WARNING: camera refused to lock white balance (auto-WB still "
+                  "on). Calibration accuracy will suffer — use a UVC webcam.")
+    else:
+        print("WARNING: automatic white balance may change during measurements; "
+              "the resulting calibration may be inaccurate.")
+    if exposure is not None:
+        if not camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25):  # manual mode (DSHOW)
+            print("WARNING: camera refused manual exposure mode; exposure may "
+                  "change during measurements.")
+        if not camera.set(cv2.CAP_PROP_EXPOSURE, float(exposure)):
+            print(f"WARNING: camera refused manual exposure {exposure}.")
+    else:
+        print("WARNING: exposure was not locked; automatic exposure may change "
+              "during measurements. Specify --exposure for a supported camera.")
     return camera
 
 
@@ -151,7 +187,19 @@ def frame_has_signal(
 
     region = region.astype(np.float32)
     mean_value = float(region.mean())
-    nonzero_ratio = float((region > 8.0).any(axis=2).mean())
+    visible = (region > 8.0).any(axis=2)
+    nonzero_ratio = float(visible.mean())
+    if roi is None and 0 < nonzero_ratio < 0.015:
+        # Windows' phone-as-webcam placeholder can be a small white spinner
+        # on a black background, which otherwise looks like a valid image.
+        ys, xs = np.nonzero(visible)
+        height, width = region.shape[:2]
+        centered = (xs.min() >= width * 0.30 and xs.max() < width * 0.70
+                    and ys.min() >= height * 0.30 and ys.max() < height * 0.70)
+        colors = region[visible]
+        nearly_gray = float((colors.max(axis=1) - colors.min(axis=1)).mean()) < 8.0
+        if centered and nearly_gray:
+            return False
     return mean_value >= mean_threshold or nonzero_ratio >= nonzero_threshold
 
 
@@ -495,7 +543,7 @@ def main() -> int:
             print(f"Warning: could not read the current bulb state ({exc}); skipping state restore.")
         mapper = BulbGamutMapper(profile)
 
-        camera = open_camera(args.camera)
+        camera = open_camera(args.camera, lock_wb=not args.no_lock_wb, exposure=args.exposure)
 
         print(f"Calibrating bulb {target_ip} ({profile.model_name or 'unknown model'})")
         print(f"Calibration key: {profile.mac or target_ip}")

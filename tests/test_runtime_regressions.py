@@ -1,0 +1,692 @@
+"""Runtime regressions using synthetic frames and fake sockets, never devices."""
+
+import asyncio
+import json
+import threading
+import time
+
+import numpy as np
+import pytest
+
+from src.core.async_runtime import BackgroundAsyncLoop
+from src.features import fast_udp_sender as udp
+from src.features import screen_sync_v2 as sync_module
+from src.features.screen_sync_v2 import OptimizedCaptureConfig, OptimizedScreenSync
+
+
+@pytest.fixture(autouse=True)
+def use_sleep_pacer(monkeypatch):
+    """Keep synthetic-clock sync tests independent of the Windows timer."""
+    class SleepPacer:
+        def sleep(self, seconds):
+            sync_module.time.sleep(seconds)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(sync_module, "FramePacer", SleepPacer)
+
+
+def test_failed_microphone_start_closes_stream_and_resets_state(monkeypatch):
+    from src.features import clap_detector
+    from unittest.mock import Mock
+    stream = Mock()
+    stream.start.side_effect = RuntimeError("permission denied")
+    monkeypatch.setattr(clap_detector.sd, "InputStream", lambda **kwargs: stream)
+    detector = clap_detector.ClapDetector(lambda: None)
+    with pytest.raises(RuntimeError, match="permission denied"):
+        detector.start()
+    assert not detector.is_running
+    assert detector._stream is None
+    stream.close.assert_called_once()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_packet_cache_keeps_rgbw_brightness_separate_from_rgbcw(reverse):
+    udp._ENCODE_CACHE.clear()
+    requests = [((8, 16, 24, 32), 102), ((8, 16, 24, 32, 40), None)]
+    if reverse:
+        requests.reverse()
+    decoded = {
+        len(channels): json.loads(udp.encode_set_pilot_payload(channels, brightness))["params"]
+        for channels, brightness in requests
+    }
+    assert decoded[4]["c"] == 0
+    assert decoded[4]["w"] == 32
+    assert decoded[4]["dimming"] == 40
+    assert decoded[5]["c"] == 32
+    assert decoded[5]["w"] == 40
+    assert "dimming" not in decoded[5]
+
+
+@pytest.mark.parametrize("channels", [(123, 5, 0, 17), (1, 2, 3, 4, 5), (0, 0, 0, 0)])
+def test_fast_sender_preserves_mapper_channel_values(channels):
+    params = json.loads(udp.encode_set_pilot_payload(channels))["params"]
+    actual = ((params["r"], params["g"], params["b"], params["w"])
+              if len(channels) == 4 else
+              (params["r"], params["g"], params["b"], params["c"], params["w"]))
+    assert actual == channels
+    assert params["state"] == any(channels)
+
+
+def test_shutdown_cancels_tasks_and_runs_finally_without_separate_cancel():
+    runner = BackgroundAsyncLoop()
+    entered, cleaned = threading.Event(), threading.Event()
+
+    async def pending():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+
+    future = runner.submit(pending())
+    assert entered.wait(2)
+    runner.shutdown()
+    runner.shutdown()
+    assert cleaned.is_set()
+    assert future.cancelled()
+    assert runner._loop.is_closed()
+    assert not runner._thread.is_alive()
+
+
+def test_rejected_coroutine_is_closed_after_shutdown():
+    runner = BackgroundAsyncLoop()
+    runner.shutdown()
+    coro = asyncio.sleep(0)
+    with pytest.raises(RuntimeError, match="closed"):
+        runner.submit(coro)
+    assert coro.cr_frame is None
+
+
+def test_shutdown_from_loop_thread_does_not_join_itself():
+    runner = BackgroundAsyncLoop()
+
+    async def stop():
+        runner.shutdown()
+
+    runner.submit(stop()).result(timeout=2)
+    runner.shutdown()
+    assert runner._loop.is_closed()
+
+
+class FakeSocket:
+    def __init__(self, *, fail=False):
+        self.fail = fail
+        self.packets = []
+        self.completed = threading.Event()
+        self.closed = False
+
+    def send(self, packet):
+        if self.fail:
+            self.completed.set()
+            raise OSError("synthetic send failure")
+        self.packets.append(packet)
+        if len(self.packets) == 3:
+            self.completed.set()
+
+    def close(self):
+        self.closed = True
+
+
+def test_sender_counts_successful_groups_and_actual_burst_datagrams(monkeypatch):
+    socket = FakeSocket()
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic")
+    try:
+        assert sender.send(b"color")
+        assert socket.completed.wait(2)
+    finally:
+        sender.stop()
+    stats = sender.stats
+    assert stats["sent"] == stats["attempted"] == 1
+    assert stats["datagrams_sent"] == 3
+    assert stats["send_errors"] == 0
+    assert not sender.send(b"after-close")
+    sender.stop()
+    assert socket.closed
+    assert not sender._thread.is_alive()
+
+
+def test_failed_send_group_is_not_reported_as_sent(monkeypatch):
+    socket = FakeSocket(fail=True)
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic")
+    try:
+        sender.send(b"color")
+        assert socket.completed.wait(2)
+    finally:
+        sender.stop()
+    stats = sender.stats
+    assert stats["sent"] == stats["datagrams_sent"] == 0
+    assert stats["attempted"] == stats["send_errors"] == 1
+    assert stats["last_error"] == "synthetic send failure"
+
+
+def test_settled_udp_update_is_retried_after_initial_burst(monkeypatch):
+    class Socket(FakeSocket):
+        def send(self, packet):
+            self.packets.append(packet)
+            if len(self.packets) == 5:
+                self.completed.set()
+
+    socket = Socket()
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.04, 0.10))
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic")
+    try:
+        assert sender.send(b"color")
+        assert socket.completed.wait(2)
+    finally:
+        sender.stop()
+    assert socket.packets == [b"color"] * 5
+    assert sender.stats["datagrams_sent"] == 5
+
+
+def test_udp_update_recovers_after_initial_socket_errors(monkeypatch):
+    class TransientSocket(FakeSocket):
+        def __init__(self):
+            super().__init__()
+            self.attempts = 0
+
+        def send(self, packet):
+            self.attempts += 1
+            if self.attempts <= 2:
+                raise OSError("temporarily unavailable")
+            self.packets.append(packet)
+            self.completed.set()
+
+    socket = TransientSocket()
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.04, 0.12))
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic")
+    try:
+        assert sender.send(b"color")
+        assert socket.completed.wait(2)
+    finally:
+        sender.stop()
+    assert socket.packets == [b"color"]
+    assert sender.stats["attempted"] == 1
+    assert sender.stats["sent"] == 1
+    assert sender.stats["send_errors"] == 1
+
+
+def test_new_udp_update_supersedes_failed_update_before_retry(monkeypatch):
+    class TransientSocket(FakeSocket):
+        def __init__(self):
+            super().__init__()
+            self.failures = 0
+            self.failed = threading.Event()
+
+        def send(self, packet):
+            if packet == b"old":
+                self.failures += 1
+                if self.failures == 2:
+                    self.failed.set()
+                raise OSError("temporarily unavailable")
+            self.packets.append(packet)
+            self.completed.set()
+
+    socket = TransientSocket()
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.08, 0.18))
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic", max_send_hz=1000)
+    try:
+        assert sender.send(b"old")
+        assert socket.failed.wait(2)
+        assert sender.send(b"new")
+        assert socket.completed.wait(2)
+        time.sleep(0.2)
+    finally:
+        sender.stop()
+    assert socket.failures == 2
+    assert socket.packets and all(packet == b"new" for packet in socket.packets)
+
+
+def test_new_udp_color_cancels_previous_settled_retries(monkeypatch):
+    class Socket(FakeSocket):
+        def __init__(self):
+            super().__init__()
+            self.times = []
+
+        def send(self, packet):
+            self.packets.append(packet)
+            self.times.append((packet, time.monotonic()))
+            if self.packets.count(b"new") >= 6:
+                self.completed.set()
+
+    socket = Socket()
+    monkeypatch.setattr(udp, "_SETTLED_RETRY_DELAYS", (0.04, 0.08, 0.18))
+    monkeypatch.setattr(udp.BulbUDPSocket, "_connect", lambda self: socket)
+    sender = udp.BulbUDPSocket("synthetic", max_send_hz=1000)
+    try:
+        assert sender.send(b"old")
+        deadline = time.monotonic() + 2
+        while socket.packets.count(b"old") < 3 and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert socket.packets.count(b"old") == 3
+        assert sender.send(b"new")
+        new_queued_at = time.monotonic()
+        assert socket.completed.wait(2)
+    finally:
+        sender.stop()
+    first_new = socket.packets.index(b"new")
+    assert b"old" not in socket.packets[first_new:]
+    assert not any(packet == b"old" and sent_at > new_queued_at for packet, sent_at in socket.times)
+
+
+def test_closed_pool_cannot_recreate_sender_when_producer_races_close(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    created = []
+
+    class Sender:
+        def __init__(self, *args, **kwargs):
+            created.append(self)
+            entered.set()
+            assert release.wait(2)
+
+        def send(self, packet):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(udp, "BulbUDPSocket", Sender)
+    pool = udp.FastBulbSenderPool()
+    producer = threading.Thread(target=pool.send_payload_map, args=({"synthetic": (8, 0, 0, 0)},))
+    producer.start()
+    assert entered.wait(2)
+    closer = threading.Thread(target=pool.close)
+    closer.start()
+    release.set()
+    producer.join(2)
+    closer.join(2)
+    assert not producer.is_alive() and not closer.is_alive()
+    pool.send_payload_map({"synthetic": (16, 0, 0, 0)})
+    pool.close()
+    assert len(created) == 1
+    assert pool.stats == []
+
+
+def test_brightness_change_updates_steady_zone_when_other_zone_changes_hue(monkeypatch):
+    updates = []
+    engine = OptimizedScreenSync(
+        lambda colors: record(colors),
+        OptimizedCaptureConfig(mode="zones", active_regions=("left", "right"),
+                               use_gpu=False, parallel_regions=False, adaptive_fps=False),
+    )
+    frames = iter([
+        ({"left": (255, 0, 0), "right": (0, 0, 255)}, 100),
+        ({"left": (0, 255, 0), "right": (0, 0, 255)}, 150),
+    ])
+
+    def extract(_frame):
+        colors, engine._output_brightness = next(frames)
+        return colors
+
+    def record(colors):
+        updates.append((dict(colors), engine.output_brightness))
+        if len(updates) == 2:
+            engine._running = False
+
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", extract)
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: None)
+    engine._running = True
+    engine._sync_loop()
+    assert updates[1][1] == 150
+    assert updates[1][0]["right"] == (0, 0, 255)
+    assert set(updates[1][0]) == {"left", "right"}
+    snapshot = engine.debug_snapshot
+    assert snapshot["timing_samples"] == 2
+    assert snapshot["capture_time_ms"] >= 0
+    assert snapshot["processing_time_ms"] >= 0
+
+
+def test_sync_retries_steady_color_after_sender_callback_fails(monkeypatch):
+    attempts = []
+
+    def send(colors):
+        attempts.append(dict(colors))
+        if len(attempts) == 1:
+            raise OSError("sender unavailable")
+        engine._running = False
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        use_gpu=False, parallel_regions=False, adaptive_fps=False))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", lambda frame: {"all": (255, 0, 0)})
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: None)
+    engine._running = True
+    engine._sync_loop()
+
+    assert attempts == [{"all": (255, 0, 0)}, {"all": (255, 0, 0)}]
+    assert engine.debug_snapshot["updates_sent"] == 1
+
+
+def test_equal_luminance_color_cut_bypasses_sync_smoothing(monkeypatch):
+    frames = iter([np.full((64, 64, 3), (255, 0, 0), dtype=np.uint8),
+                   np.full((64, 64, 3), (0, 76, 0), dtype=np.uint8)])
+    updates = []
+
+    def send(colors):
+        updates.append(dict(colors))
+        if len(updates) == 2:
+            engine._running = False
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        use_gpu=False, parallel_regions=False, adaptive_fps=False,
+        predictive_smoothing=False, smoothing=0.85))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: next(frames))
+    monkeypatch.setattr(engine, "_extract_colors", lambda frame: {"all": tuple(map(int, frame[0, 0]))})
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: None)
+    engine._running = True
+    engine._sync_loop()
+
+    assert updates == [{"all": (255, 0, 0)}, {"all": (0, 76, 0)}]
+    assert engine.debug_snapshot["cuts_detected"] == 1
+
+
+def test_predictor_history_tracks_scene_targets_not_smoothed_lamp_output(monkeypatch):
+    targets = iter([(60, 0, 0), (100, 0, 0), (140, 0, 0)])
+    processed = []
+    engine = OptimizedScreenSync(lambda colors: None, OptimizedCaptureConfig(
+        use_gpu=False, parallel_regions=False, adaptive_fps=False,
+        predictive_smoothing=True, smoothing=0.85))
+
+    def extract(frame):
+        target = next(targets)
+        processed.append(target)
+        if len(processed) == 3:
+            engine._running = False
+        return {"all": target}
+
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", extract)
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: None)
+    engine._running = True
+    engine._sync_loop()
+    assert list(engine._color_predictor._history["all"]) == processed
+
+
+def test_sync_refreshes_unchanged_scene_after_udp_delivery_may_be_lost(monkeypatch):
+    updates = []
+    clock = [10.0]
+
+    def send(colors):
+        updates.append((clock[0], dict(colors)))
+        if len(updates) == 2:
+            engine._running = False
+
+    def advance(_duration):
+        clock[0] += 0.5
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        use_gpu=False, parallel_regions=False, adaptive_fps=False))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", lambda frame: {"all": (255, 0, 0)})
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(sync_module.time, "sleep", advance)
+    engine._running = True
+    engine._sync_loop()
+
+    assert updates == [(10.0, {"all": (255, 0, 0)}),
+                       (11.5, {"all": (255, 0, 0)})]
+
+
+def test_steady_zone_refreshes_while_another_zone_keeps_changing(monkeypatch):
+    updates = []
+    clock = [10.0]
+
+    def send(colors):
+        updates.append((clock[0], dict(colors)))
+        if clock[0] >= 11.5:
+            engine._running = False
+
+    def extract(_frame):
+        left = (255, 0, 0) if int((clock[0] - 10.0) * 2) % 2 == 0 else (0, 255, 0)
+        return {"left": left, "right": (0, 0, 255)}
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        mode="zones", active_regions=("left", "right"), use_gpu=False,
+        parallel_regions=False, adaptive_fps=False, predictive_smoothing=False,
+        smoothing=0.05))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", extract)
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: clock.__setitem__(0, clock[0] + 0.5))
+    engine._running = True
+    engine._sync_loop()
+
+    assert "right" in updates[0][1]
+    assert any("left" in colors and "right" not in colors for _, colors in updates[1:-1])
+    assert updates[-1][0] == 11.5 and updates[-1][1]["right"] == (0, 0, 255)
+
+
+def test_zone_frame_uses_one_shared_deadline_and_cancels_queued_work(monkeypatch):
+    from concurrent.futures import TimeoutError
+    clock = [10.0]
+    waits = []
+
+    class SlowFuture:
+        cancelled = False
+
+        def result(self, timeout):
+            waits.append(timeout)
+            clock[0] += timeout
+            raise TimeoutError()
+
+        def cancel(self):
+            self.cancelled = True
+
+    futures = [SlowFuture(), SlowFuture()]
+
+    class Executor:
+        def submit(self, *args):
+            return futures.pop(0)
+
+    pending = list(futures)
+    engine = OptimizedScreenSync(lambda colors: None, OptimizedCaptureConfig(
+        mode="zones", active_regions=("left", "right"), parallel_regions=True))
+    engine._executor = Executor()
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: clock[0])
+    assert engine._extract_colors(np.full((64, 64, 3), 128, dtype=np.uint8)) == {}
+    assert sum(waits) == pytest.approx(0.1)
+    assert all(future.cancelled for future in pending)
+
+
+def test_missing_zone_keeps_last_color_until_it_can_be_processed(monkeypatch):
+    updates = []
+    frames = iter([{"left": (255, 0, 0), "right": (0, 0, 255)},
+                   {"left": (0, 255, 0)}])
+
+    def send(colors):
+        updates.append(dict(colors))
+        if len(updates) == 2:
+            engine._running = False
+
+    engine = OptimizedScreenSync(send, OptimizedCaptureConfig(
+        mode="zones", active_regions=("left", "right"), parallel_regions=False,
+        adaptive_fps=False, predictive_smoothing=False, smoothing=0.05))
+    monkeypatch.setattr(engine, "_capture_frame", lambda: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(engine, "_extract_colors", lambda frame: next(frames))
+    monkeypatch.setattr(engine._motion_detector, "update", lambda frame: 0.0)
+    monkeypatch.setattr(sync_module.time, "sleep", lambda duration: None)
+    engine._running = True
+    engine._sync_loop()
+    assert engine._current_colors["right"] == (0, 0, 255)
+    assert engine._last_sent_colors["right"] == (0, 0, 255)
+
+
+@pytest.mark.parametrize("mode", ["follow", "constant"])
+def test_true_black_holds_until_deadline_and_constant_never_turns_off(monkeypatch, mode):
+    engine = OptimizedScreenSync(lambda colors: None, OptimizedCaptureConfig(
+        use_gpu=False, parallel_regions=False, brightness_mode=mode))
+    now = [10.0]
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: now[0])
+    black = np.zeros((16, 16, 3), dtype=np.uint8)
+    assert engine._extract_colors(black) == {}
+    now[0] += 0.69
+    assert engine._extract_colors(black) == {}
+    now[0] += 0.02
+    assert engine._extract_colors(black) == ({"all": (0, 0, 0)} if mode == "follow" else {})
+
+
+def test_gpu_failure_never_replays_cached_pixels_and_releases_after_three_errors():
+    class Camera:
+        released = False
+
+        def grab(self):
+            raise OSError("acquisition failed")
+
+        def release(self):
+            self.released = True
+
+    gpu = sync_module.GPUCaptureManager()
+    camera = Camera()
+    gpu._camera = camera
+    gpu._last_frame = np.ones((8, 8, 3), dtype=np.uint8)
+    for _ in range(3):
+        assert gpu.grab() is None
+    assert not gpu.is_active
+    assert camera.released
+    assert gpu.last_error == "acquisition failed"
+
+
+def test_gpu_manager_can_select_windows_graphics_capture(monkeypatch):
+    from unittest.mock import Mock
+    camera = Mock()
+    camera.grab.return_value = np.full((8, 8, 4), 100, dtype=np.uint8)
+    factory = Mock(return_value=camera)
+    monkeypatch.setattr(sync_module, "HAS_DXCAM", True)
+    monkeypatch.setattr(sync_module, "dxcam", type("Backend", (), {"create": factory}))
+    capture = sync_module.GPUCaptureManager(device=0, monitor=1, backend="winrt")
+    assert capture.start()
+    factory.assert_called_once_with(device_idx=0, output_idx=1, output_color="BGRA", backend="winrt")
+    capture.stop()
+    camera.release.assert_called_once()
+
+
+def test_windows_capture_requests_nonwaiting_frames_and_accepts_changes():
+    from unittest.mock import Mock
+    camera = Mock()
+    camera.grab.side_effect = [
+        None,
+        np.full((4, 4, 4), (0, 0, 255, 255), dtype=np.uint8),
+        np.full((4, 4, 4), (255, 0, 0, 255), dtype=np.uint8),
+    ]
+    capture = sync_module.GPUCaptureManager(backend="winrt")
+    capture._camera = camera
+    assert capture.grab() is None
+    assert tuple(capture.grab()[0, 0]) == (255, 0, 0)
+    assert tuple(capture.grab()[0, 0]) == (0, 0, 255)
+    assert all(call.kwargs == {"new_frame_only": False} for call in camera.grab.call_args_list)
+
+
+@pytest.mark.parametrize("value,accepted", [(120, True), (240, False)])
+def test_windows_capture_requires_matching_display(monkeypatch, value, accepted):
+    from unittest.mock import Mock
+    candidate = Mock()
+    candidate.start.return_value = True
+    candidate.grab.return_value = np.full((8, 8, 3), value, dtype=np.uint8)
+    monkeypatch.setattr(sync_module, "GPUCaptureManager", lambda **kwargs: candidate)
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=True))
+    frame = engine._try_windows_capture(np.full((8, 8, 3), 120, dtype=np.uint8))
+    assert (frame is not None) is accepted
+    if accepted:
+        assert engine._gpu_capture is candidate
+        assert engine._capture_method == "winrt"
+        candidate.stop.assert_not_called()
+    else:
+        candidate.stop.assert_called_once()
+
+
+def test_windows_capture_recovers_when_cpu_and_dxgi_both_return_black(monkeypatch):
+    from unittest.mock import Mock
+    candidate = Mock()
+    candidate.start.return_value = True
+    candidate.grab.return_value = np.full((8, 8, 3), 120, dtype=np.uint8)
+    monkeypatch.setattr(sync_module, "GPUCaptureManager", lambda **kwargs: candidate)
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=True))
+    rejected = Mock()
+    engine._gpu_capture = rejected
+    result = engine._try_windows_capture(np.zeros((8, 8, 3), dtype=np.uint8))
+    assert result is not None
+    assert engine._gpu_capture is candidate
+    assert engine._rejected_gpu_capture is rejected
+
+
+def test_cpu_fallback_attempts_windows_capture_after_gpu_start_failure(monkeypatch):
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=True, monitor=1))
+    cpu = np.zeros((8, 8, 3), dtype=np.uint8)
+    recovered = np.full((8, 8, 3), 120, dtype=np.uint8)
+    monkeypatch.setattr(sync_module, "HAS_DXCAM", True)
+    monkeypatch.setattr(engine, "_capture_mss_frame", lambda: cpu)
+    monkeypatch.setattr(engine, "_try_windows_capture", lambda reference: recovered)
+    assert engine._capture_frame() is recovered
+
+
+def test_mss_is_closed_on_its_own_capture_thread():
+    import threading
+    from src.features.screen_sync_v2 import OptimizedCaptureConfig, OptimizedScreenSync
+
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=False))
+    started = threading.Event()
+    stopped = threading.Event()
+    ownership = {}
+
+    class ThreadBoundCapture:
+        def __init__(self):
+            ownership["created"] = threading.get_ident()
+
+        def close(self):
+            ownership["closed"] = threading.get_ident()
+
+    def work():
+        engine._mss_instance = ThreadBoundCapture()
+        started.set()
+        stopped.wait(3)
+
+    engine._sync_loop_inner = work
+    engine._running = True
+    engine._thread = threading.Thread(target=engine._sync_loop)
+    engine._thread.start()
+    assert started.wait(2)
+    stopped.set()
+    engine.stop()
+    assert ownership["created"] == ownership["closed"]
+    assert engine._mss_instance is None
+
+
+@pytest.mark.parametrize("cpu_brightness,expected", [(0, "dxcam"), (180, "mss")])
+def test_black_gpu_falls_back_only_if_cpu_sees_bright_screen(monkeypatch, cpu_brightness, expected):
+    engine = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig(use_gpu=True))
+    gpu = type("FakeGPU", (), {"is_active": True, "last_error": None,
+                               "grab": lambda self: np.zeros((24, 24, 3), dtype=np.uint8)})()
+    engine._gpu_capture = gpu
+    engine._running = True
+    monkeypatch.setattr(engine, "_try_windows_capture", lambda comparison: None)
+    monkeypatch.setattr(engine, "_capture_mss_frame", lambda: np.full((24, 24, 3), cpu_brightness, dtype=np.uint8))
+    now = [10.0]
+    monkeypatch.setattr(sync_module.time, "perf_counter", lambda: now[0])
+    engine._capture_frame()
+    now[0] += 1.1
+    output = engine._capture_frame()
+    assert engine._capture_method == expected
+    assert int(output.mean()) == (cpu_brightness if expected == "mss" else 0)
+    if expected == "mss":
+        assert engine._rejected_gpu_capture is gpu
+        assert "GPU returned black" in engine._capture_status
+        gpu.stop = lambda: setattr(gpu, "released", True)
+        now[0] += 0.1
+        engine._capture_frame()
+        assert "GPU returned black" in engine._capture_status
+        engine.stop()
+        assert gpu.released
+    else:
+        assert engine._gpu_capture is gpu

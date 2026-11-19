@@ -36,6 +36,8 @@ from src.features.screen_sync_v2 import (
     extract_dominant_kmeans,
     extract_dominant_weighted,
     should_use_gpu_capture,
+    _DxcamRecoveryNoiseFilter,
+    _dxcam_recovery_state,
 )
 
 
@@ -83,6 +85,150 @@ def test_detect_content_bounds_ignores_letterbox_bars():
     assert top == 20
     assert width == 200
     assert height == 80
+
+
+@pytest.mark.parametrize("shape", [(63, 63), (63, 95), (2, 2)])
+def test_screen_color_sampling_covers_all_four_corners(shape):
+    from src.features.screen_sync_v2 import _sample_pixels, _stride_sample_rgb
+
+    height, width = shape
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    image[:height // 2, :width // 2] = (255, 0, 0)
+    image[:height // 2, width // 2:] = (0, 255, 0)
+    image[height // 2:, :width // 2] = (0, 0, 255)
+    image[height // 2:, width // 2:] = (255, 255, 0)
+    sampled, _ = _sample_pixels(image, 32)
+    other = _stride_sample_rgb(image, 32)
+    assert tuple(sampled[0, 0]) == (255, 0, 0)
+    assert tuple(sampled[0, -1]) == (0, 255, 0)
+    assert tuple(sampled[-1, 0]) == (0, 0, 255)
+    assert tuple(sampled[-1, -1]) == (255, 255, 0)
+    np.testing.assert_array_equal(sampled, other)
+
+
+def test_downsample_retains_fine_repeating_colors_for_single_bulb():
+    frame = np.zeros((1080, 1920, 4), dtype=np.uint8)
+    frame[:, 0::3, 2] = 255  # BGRA red
+    frame[:, 1::3, 0] = 255  # BGRA blue
+    frame[:, 2::3, 0] = 255
+    sampled = GPUCaptureManager._to_rgb(frame)
+    mean = sampled.mean(axis=(0, 1))
+    assert 75 < mean[0] < 95 and 160 < mean[2] < 180
+    red, green, blue = extract_cinematic_single_color(sampled)
+    assert blue > red > 100
+    assert green < 10
+    np.testing.assert_array_equal(sampled, GPUCaptureManager._to_rgb(frame))
+
+
+@pytest.mark.parametrize("axis", [0, 1])
+def test_final_analysis_samples_both_colors_in_repeating_grid_pattern(axis):
+    from src.features.screen_sync_v2 import _sample_even_rgb
+
+    image = np.zeros((640, 640, 3), dtype=np.uint8)
+    stripes = np.arange(640) % 20 < 10
+    if axis == 0:
+        image[stripes, :, 0] = 255
+        image[~stripes, :, 2] = 255
+    else:
+        image[:, stripes, 0] = 255
+        image[:, ~stripes, 2] = 255
+    sampled = _sample_even_rgb(image, 32)
+    red, green, blue = sampled.mean(axis=(0, 1))
+    assert 110 < red < 145
+    assert green == 0
+    assert 110 < blue < 145
+    red, green, blue = extract_cinematic_single_color(image)
+    assert red > 100 and blue > 100 and green < 10
+    np.testing.assert_array_equal(sampled, _sample_even_rgb(image, 32))
+
+
+def test_scene_cut_detects_changed_color_between_fixed_stride_columns():
+    # Red and this green have approximately equal luma. The red columns at
+    # x=0,8,... previously hid the change from the color-mean stride sample.
+    before = np.full((360, 640, 3), (255, 0, 0), dtype=np.uint8)
+    after = np.full_like(before, (0, 76, 0))
+    after[:, ::8] = (255, 0, 0)
+    detector = MotionDetector()
+    detector.update(before)
+    detector.update(after)
+    assert detector.last_scene_cut
+
+
+def test_scene_cut_detects_changes_hidden_from_motion_stride():
+    before = np.full((360, 640, 3), (255, 0, 0), dtype=np.uint8)
+    after = before.copy()
+    after[:, 1::2] = (0, 255, 0)
+    detector = MotionDetector()
+    detector.update(before)
+    assert detector.update(after) > 0.1
+    assert detector.last_scene_cut
+    detector.reset()
+    assert not detector.last_scene_cut
+
+
+@pytest.mark.parametrize("width", [1280, 1920, 2560, 3840])
+@pytest.mark.parametrize("axis", [0, 1])
+def test_downsample_represents_alternating_pixel_lines(width, axis):
+    frame = np.zeros((1080, width, 4), dtype=np.uint8)
+    if axis == 0:
+        frame[::2, :, 2] = 255
+        frame[1::2, :, 0] = 255
+    else:
+        frame[:, ::2, 2] = 255
+        frame[:, 1::2, 0] = 255
+    red, green, blue = GPUCaptureManager._to_rgb(frame).mean(axis=(0, 1))
+    assert 120 < red < 135
+    assert green == 0
+    assert 120 < blue < 135
+
+
+def test_two_prominent_colors_blend_without_losing_either_hue():
+    image = np.zeros((48, 48, 3), dtype=np.uint8)
+    image[:, :16] = (255, 0, 0)
+    image[:, 16:] = (0, 0, 255)
+    red, green, blue = extract_cinematic_single_color(image, sample_size=24)
+    assert blue > red > 100
+    assert green < 10
+
+
+def test_distributed_downsample_handles_odd_edges_and_rgb_input():
+    image = np.zeros((361, 1921, 3), dtype=np.uint8)
+    image[:] = (19, 73, 211)
+    result = GPUCaptureManager._to_rgb(image)
+    assert result.shape == (121, 641, 3)
+    assert result.flags.c_contiguous
+    assert np.all(result == (19, 73, 211))
+
+
+@pytest.mark.parametrize("noncontiguous", [False, True])
+def test_distributed_sampling_preserves_selected_pixels(noncontiguous):
+    from src.features.screen_sync_v2 import _distributed_sample_indices
+
+    image = np.random.default_rng(42).integers(0, 256, (181, 1281, 4), dtype=np.uint8)
+    if noncontiguous:
+        image = image[:, ::-1]
+    indices = _distributed_sample_indices(image.shape[0], image.shape[1], 2)
+    rows, cols = np.divmod(indices, image.shape[1])
+    expected = np.ascontiguousarray(image[rows, cols, 2::-1])
+    np.testing.assert_array_equal(GPUCaptureManager._to_rgb(image), expected)
+
+
+@pytest.mark.parametrize("threshold", [1, 16, 80, 200])
+def test_content_bounds_preserve_float32_luma_decisions(threshold):
+    rng = np.random.default_rng(177)
+    image = rng.integers(0, 256, (120, 160, 3), dtype=np.uint8)
+    image[:12] = 0
+    image[-12:] = 0
+    image[:, :14] = 0
+    image[:, -14:] = 0
+    # Non-contiguous crops also occur after the GPU frame is downsampled.
+    for candidate in (image, image[::2, ::2]):
+        pixels = candidate.astype(np.float32)
+        luma = pixels[:, :, 0] * 0.2126 + pixels[:, :, 1] * 0.7152 + pixels[:, :, 2] * 0.0722
+        rows = np.flatnonzero((luma > threshold).mean(axis=1) > 0.02)
+        cols = np.flatnonzero((luma > threshold).mean(axis=0) > 0.02)
+        expected = (int(cols[0]), int(rows[0]), int(cols[-1] - cols[0] + 1), int(rows[-1] - rows[0] + 1))
+        assert detect_content_bounds(candidate, threshold=threshold) == expected
 
 
 def test_crop_content_area_falls_back_on_tiny_detected_crop(monkeypatch):
@@ -428,7 +574,7 @@ def test_motion_detector_detects_change():
     
     # First frame - baseline
     frame1 = np.zeros((64, 64, 3), dtype=np.uint8)
-    score1 = detector.update(frame1)
+    detector.update(frame1)
     
     # Second frame - different
     frame2 = np.full((64, 64, 3), fill_value=200, dtype=np.uint8)
@@ -452,9 +598,28 @@ def test_motion_detector_detects_static():
     assert not detector.is_high_motion()
 
 
+def test_motion_detector_detects_equal_luminance_color_cut():
+    detector = MotionDetector()
+    red = np.full((64, 64, 3), (255, 0, 0), dtype=np.uint8)
+    green = np.full((64, 64, 3), (0, 76, 0), dtype=np.uint8)
+    detector.update(red)
+    detector.update(green)
+    assert detector.last_scene_cut
+
+
+def test_motion_detector_does_not_call_color_preserving_pan_a_cut():
+    detector = MotionDetector()
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    frame[:, :32] = (255, 0, 0)
+    frame[:, 32:] = (0, 76, 0)
+    detector.update(frame)
+    detector.update(np.roll(frame, 32, axis=1))
+    assert not detector.last_scene_cut
+
+
 def test_gpu_capture_manager_preserves_dxcam_rgb_channel_order():
     class FakeCamera:
-        def get_latest_frame(self):
+        def grab(self):
             frame = np.zeros((2, 2, 3), dtype=np.uint8)
             frame[:, :, 0] = 255
             return frame
@@ -468,14 +633,39 @@ def test_gpu_capture_manager_preserves_dxcam_rgb_channel_order():
     assert tuple(frame[0, 0]) == (255, 0, 0)
 
 
+def test_gpu_capture_manager_serves_cached_frame_on_static_screen():
+    """Non-blocking contract: dxcam grab() returns None while the screen is
+    unchanged; the manager must serve the cached last frame instead of
+    stalling the sync loop (the static-desktop freeze regression)."""
+
+    class FakeCamera:
+        def __init__(self):
+            self.calls = 0
+
+        def grab(self):
+            self.calls += 1
+            if self.calls == 1:
+                frame = np.zeros((2, 2, 3), dtype=np.uint8)
+                frame[:, :, 1] = 200
+                return frame
+            return None  # screen unchanged
+
+    capture = GPUCaptureManager()
+    capture._camera = FakeCamera()
+
+    first = capture.grab()
+    second = capture.grab()
+    third = capture.grab()
+
+    assert first is not None
+    assert second is not None and tuple(second[0, 0]) == (0, 200, 0)
+    assert third is not None and tuple(third[0, 0]) == (0, 200, 0)
+
+
 def test_gpu_capture_manager_releases_camera_on_stop():
     class FakeCamera:
         def __init__(self):
-            self.stopped = False
             self.released = False
-
-        def stop(self):
-            self.stopped = True
 
         def release(self):
             self.released = True
@@ -486,9 +676,29 @@ def test_gpu_capture_manager_releases_camera_on_stop():
 
     capture.stop()
 
-    assert camera.stopped is True
     assert camera.released is True
     assert capture._camera is None
+
+
+def test_dxcam_recovery_noise_filter_suppresses_expected_warning():
+    import logging
+
+    before, _ = _dxcam_recovery_state()
+    record = logging.LogRecord(
+        name="dxcam.core.dxgi_duplicator",
+        level=logging.WARNING,
+        pathname="",
+        lineno=0,
+        msg="Desktop duplication access loss/system transition detected (HRESULT=0x887A0026).",
+        args=(),
+        exc_info=None,
+    )
+
+    assert _DxcamRecoveryNoiseFilter().filter(record) is False
+
+    after, message = _dxcam_recovery_state()
+    assert after == before + 1
+    assert "Desktop duplication access loss" in message
 
 
 def test_color_predictor_extrapolates_trend():
@@ -513,6 +723,18 @@ def test_color_predictor_handles_missing_key():
     predicted = predictor.predict("unknown", current)
     
     assert predicted == current
+
+
+def test_color_predictor_stops_at_a_pause_or_reversal():
+    predictor = ColorPredictor(history_size=3, weight=0.5)
+    for value in (80, 100, 120):
+        predictor.add_sample("all", (value, 50, 20))
+
+    assert predictor.predict("all", (120, 50, 20)) == (120, 50, 20)
+    assert predictor.predict("all", (110, 50, 20)) == (110, 50, 20)
+    assert predictor.predict("all", (140, 50, 20)) == (150, 50, 20)
+    # A nearly stopped trend cannot carry its old larger velocity forward.
+    assert predictor.predict("all", (121, 50, 20)) == (121, 50, 20)
 
 
 def test_optimized_config_validates_ranges():
@@ -609,6 +831,8 @@ def test_gpu_capture_uses_selected_specific_monitor(monkeypatch):
 def test_optimized_screen_sync_debug_snapshot_reports_runtime_stats():
     """Debug snapshot should expose derived cadence and color state."""
     sync = OptimizedScreenSync(lambda _: None, OptimizedCaptureConfig())
+    assert sync.debug_snapshot["capture_time_ms"] is None
+    assert sync.debug_snapshot["timing_samples"] == 0
 
     with sync._stats_lock:
         sync._capture_method = "dxcam"
@@ -616,19 +840,137 @@ def test_optimized_screen_sync_debug_snapshot_reports_runtime_stats():
         sync._motion_score = 0.02
         sync._smoothing_factor = 0.18
         sync._prediction_strength = 0.11
+        sync._effective_color_boost = 1.12
+        sync._send_delta_threshold_value = 6
         sync._current_colors = {"all": (10, 20, 30)}
         sync._last_target_colors = {"all": (12, 22, 32)}
         sync._send_intervals.extend([0.05, 0.1])
+        sync._capture_times.extend([0.001, 0.003])
+        sync._processing_times.extend([0.004, 0.006])
         sync._updates_sent = 4
         sync._frames_processed = 8
 
     snapshot = sync.debug_snapshot
 
     assert snapshot["capture_method"] == "dxcam"
+    assert snapshot["capture_status"] == "Ready"
+    assert snapshot["requestedFps"] == sync.config.max_fps
     assert snapshot["current_fps"] == 22
+    assert snapshot["currentFps"] == 22
+    assert snapshot["frameTimeMs"] == snapshot["average_frame_time_ms"]
+    assert snapshot["timing_samples"] == 2
+    assert snapshot["capture_time_ms"] == pytest.approx(2.0)
+    assert snapshot["capture_time_p95_ms"] == pytest.approx(2.9)
+    assert snapshot["processing_time_ms"] == pytest.approx(5.0)
+    assert snapshot["processing_time_p95_ms"] == pytest.approx(5.9)
+    assert snapshot["smoothingFactor"] == 0.18
+    assert snapshot["effectiveColorBoost"] == 1.12
+    assert snapshot["minBrightness"] == sync.config.min_brightness
+    assert snapshot["deltaThreshold"] == 6
+    assert snapshot["captureBackend"] == "dxcam"
     assert snapshot["target_colors"]["all"] == (12, 22, 32)
+    assert snapshot["targetColors"]["all"] == (12, 22, 32)
     assert snapshot["current_colors"]["all"] == (10, 20, 30)
+    assert snapshot["outputColors"]["all"] == (10, 20, 30)
     assert snapshot["send_interval_ms"] == pytest.approx(75.0)
     assert round(snapshot["send_rate_hz"], 3) == round(1 / 0.075, 3)
+    assert round(snapshot["sendRateHz"], 3) == round(1 / 0.075, 3)
     assert snapshot["updates_sent"] == 4
     assert snapshot["frames_processed"] == 8
+
+
+# ---------------------------------------------------------------------------
+# Brightness modes: full-drive normalization + dimming-channel brightness
+# ---------------------------------------------------------------------------
+
+
+def _frame(rgb, shape=(120, 200)):
+    frame = np.zeros((*shape, 3), dtype=np.uint8)
+    frame[:] = rgb
+    return frame
+
+
+def test_brightness_mode_config_back_compat():
+    from src.core.config import ScreenSyncConfig
+
+    # Old configs carry only brightness_follow; the mode must derive from it.
+    assert ScreenSyncConfig(brightness_follow=True).brightness_mode == "follow"
+    assert ScreenSyncConfig(brightness_follow=False).brightness_mode == "constant"
+    # Explicit mode wins and re-derives the legacy flag.
+    cfg = ScreenSyncConfig(brightness_follow=True, brightness_mode="constant")
+    assert cfg.brightness_mode == "constant"
+    assert cfg.brightness_follow is False
+    assert ScreenSyncConfig(sync_brightness=999).sync_brightness == 255
+
+
+def test_normalize_to_full_drive():
+    from src.features.screen_sync_v2 import _normalize_to_full_drive
+
+    # Half-intensity red reaches full drive with hue/sat preserved.
+    assert _normalize_to_full_drive((128, 0, 0)) == (255, 0, 0)
+    assert _normalize_to_full_drive((100, 60, 20)) == (255, 153, 51)
+    # Near-black noise is NOT amplified (black/off path owns it).
+    assert _normalize_to_full_drive((4, 4, 6)) == (4, 4, 6)
+    assert _normalize_to_full_drive((0, 0, 0)) == (0, 0, 0)
+
+
+def test_extract_colors_normalizes_and_sets_dimming_follow():
+    engine = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="follow", min_brightness=20),
+    )
+    colors = engine._extract_colors(_frame((128, 0, 0)))
+    assert colors["all"][0] >= 250  # red normalized to full drive
+    assert colors["all"][1] <= 20 and colors["all"][2] <= 20
+    # Full-range power curve (no early-saturation knee): value 0.5 lands in
+    # the middle of the range, not pinned to full dimming.
+    assert 140 <= engine.output_brightness <= 190
+
+    # A brighter scene must dim MORE than a dimmer one across the whole
+    # range (the old knee made everything above value=0.32 identical).
+    bright_engine = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="follow", min_brightness=20),
+    )
+    bright_engine._extract_colors(_frame((255, 255, 255)))
+    assert bright_engine.output_brightness == 255
+    assert bright_engine.output_brightness > engine.output_brightness
+
+
+def test_extract_colors_constant_mode_pins_brightness_and_holds_on_black():
+    engine = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="constant", sync_brightness=180),
+    )
+    colors = engine._extract_colors(_frame((0, 160, 160)))
+    assert colors, "colorful frame must produce an update"
+    assert engine.output_brightness == 180
+
+    # Persistent black: constant mode HOLDS (returns no update) instead of off.
+    engine._black_since = None
+    first = engine._extract_colors(_frame((0, 0, 0)))
+    engine._black_since -= 1.0  # simulate persistence beyond 0.7s
+    held = engine._extract_colors(_frame((0, 0, 0)))
+    assert held == {}
+    assert engine.output_brightness == 180
+    assert first == {} or all(max(c) < 24 or c == (0, 0, 0) for c in first.values())
+
+
+def test_extract_colors_follow_black_turns_off_and_dark_tapers():
+    engine = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="follow", min_brightness=20),
+    )
+    engine._extract_colors(_frame((0, 0, 0)))
+    engine._black_since -= 1.0
+    off = engine._extract_colors(_frame((0, 0, 0)))
+    assert off == {"all": (0, 0, 0)}
+
+    # Near-black (above the black threshold): output brightness tapers to the
+    # floor instead of flashing the normalized color at scene-floor dimming.
+    engine2 = OptimizedScreenSync(
+        lambda _: None,
+        OptimizedCaptureConfig(brightness_mode="follow", min_brightness=20),
+    )
+    engine2._extract_colors(_frame((5, 5, 7)))
+    assert engine2.output_brightness <= 40

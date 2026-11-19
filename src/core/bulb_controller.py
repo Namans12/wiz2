@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Optional
 
-from pywizlight import wizlight, discovery, PilotBuilder
+from pywizlight import wizlight, PilotBuilder
 
 from .calibration import (
     BulbCalibrationTable,
@@ -13,6 +13,9 @@ from .calibration import (
     sanitize_calibration_key,
 )
 from .color_mapping import BulbColorProfile, BulbGamutMapper
+from .device_identity import mac_identity
+from .network import LIMITED_BROADCAST, discover_wiz_bulbs
+from .wiz_profile_metadata import parse_wiz_profile_hints
 
 PROFILE_QUERY_TIMEOUT = 2.5
 
@@ -78,29 +81,30 @@ class BulbController:
         self._tone_store = ToneCalibrationStore()
         self._calibration_tables: dict[str, BulbCalibrationTable] = {}
         self._tone_tables: dict[str, BulbCalibrationTable] = {}
+        self._screen_sync_source_color_space = "srgb"
+        self._screen_sync_device_profile = "generic"
+        self._screen_sync_cool_mix_bias = 0.0
+        self._screen_sync_mixing_model = "heuristic"
     
-    async def discover(self, broadcast_space: str = "192.168.1.255") -> list[dict]:
+    async def discover(self, broadcast_space: Optional[str] = None) -> list[dict]:
         """
         Discover WiZ bulbs on the local network.
-        
+
         Args:
-            broadcast_space: Broadcast address for discovery (e.g., "192.168.1.255")
-        
+            broadcast_space: One explicit broadcast address (e.g.
+                "192.168.1.255"). ``None`` or "255.255.255.255" searches every
+                local network interface instead of one fixed subnet.
+
         Returns:
             List of discovered bulbs with ip and mac
         """
-        bulbs = await discovery.discover_lights(broadcast_space=broadcast_space)
-        
-        discovered = []
-        for bulb in bulbs:
-            self._bulbs[bulb.ip] = bulb
-            discovered.append({
-                "ip": bulb.ip,
-                "mac": bulb.mac,
-            })
-        
+        explicit = None if broadcast_space in (None, "", "auto", LIMITED_BROADCAST) else [broadcast_space]
+        discovered = await asyncio.to_thread(discover_wiz_bulbs, explicit)
+        for bulb in discovered:
+            if bulb["ip"] not in self._bulbs:
+                self._bulbs[bulb["ip"]] = wizlight(bulb["ip"], mac=bulb["mac"])
         return discovered
-    
+
     def _get_bulb(self, ip: str) -> wizlight:
         """Get or create a wizlight instance for an IP."""
         if ip not in self._bulbs:
@@ -136,26 +140,42 @@ class BulbController:
         bulb = self._get_bulb(ip)
         profile = BulbColorProfile()
 
-        system_result = await self._query_profile_metadata(bulb.getBulbConfig())
-        model_result = await self._query_profile_metadata(bulb.getModelConfig())
-        user_result = await self._query_profile_metadata(bulb.getUserConfig())
+        # Run the three profile queries concurrently instead of sequentially:
+        # each has its own PROFILE_QUERY_TIMEOUT budget, so awaiting them one
+        # at a time let a single slow/unresponsive bulb cost up to 3x the
+        # timeout (~7.5s) before sync could start.
+        queries = (bulb.getBulbConfig, bulb.getModelConfig, bulb.getUserConfig)
+        results = list(await asyncio.gather(
+            *(self._query_profile_metadata(query()) for query in queries)
+        ))
+        # A lost reply would silently fall back to generic hardware defaults
+        # (white-LED count and ratio), changing how colours are mapped for the
+        # whole session. Ask once more for whatever did not answer.
+        missing = [index for index, result in enumerate(results) if not result]
+        if missing:
+            retried = await asyncio.gather(
+                *(self._query_profile_metadata(queries[index]()) for index in missing)
+            )
+            for index, result in zip(missing, retried):
+                results[index] = result
+        system_result, model_result, user_result = results
 
-        rgb_current = profile.rgb_channel_current
-        driver = model_result.get("i2cDrv")
-        if isinstance(driver, list) and driver:
-            currents = driver[0].get("curr")
-            if isinstance(currents, list) and len(currents) >= 3:
-                rgb_current = tuple(int(max(1, value)) for value in currents[:3])
+        hints = parse_wiz_profile_hints(model_result, user_result, profile)
 
         profile = BulbColorProfile(
             model_name=system_result.get("moduleName"),
             mac=system_result.get("mac") or bulb.mac,
-            white_channels=int(model_result.get("nowc", profile.white_channels)),
-            white_to_color_ratio=int(model_result.get("wcr", profile.white_to_color_ratio)),
-            rgb_channel_current=rgb_current,
-            render_factor=tuple(int(value) for value in model_result.get("renderFactor", ())),
-            fade_in_ms=int(user_result.get("fadeIn", 0)),
-            fade_out_ms=int(user_result.get("fadeOut", 0)),
+            white_channels=hints.white_channels,
+            white_to_color_ratio=hints.white_to_color_ratio,
+            rgb_channel_current=hints.rgb_channel_current,
+            white_channel_current=hints.white_channel_current,
+            render_factor=hints.render_factor,
+            fade_in_ms=hints.fade_in_ms,
+            fade_out_ms=hints.fade_out_ms,
+            source_color_space=self._screen_sync_source_color_space,
+            device_profile=self._screen_sync_device_profile,
+            cool_mix_bias=self._screen_sync_cool_mix_bias,
+            mixing_model=self._screen_sync_mixing_model,
         )
         calibration = self._load_calibration(profile.mac, ip)
         tone_lut = self._load_tone_lut(profile.mac, ip)
@@ -166,9 +186,14 @@ class BulbController:
                 white_channels=profile.white_channels,
                 white_to_color_ratio=profile.white_to_color_ratio,
                 rgb_channel_current=profile.rgb_channel_current,
+                white_channel_current=profile.white_channel_current,
                 render_factor=profile.render_factor,
                 fade_in_ms=profile.fade_in_ms,
                 fade_out_ms=profile.fade_out_ms,
+                source_color_space=profile.source_color_space,
+                device_profile=profile.device_profile,
+                cool_mix_bias=profile.cool_mix_bias,
+                mixing_model=profile.mixing_model,
             )
         self._color_profiles[ip] = profile
         self._gamut_mappers[ip] = BulbGamutMapper(
@@ -197,7 +222,7 @@ class BulbController:
     ) -> Optional[BulbCalibrationTable]:
         """Load a saved calibration table using MAC first, then IP fallback."""
 
-        calibration = self._calibration_store.load_any((mac, ip))
+        calibration = self._calibration_store.load_for_bulb(mac, ip)
         if calibration is None:
             return None
 
@@ -214,7 +239,7 @@ class BulbController:
     ) -> Optional[BulbCalibrationTable]:
         """Load a saved video-tone correction table using MAC first, then IP fallback."""
 
-        tone_lut = self._tone_store.load_any((mac, ip))
+        tone_lut = self._tone_store.load_for_bulb(mac, ip)
         if tone_lut is None:
             return None
 
@@ -252,7 +277,7 @@ class BulbController:
             if isinstance(result, Exception) or result is None:
                 stale.append(ip)
                 continue
-            key = result.mac or result.ip or ip
+            key = mac_identity(result.mac) or result.ip or ip
             if key in seen_macs:
                 stale.append(ip)
                 continue
@@ -271,13 +296,54 @@ class BulbController:
         self.invalidate_screen_sync_mapping(ips)
         return await self.resolve_screen_sync_targets(ips)
 
-    async def prepare_screen_sync_mappers(self, ips: list[str]) -> None:
+    async def prepare_screen_sync_mappers(
+        self,
+        ips: list[str],
+        source_color_space: str = "srgb",
+        device_profile: str = "generic",
+        cool_mix_bias: float = 0.0,
+        mixing_model: str = "heuristic",
+    ) -> None:
         """Preload per-bulb screen-sync mappers for synchronous real-time sends."""
+
+        normalized_space = self._normalize_source_color_space(source_color_space)
+        normalized_profile = str(device_profile).lower().replace("-", "_")
+        if normalized_profile not in {"generic", "mac", "bravia", "wide_gamut_hdr"}:
+            normalized_profile = "generic"
+        bias = float(cool_mix_bias)
+        normalized_mixing_model = str(mixing_model).lower()
+        if normalized_mixing_model not in {"heuristic", "physical"}:
+            normalized_mixing_model = "heuristic"
+
+        rebuild = (
+            normalized_space != self._screen_sync_source_color_space
+            or normalized_profile != self._screen_sync_device_profile
+            or abs(bias - self._screen_sync_cool_mix_bias) > 1e-6
+            or normalized_mixing_model != self._screen_sync_mixing_model
+        )
+        if rebuild:
+            self._screen_sync_source_color_space = normalized_space
+            self._screen_sync_device_profile = normalized_profile
+            self._screen_sync_cool_mix_bias = bias
+            self._screen_sync_mixing_model = normalized_mixing_model
+            self.invalidate_screen_sync_mapping(ips)
 
         await asyncio.gather(
             *(self.get_color_profile(ip) for ip in ips),
             return_exceptions=True,
         )
+
+    def _normalize_source_color_space(self, source_color_space: str) -> str:
+        normalized = str(source_color_space).lower().replace("_", "-")
+        aliases = {
+            "p3": "display-p3",
+            "display_p3": "display-p3",
+            "bt2020": "rec2020",
+            "bt.2020": "rec2020",
+            "rec-2020": "rec2020",
+        }
+        normalized = aliases.get(normalized, normalized)
+        return normalized if normalized in {"srgb", "display-p3", "dci-p3", "rec2020", "scrgb"} else "srgb"
 
     def map_screen_sync_payload_cached(
         self,
@@ -315,25 +381,42 @@ class BulbController:
         profile = self._color_profiles.get(ip)
         primary_key = sanitize_calibration_key(profile.mac) if profile and profile.mac else None
         ip_key = sanitize_calibration_key(ip)
-        calibration_active = ip_key in self._calibration_tables or (
-            primary_key in self._calibration_tables if primary_key else False
-        )
+        calibration = (self._calibration_tables.get(primary_key) if primary_key else None) or self._calibration_tables.get(ip_key)
+        calibration_active = calibration is not None and calibration.sample_count >= 4
+        neutral_active = calibration is not None and calibration.neutral_white_payload is not None
         tone_active = ip_key in self._tone_tables or (
             primary_key in self._tone_tables if primary_key else False
         )
         return {
             "model_name": profile.model_name if profile else None,
             "camera_calibration": calibration_active,
+            "neutral_white": neutral_active,
             "tone_lut": tone_active,
         }
+
+    def max_fade_ms(self, ips: list[str]) -> int:
+        """Longest on/off fade the given bulbs have configured (0 if unknown)."""
+
+        fades = [0]
+        for ip in ips:
+            profile = self._color_profiles.get(ip)
+            if profile is not None:
+                fades.extend((int(profile.fade_in_ms), int(profile.fade_out_ms)))
+        return max(fades)
 
     def summarize_screen_sync_mapping(self, ips: list[str]) -> str:
         """Return a compact user-facing summary of active screen-sync mapping layers."""
 
         flags = [self.get_screen_sync_mapping_flags(ip) for ip in ips]
         parts: list[str] = []
+        if self._screen_sync_mixing_model == "physical":
+            parts.append("physical mixing (experimental)")
+        if self._screen_sync_source_color_space != "srgb":
+            parts.append(self._screen_sync_source_color_space)
         if any(bool(flag["camera_calibration"]) for flag in flags):
             parts.append("camera calibration")
+        if any(bool(flag["neutral_white"]) for flag in flags):
+            parts.append("custom white balance")
         if any(bool(flag["tone_lut"]) for flag in flags):
             parts.append("tone LUT")
         return ", ".join(parts)
@@ -379,12 +462,6 @@ class BulbController:
             await self.turn_on(ip)
             return True
     
-    async def set_brightness(self, ip: str, brightness: int) -> None:
-        """Set bulb brightness (0-255)."""
-        bulb = self._get_bulb(ip)
-        brightness = max(0, min(255, brightness))
-        await bulb.turn_on(PilotBuilder(brightness=brightness))
-
     def _build_exact_rgb_builder(
         self,
         r: int,
@@ -497,11 +574,6 @@ class BulbController:
         
         await bulb.turn_on(builder)
     
-    async def set_scene(self, ip: str, scene_id: int) -> None:
-        """Set bulb to a WiZ scene by ID."""
-        bulb = self._get_bulb(ip)
-        await bulb.turn_on(PilotBuilder(scene=scene_id))
-    
     # Bulk operations for multiple bulbs
     
     async def turn_on_all(self, ips: list[str], brightness: Optional[int] = None) -> None:
@@ -519,6 +591,17 @@ class BulbController:
     async def set_rgb_all(self, ips: list[str], r: int, g: int, b: int, brightness: Optional[int] = None) -> None:
         """Set multiple bulbs to same RGB color."""
         await asyncio.gather(*[self.set_rgb(ip, r, g, b, brightness) for ip in ips])
+
+    async def set_brightness(self, ip: str, brightness: int) -> None:
+        """Set bulb brightness (0-255)."""
+        bulb = self._get_bulb(ip)
+        brightness = max(0, min(255, brightness))
+        await bulb.turn_on(PilotBuilder(brightness=brightness))
+
+    async def set_scene(self, ip: str, scene_id: int) -> None:
+        """Set bulb to a WiZ scene by ID."""
+        bulb = self._get_bulb(ip)
+        await bulb.turn_on(PilotBuilder(scene=scene_id))
 
     async def set_rgb_all_exact(
         self,

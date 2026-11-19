@@ -47,7 +47,8 @@ def cli(ctx):
 
 
 @cli.command()
-@click.option("--broadcast", "-b", default="192.168.1.255", help="Broadcast address for discovery")
+@click.option("--broadcast", "-b", default=None,
+              help="One broadcast address to search (default: every local network interface)")
 @click.option("--save/--no-save", default=True, help="Save discovered bulbs to config")
 @click.pass_context
 def discover(ctx, broadcast, save):
@@ -55,20 +56,20 @@ def discover(ctx, broadcast, save):
     controller = ctx.obj["controller"]
     config = ctx.obj["config"]
     
-    click.echo(f"Discovering bulbs on {broadcast}...")
+    click.echo(f"Discovering bulbs on {broadcast or 'all local network interfaces'}...")
     bulbs = run_async(ctx, controller.discover(broadcast))
     
     if not bulbs:
-        click.echo("No bulbs found. Check your network and broadcast address.")
+        click.echo("No bulbs found. Check that this PC and the bulbs are on the same Wi-Fi network.")
         return
     
     click.echo(f"Found {len(bulbs)} bulb(s):")
     for i, bulb in enumerate(bulbs, 1):
         click.echo(f"  {i}. IP: {bulb['ip']}, MAC: {bulb['mac']}")
-        if save:
-            config.add_bulb(bulb['ip'], f"Bulb {i}", bulb['mac'])
+
     
     if save:
+        config.add_discovered_bulbs(bulbs)
         click.echo(f"Saved to config: {config._config_path}")
 
 
@@ -322,156 +323,6 @@ def config_path(ctx):
     """Show configuration file path."""
     config = ctx.obj["config"]
     click.echo(config._config_path)
-
-
-@cli.command()
-@click.option("--port", "-p", type=int, default=38901, help="WebSocket server port")
-@click.option("--host", "-h", default="0.0.0.0", help="Host to bind to")
-@click.pass_context
-def serve(ctx, port, host):
-    """Start WebSocket server for Chrome extension and Android app.
-    
-    This allows external clients to sync colors with your WiZ bulbs.
-    The Chrome extension connects to ws://localhost:38901 by default.
-    """
-    from ..features.websocket_server import ColorSyncServer
-    from ..features.fast_udp_sender import FastBulbSenderPool
-    from ..features.sync_dispatcher import CoalescingAsyncDispatcher
-    
-    controller = ctx.obj["controller"]
-    config = ctx.obj["config"]
-    configured_ips = [b.ip for b in config.bulbs]
-    ips = run_async(ctx, controller.refresh_screen_sync_targets(configured_ips))
-    
-    if not ips:
-        click.echo("No reachable bulbs available. Run 'wizlight discover' or remove stale entries.")
-        return
-    
-    click.echo(f"Starting WebSocket server on ws://{host}:{port}")
-    click.echo(f"Controlling {len(ips)} reachable bulb(s): {', '.join(ips)}")
-    skipped = len(configured_ips) - len(ips)
-    if skipped:
-        click.echo(f"Skipping {skipped} stale or unreachable bulb(s)")
-    mapping = controller.summarize_screen_sync_mapping(ips)
-    if mapping:
-        click.echo(f"Mapping: {mapping}")
-    click.echo("Press Ctrl+C to stop")
-    click.echo()
-
-    run_async(ctx, controller.prepare_screen_sync_mappers(ips))
-    dispatcher = CoalescingAsyncDispatcher(
-        ctx.obj["runner"].submit,
-        controller.set_screen_sync_map,
-    )
-    fast_sender = FastBulbSenderPool(max_send_hz=min(28, max(12, config.screen_sync.max_fps)))
-    
-    def on_color_change(colors: dict) -> None:
-        """Handle color changes from WebSocket clients."""
-        from ..features.screen_sync import build_bulb_color_map
-        
-        bulb_colors = build_bulb_color_map(
-            ips,
-            colors,
-            config.screen_sync.mode,
-            config.screen_sync.bulb_layout,
-        )
-        
-        payloads = controller.map_screen_sync_payloads_cached(bulb_colors)
-        if len(payloads) == len(bulb_colors):
-            fast_sender.send_payload_map(payloads)
-        else:
-            dispatcher.submit(bulb_colors)
-    
-    async def run_server():
-        server = ColorSyncServer(on_color_change, port=port, host=host)
-        await server.start()
-        
-        try:
-            while True:
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await server.stop()
-    
-    try:
-        asyncio.run(run_server())
-    except KeyboardInterrupt:
-        click.echo("\nServer stopped")
-    finally:
-        dispatcher.close()
-        fast_sender.close()
-
-
-@cli.command()
-@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
-@click.pass_context
-def alexa(ctx, verbose):
-    """Start Alexa voice control bridge.
-    
-    This creates virtual WeMo devices that Alexa can discover and control.
-    Say "Alexa, discover devices" to find them, then use voice commands like
-    "Alexa, turn on Party Mode" or "Alexa, turn off WizLight".
-    
-    Requires fauxmo: pip install fauxmo
-    """
-    import subprocess
-    import sys
-    
-    from ..features.alexa_bridge import (
-        create_default_bridge,
-        start_action_server,
-    )
-    
-    config = ctx.obj["config"]
-    controller = ctx.obj["controller"]
-    ips = [b.ip for b in config.bulbs]
-    
-    if not ips:
-        click.echo("No bulbs configured. Run 'wizlight discover' first.")
-        return
-    
-    # Create and configure the bridge
-    bridge = create_default_bridge(controller, ips)
-    config_path = bridge.save_config()
-    
-    click.echo("WizLight Alexa Bridge")
-    click.echo("=" * 40)
-    click.echo(f"Controlling {len(ips)} bulb(s)")
-    click.echo()
-    click.echo("Virtual devices for Alexa:")
-    for device in bridge.devices:
-        click.echo(f"  • {device.name} (port {device.port})")
-    click.echo()
-    
-    # Start HTTP callback server
-    click.echo("Starting callback server on port 38900...")
-    start_action_server(bridge, port=38900)
-    
-    # Start fauxmo
-    click.echo("Starting fauxmo WeMo emulator...")
-    click.echo()
-    click.echo('Say "Alexa, discover devices" to find your WizLight.')
-    click.echo("Press Ctrl+C to stop")
-    click.echo()
-    
-    fauxmo_args = ["fauxmo", "-c", str(config_path)]
-    if verbose:
-        fauxmo_args.append("-v")
-    
-    try:
-        # Check if fauxmo is installed
-        subprocess.run(["fauxmo", "--version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        click.echo("Error: fauxmo not found. Install it with:")
-        click.echo("  pip install fauxmo")
-        return
-    
-    try:
-        # Run fauxmo (blocks until Ctrl+C)
-        subprocess.run(fauxmo_args)
-    except KeyboardInterrupt:
-        click.echo("\nAlexa bridge stopped")
 
 
 if __name__ == "__main__":

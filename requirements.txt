@@ -5,7 +5,12 @@ click>=8.0            # CLI framework
 # Screen sync
 mss>=9.0              # Fast screen capture
 Pillow>=10.0          # Image processing
-dxcam>=0.0.5          # GPU screen capture (Windows, optional)
+dxcam[winrt]>=0.3.0; sys_platform == "win32"  # GPU capture backends (Windows only)
+
+# macOS display gamut detection (Quartz / Core Graphics)
+pyobjc-core>=10.0; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
 
 # Clap detection
 sounddevice>=0.4      # Audio capture
@@ -14,12 +19,6 @@ numpy>=1.24           # Audio signal processing
 # GUI
 customtkinter>=5.0    # Modern UI widgets
 pystray>=0.19         # System tray integration
-
-# WebSocket server (for Chrome extension / Android app)
-websockets>=12.0      # Async WebSocket server
-
-# Alexa integration (optional)
-fauxmo>=0.6           # Belkin WeMo emulation for Alexa
 
 # Development
 pytest>=7.0

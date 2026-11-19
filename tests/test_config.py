@@ -44,6 +44,23 @@ def test_add_bulb_replaces_old_ip_for_same_mac_and_preserves_layout(tmp_path):
     assert reloaded.screen_sync.bulb_layout == {"192.168.1.20": "left"}
 
 
+def test_screen_sync_selection_defaults_to_all_and_follows_bulb_identity(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"bulbs": [
+        {"ip": "old", "name": "Desk", "mac": "aa:bb:cc:dd:ee:ff"},
+        {"ip": "other", "name": "Other"},
+    ]}))
+    config = Config.load(path)
+    assert [bulb.ip for bulb in config.screen_sync_bulbs()] == ["old", "other"]
+    assert config.set_bulb_screen_sync("old", False)
+    config.add_bulb("new", "Desk", "aabbccddeeff", preserve_name=True)
+    config.add_bulb("old", "Replacement", "11:22:33:44:55:66")
+    config = Config.load(path)
+    assert [bulb.ip for bulb in config.screen_sync_bulbs()] == ["other", "old"]
+    assert config.set_bulb_screen_sync("new", True)
+    assert len(Config.load(path).screen_sync_bulbs()) == 3
+
+
 def test_remove_bulbs_prunes_layout_entries(tmp_path):
     config_path = tmp_path / "wizlight" / "config.json"
     config = Config.load(config_path)
@@ -132,6 +149,26 @@ def test_load_old_config_applies_new_screen_sync_defaults(tmp_path):
     assert config.screen_sync.color_boost == 1.18
     assert config.screen_sync.color_algorithm == "auto"
     assert config.screen_sync.bulb_layout == {}
+    assert config.screen_sync.mixing_model == "heuristic"
+
+
+def test_mixing_model_defaults_to_heuristic_and_accepts_physical():
+    from src.core.config import ScreenSyncConfig
+
+    assert ScreenSyncConfig().mixing_model == "heuristic"
+    assert ScreenSyncConfig(mixing_model="physical").mixing_model == "physical"
+    assert ScreenSyncConfig(mixing_model="Physical").mixing_model == "physical"
+    assert ScreenSyncConfig(mixing_model="not-a-real-model").mixing_model == "heuristic"
+
+
+def test_physical_orange_trim_defaults_on_and_respects_saved_opt_out(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"screen_sync":{"mixing_model":"physical"}}', encoding="utf-8")
+    config = Config.load(config_path)
+    assert config.screen_sync.physical_color_trim
+    config.screen_sync.physical_color_trim = False
+    config.save()
+    assert not Config.load(config_path).screen_sync.physical_color_trim
 
 
 def test_load_old_config_applies_new_clap_defaults(tmp_path):
@@ -157,3 +194,16 @@ def test_load_old_config_applies_new_clap_defaults(tmp_path):
     assert config.clap.threshold == 0.055
     assert config.clap.rms_threshold == 0.01
     assert config.clap.double_clap_window == 0.85
+
+
+def test_discover_swapped_bulbs_preserves_exclusion_and_zones(tmp_path):
+    config = Config.load(tmp_path / "config.json")
+    config.add_bulb("192.0.2.1", "Left", "000000000001")
+    config.add_bulb("192.0.2.2", "Right", "000000000002")
+    config.set_bulb_screen_sync("192.0.2.2", False)
+    config.screen_sync.bulb_layout = {"192.0.2.1": "left", "192.0.2.2": "right"}
+    config.add_discovered_bulbs([{"ip": "192.0.2.1", "mac": "000000000002"},
+                                 {"ip": "192.0.2.2", "mac": "000000000001"}])
+    reloaded = Config.load(config._config_path)
+    assert [(b.name, b.ip) for b in reloaded.screen_sync_bulbs()] == [("Left", "192.0.2.2")]
+    assert reloaded.screen_sync.bulb_layout == {"192.0.2.1": "right", "192.0.2.2": "left"}

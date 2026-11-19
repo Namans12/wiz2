@@ -1,0 +1,4820 @@
+{
+  "scope": "Opt-in two-bulb state/brightness validation; restores both lamps afterward.\n\nMeasures dispatch to *reported state*, not optical latency or color accuracy.\nThe same 50 ms observer queries run in both A/B modes and can affect Wi-Fi\nsleep behavior. Use a fixed camera for unperturbed screen-to-light latency.\n",
+  "segments": [
+    {
+      "kind": "A",
+      "cases": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 3.4769000485539436,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 305.76499993912876,
+              "state": {
+                "rssi": -73,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 3,
+                "b": 0,
+                "c": 0,
+                "w": 21,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 509.80450003407896,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 3,
+                "b": 0,
+                "c": 0,
+                "w": 22,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 2.895900048315525,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 108.03849995136261,
+              "state": {
+                "rssi": -74,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 2,
+                "c": 0,
+                "w": 40,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 18.00579996779561,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 2,
+                "c": 0,
+                "w": 40,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 2.758899936452508,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 177.001400035806,
+              "state": {
+                "rssi": -80,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 52,
+                "b": 255,
+                "c": 0,
+                "w": 0,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 641.4309000829235,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 50,
+                "b": 255,
+                "c": 0,
+                "w": 0,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 2.6983999414369464,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 543.8556000590324,
+              "state": {
+                "rssi": -80,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 122,
+                "c": 0,
+                "w": 36,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 649.2480000015348,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 122,
+                "c": 0,
+                "w": 36,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 2.9758999589830637,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 145.30670002568513,
+              "state": {
+                "rssi": -76,
+                "state": true,
+                "sceneId": 0,
+                "r": 205,
+                "g": 0,
+                "b": 255,
+                "c": 0,
+                "w": 53,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 248.50840005092323,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 226,
+                "g": 0,
+                "b": 252,
+                "c": 0,
+                "w": 55,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 2.9543000273406506,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 388.66589998360723,
+              "state": {
+                "rssi": -73,
+                "state": true,
+                "sceneId": 0,
+                "r": 121,
+                "g": 255,
+                "b": 0,
+                "c": 0,
+                "w": 65,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 60.595600050874054,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 121,
+                "g": 255,
+                "b": 0,
+                "c": 0,
+                "w": 65,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 3.4584999084472656,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 394.1283000167459,
+              "state": {
+                "rssi": -79,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 454.75410006474704,
+              "state": {
+                "rssi": -67,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            128,
+            128,
+            128
+          ],
+          "brightness": {
+            "lamp_1": 170,
+            "lamp_2": 55
+          },
+          "frame_preparation_ms": 2.922500018030405,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 612.0596999535337,
+              "state": {
+                "rssi": -77,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 67
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 70.46939991414547,
+              "state": {
+                "rssi": -67,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 22
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            24,
+            24,
+            24
+          ],
+          "brightness": {
+            "lamp_1": 26,
+            "lamp_2": 35
+          },
+          "frame_preparation_ms": 2.85649998113513,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 919.8900000192225,
+              "state": {
+                "rssi": -73,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 67
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 103.34339994005859,
+              "state": {
+                "rssi": -67,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 14
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            120,
+            20
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 3.3509000204503536,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 577.8230000287294,
+              "state": {
+                "rssi": -73,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 85,
+                "b": 0,
+                "c": 0,
+                "w": 46,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 289.20140000991523,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 77,
+                "b": 0,
+                "c": 0,
+                "w": 45,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            100,
+            30,
+            220
+          ],
+          "brightness": {
+            "lamp_1": 105,
+            "lamp_2": 235
+          },
+          "frame_preparation_ms": 2.8574999887496233,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 293.2784000877291,
+              "state": {
+                "rssi": -75,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 18,
+                "b": 255,
+                "c": 0,
+                "w": 24,
+                "dimming": 41
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 412.3145000776276,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 19,
+                "b": 255,
+                "c": 0,
+                "w": 25,
+                "dimming": 92
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 105,
+            "lamp_2": 235
+          },
+          "frame_preparation_ms": 748.0727999936789,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 680.1445999881253,
+              "state": {
+                "rssi": -76,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 18,
+                "b": 255,
+                "c": 0,
+                "w": 24,
+                "dimming": 41
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 677.3780999938026,
+              "state": {
+                "rssi": -70,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 19,
+                "b": 255,
+                "c": 0,
+                "w": 25,
+                "dimming": 92
+              }
+            }
+          }
+        }
+      ],
+      "link": [],
+      "sender": [
+        {
+          "ip": "lamp_1",
+          "sent": 12,
+          "dropped": 0,
+          "attempted": 12,
+          "datagrams_sent": 72,
+          "send_errors": 0,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "sent": 12,
+          "dropped": 0,
+          "attempted": 12,
+          "datagrams_sent": 72,
+          "send_errors": 0,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "kind": "B",
+      "cases": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 3.334200009703636,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 707.3273999849334,
+              "state": {
+                "rssi": -74,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 3,
+                "b": 0,
+                "c": 0,
+                "w": 21,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 103.40739996172488,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 3,
+                "b": 0,
+                "c": 0,
+                "w": 22,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 2.6233000680804253,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 253.37930000387132,
+              "state": {
+                "rssi": -74,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 2,
+                "c": 0,
+                "w": 40,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 20.846799947321415,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 2,
+                "c": 0,
+                "w": 40,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 3.979800036177039,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 212.8243000479415,
+              "state": {
+                "rssi": -78,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 52,
+                "b": 255,
+                "c": 0,
+                "w": 0,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 20.914699998684227,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 50,
+                "b": 255,
+                "c": 0,
+                "w": 0,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 2.8876999858766794,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 226.67100001126528,
+              "state": {
+                "rssi": -74,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 122,
+                "c": 0,
+                "w": 36,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 144.30459996219724,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 122,
+                "c": 0,
+                "w": 36,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 2.9223000165075064,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 85.19669994711876,
+              "state": {
+                "rssi": -74,
+                "state": true,
+                "sceneId": 0,
+                "r": 205,
+                "g": 0,
+                "b": 255,
+                "c": 0,
+                "w": 53,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 165.48309999052435,
+              "state": {
+                "rssi": -67,
+                "state": true,
+                "sceneId": 0,
+                "r": 226,
+                "g": 0,
+                "b": 252,
+                "c": 0,
+                "w": 55,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 2.5730000343173742,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 289.4133999943733,
+              "state": {
+                "rssi": -75,
+                "state": true,
+                "sceneId": 0,
+                "r": 121,
+                "g": 255,
+                "b": 0,
+                "c": 0,
+                "w": 65,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 144.67800001148134,
+              "state": {
+                "rssi": -67,
+                "state": true,
+                "sceneId": 0,
+                "r": 121,
+                "g": 255,
+                "b": 0,
+                "c": 0,
+                "w": 65,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 2.9781999764963984,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 490.50449999049306,
+              "state": {
+                "rssi": -77,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 149.6791000245139,
+              "state": {
+                "rssi": -71,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            128,
+            128,
+            128
+          ],
+          "brightness": {
+            "lamp_1": 170,
+            "lamp_2": 55
+          },
+          "frame_preparation_ms": 2.843499998562038,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 244.47060003876686,
+              "state": {
+                "rssi": -78,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 67
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 244.8994000442326,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 22
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            24,
+            24,
+            24
+          ],
+          "brightness": {
+            "lamp_1": 26,
+            "lamp_2": 35
+          },
+          "frame_preparation_ms": 2.7410000329837203,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 300.7327999221161,
+              "state": {
+                "rssi": -74,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 67
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 779.7775999642909,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 14
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            120,
+            20
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 3.3941000001505017,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 17.701299977488816,
+              "state": {
+                "rssi": -79,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 85,
+                "b": 0,
+                "c": 0,
+                "w": 46,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 16.890999977476895,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 77,
+                "b": 0,
+                "c": 0,
+                "w": 45,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            100,
+            30,
+            220
+          ],
+          "brightness": {
+            "lamp_1": 105,
+            "lamp_2": 235
+          },
+          "frame_preparation_ms": 3.324100049212575,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 145.70979995187372,
+              "state": {
+                "rssi": -77,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 18,
+                "b": 255,
+                "c": 0,
+                "w": 24,
+                "dimming": 41
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 18.939899979159236,
+              "state": {
+                "rssi": -67,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 19,
+                "b": 255,
+                "c": 0,
+                "w": 25,
+                "dimming": 92
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 105,
+            "lamp_2": 235
+          },
+          "frame_preparation_ms": 744.3272999953479,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 165.72889999952167,
+              "state": {
+                "rssi": -77,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 18,
+                "b": 255,
+                "c": 0,
+                "w": 24,
+                "dimming": 41
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 68.47069994546473,
+              "state": {
+                "rssi": -68,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 19,
+                "b": 255,
+                "c": 0,
+                "w": 25,
+                "dimming": 92
+              }
+            }
+          }
+        }
+      ],
+      "link": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 340,
+          "replies": 322,
+          "timeouts": 18,
+          "rtt_ms": 7.451300043612719,
+          "rtt_p95_ms": 38.1012000143528,
+          "awake_pct": 93.75,
+          "rssi": -78,
+          "updates": 12,
+          "confirmed": 10,
+          "stale_events": 0,
+          "recoveries": 0,
+          "state_confirmed": true,
+          "recovery_ms": null,
+          "resends": 5,
+          "confirm_ms": 244.55589998979121,
+          "confirm_p95_ms": 524.109199992381,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 502,
+          "replies": 487,
+          "timeouts": 15,
+          "rtt_ms": 6.608900032006204,
+          "rtt_p95_ms": 19.46089998818934,
+          "awake_pct": 96.66666666666667,
+          "rssi": -68,
+          "updates": 12,
+          "confirmed": 12,
+          "stale_events": 0,
+          "recoveries": 0,
+          "state_confirmed": true,
+          "recovery_ms": null,
+          "resends": 3,
+          "confirm_ms": 158.14429998863488,
+          "confirm_p95_ms": 774.2571000708267,
+          "last_error": null
+        }
+      ],
+      "sender": [
+        {
+          "ip": "lamp_1",
+          "sent": 12,
+          "dropped": 0,
+          "attempted": 12,
+          "datagrams_sent": 57,
+          "send_errors": 0,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "sent": 12,
+          "dropped": 0,
+          "attempted": 12,
+          "datagrams_sent": 43,
+          "send_errors": 0,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "kind": "B",
+      "cases": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 4.025100031867623,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 171.75430001225322,
+              "state": {
+                "rssi": -81,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 3,
+                "b": 0,
+                "c": 0,
+                "w": 21,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 65.29169995337725,
+              "state": {
+                "rssi": -67,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 3,
+                "b": 0,
+                "c": 0,
+                "w": 22,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 3.027800004929304,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 20.788000081665814,
+              "state": {
+                "rssi": -79,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 2,
+                "c": 0,
+                "w": 40,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 47.576399985700846,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 2,
+                "c": 0,
+                "w": 40,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 2.9613999649882317,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 67.59870005771518,
+              "state": {
+                "rssi": -81,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 52,
+                "b": 255,
+                "c": 0,
+                "w": 0,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 264.3106000032276,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 50,
+                "b": 255,
+                "c": 0,
+                "w": 0,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 2.8954000445082784,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 80.1606000168249,
+              "state": {
+                "rssi": -81,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 122,
+                "c": 0,
+                "w": 36,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 24.007500032894313,
+              "state": {
+                "rssi": -71,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 122,
+                "c": 0,
+                "w": 36,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 2.9412000440061092,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 72.72759999614209,
+              "state": {
+                "rssi": -81,
+                "state": true,
+                "sceneId": 0,
+                "r": 205,
+                "g": 0,
+                "b": 255,
+                "c": 0,
+                "w": 53,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 89.15289992000908,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 226,
+                "g": 0,
+                "b": 252,
+                "c": 0,
+                "w": 55,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 4.919899976812303,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 427.43000003974885,
+              "state": {
+                "rssi": -81,
+                "state": true,
+                "sceneId": 0,
+                "r": 121,
+                "g": 255,
+                "b": 0,
+                "c": 0,
+                "w": 65,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 148.91350001562387,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 121,
+                "g": 255,
+                "b": 0,
+                "c": 0,
+                "w": 65,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 3.1841000309213996,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 20.213899901136756,
+              "state": {
+                "rssi": -82,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 111.75349995028228,
+              "state": {
+                "rssi": -70,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            128,
+            128,
+            128
+          ],
+          "brightness": {
+            "lamp_1": 170,
+            "lamp_2": 55
+          },
+          "frame_preparation_ms": 2.870699972845614,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 18.143199966289103,
+              "state": {
+                "rssi": -79,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 67
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 19.429099978879094,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 22
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            24,
+            24,
+            24
+          ],
+          "brightness": {
+            "lamp_1": 26,
+            "lamp_2": 35
+          },
+          "frame_preparation_ms": 3.12330003362149,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 18.040900002233684,
+              "state": {
+                "rssi": -77,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 67
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 15.359499957412481,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 14
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            120,
+            20
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 3.091900027357042,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 443.5976999811828,
+              "state": {
+                "rssi": -79,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 85,
+                "b": 0,
+                "c": 0,
+                "w": 46,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 136.7104999953881,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 77,
+                "b": 0,
+                "c": 0,
+                "w": 45,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            100,
+            30,
+            220
+          ],
+          "brightness": {
+            "lamp_1": 105,
+            "lamp_2": 235
+          },
+          "frame_preparation_ms": 3.6869000177830458,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 84.7275999840349,
+              "state": {
+                "rssi": -77,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 18,
+                "b": 255,
+                "c": 0,
+                "w": 24,
+                "dimming": 41
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 748.861400061287,
+              "state": {
+                "rssi": -76,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 19,
+                "b": 255,
+                "c": 0,
+                "w": 25,
+                "dimming": 92
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 105,
+            "lamp_2": 235
+          },
+          "frame_preparation_ms": 744.4115000544116,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 462.89700001943856,
+              "state": {
+                "rssi": -75,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 18,
+                "b": 255,
+                "c": 0,
+                "w": 24,
+                "dimming": 41
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 47.003099927678704,
+              "state": {
+                "rssi": -70,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 19,
+                "b": 255,
+                "c": 0,
+                "w": 25,
+                "dimming": 92
+              }
+            }
+          }
+        }
+      ],
+      "link": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 304,
+          "replies": 286,
+          "timeouts": 18,
+          "rtt_ms": 7.967100013047457,
+          "rtt_p95_ms": 134.38920001499355,
+          "awake_pct": 88.75,
+          "rssi": -79,
+          "updates": 12,
+          "confirmed": 12,
+          "stale_events": 0,
+          "recoveries": 0,
+          "state_confirmed": true,
+          "recovery_ms": null,
+          "resends": 1,
+          "confirm_ms": 57.0818999549374,
+          "confirm_p95_ms": 741.1449999781325,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 367,
+          "replies": 352,
+          "timeouts": 15,
+          "rtt_ms": 6.826499942690134,
+          "rtt_p95_ms": 54.61089999880642,
+          "awake_pct": 92.91666666666667,
+          "rssi": -70,
+          "updates": 12,
+          "confirmed": 11,
+          "stale_events": 0,
+          "recoveries": 0,
+          "state_confirmed": true,
+          "recovery_ms": null,
+          "resends": 3,
+          "confirm_ms": 53.331100032664835,
+          "confirm_p95_ms": 752.7901999419555,
+          "last_error": null
+        }
+      ],
+      "sender": [
+        {
+          "ip": "lamp_1",
+          "sent": 12,
+          "dropped": 0,
+          "attempted": 12,
+          "datagrams_sent": 32,
+          "send_errors": 0,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "sent": 12,
+          "dropped": 0,
+          "attempted": 12,
+          "datagrams_sent": 43,
+          "send_errors": 0,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "kind": "A",
+      "cases": [
+        {
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 2.705999999307096,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 368.8181999605149,
+              "state": {
+                "rssi": -75,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 3,
+                "b": 0,
+                "c": 0,
+                "w": 21,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 74.85830003861338,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 3,
+                "b": 0,
+                "c": 0,
+                "w": 22,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 3.1835000263527036,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 169.95540005154908,
+              "state": {
+                "rssi": -75,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 2,
+                "c": 0,
+                "w": 40,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 68.16919997800142,
+              "state": {
+                "rssi": -70,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 2,
+                "c": 0,
+                "w": 40,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 4.494299995712936,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 171.7290000524372,
+              "state": {
+                "rssi": -77,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 52,
+                "b": 255,
+                "c": 0,
+                "w": 0,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 53.13140002544969,
+              "state": {
+                "rssi": -72,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 50,
+                "b": 255,
+                "c": 0,
+                "w": 0,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            255,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 2.5948999682441354,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 396.9160000560805,
+              "state": {
+                "rssi": -76,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 122,
+                "c": 0,
+                "w": 36,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 923.2176999794319,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 122,
+                "c": 0,
+                "w": 36,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            0,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 5.875399918295443,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 57.398300035856664,
+              "state": {
+                "rssi": -75,
+                "state": true,
+                "sceneId": 0,
+                "r": 205,
+                "g": 0,
+                "b": 255,
+                "c": 0,
+                "w": 53,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 154.43520003464073,
+              "state": {
+                "rssi": -72,
+                "state": true,
+                "sceneId": 0,
+                "r": 226,
+                "g": 0,
+                "b": 252,
+                "c": 0,
+                "w": 55,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 3.408999997191131,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 474.3344000307843,
+              "state": {
+                "rssi": -77,
+                "state": true,
+                "sceneId": 0,
+                "r": 121,
+                "g": 255,
+                "b": 0,
+                "c": 0,
+                "w": 65,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 161.25630005262792,
+              "state": {
+                "rssi": -70,
+                "state": true,
+                "sceneId": 0,
+                "r": 121,
+                "g": 255,
+                "b": 0,
+                "c": 0,
+                "w": 65,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            255,
+            255
+          ],
+          "brightness": {
+            "lamp_1": 115,
+            "lamp_2": 255
+          },
+          "frame_preparation_ms": 4.2498999973759055,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 96.04710002895445,
+              "state": {
+                "rssi": -79,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 45
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 348.3966999920085,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 100
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            128,
+            128,
+            128
+          ],
+          "brightness": {
+            "lamp_1": 170,
+            "lamp_2": 55
+          },
+          "frame_preparation_ms": 2.7596999425441027,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 203.4057000419125,
+              "state": {
+                "rssi": -81,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 67
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 525.5005999933928,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 22
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            24,
+            24,
+            24
+          ],
+          "brightness": {
+            "lamp_1": 26,
+            "lamp_2": 35
+          },
+          "frame_preparation_ms": 3.446800052188337,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 134.94999997783452,
+              "state": {
+                "rssi": -86,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 181,
+                "dimming": 67
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 862.9173999652267,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 180,
+                "g": 255,
+                "b": 180,
+                "c": 0,
+                "w": 160,
+                "dimming": 14
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            255,
+            120,
+            20
+          ],
+          "brightness": {
+            "lamp_1": 255,
+            "lamp_2": 115
+          },
+          "frame_preparation_ms": 2.414099988527596,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 550.6057000020519,
+              "state": {
+                "rssi": -77,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 85,
+                "b": 0,
+                "c": 0,
+                "w": 46,
+                "dimming": 100
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 154.1848999913782,
+              "state": {
+                "rssi": -68,
+                "state": true,
+                "sceneId": 0,
+                "r": 255,
+                "g": 77,
+                "b": 0,
+                "c": 0,
+                "w": 45,
+                "dimming": 45
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            100,
+            30,
+            220
+          ],
+          "brightness": {
+            "lamp_1": 105,
+            "lamp_2": 235
+          },
+          "frame_preparation_ms": 2.8104999801144004,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 51.92250001709908,
+              "state": {
+                "rssi": -76,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 18,
+                "b": 255,
+                "c": 0,
+                "w": 24,
+                "dimming": 41
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 356.1508000129834,
+              "state": {
+                "rssi": -69,
+                "state": true,
+                "sceneId": 0,
+                "r": 0,
+                "g": 19,
+                "b": 255,
+                "c": 0,
+                "w": 25,
+                "dimming": 92
+              }
+            }
+          }
+        },
+        {
+          "rgb": [
+            0,
+            0,
+            0
+          ],
+          "brightness": {
+            "lamp_1": 105,
+            "lamp_2": 235
+          },
+          "frame_preparation_ms": 748.2297000242397,
+          "results": {
+            "lamp_1": {
+              "matched": true,
+              "ms": 132.14279990643263,
+              "state": {
+                "rssi": -78,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 18,
+                "b": 255,
+                "c": 0,
+                "w": 24,
+                "dimming": 41
+              }
+            },
+            "lamp_2": {
+              "matched": true,
+              "ms": 24.201099993661046,
+              "state": {
+                "rssi": -68,
+                "state": false,
+                "sceneId": 0,
+                "r": 0,
+                "g": 19,
+                "b": 255,
+                "c": 0,
+                "w": 25,
+                "dimming": 92
+              }
+            }
+          }
+        }
+      ],
+      "link": [],
+      "sender": [
+        {
+          "ip": "lamp_1",
+          "sent": 12,
+          "dropped": 0,
+          "attempted": 12,
+          "datagrams_sent": 72,
+          "send_errors": 0,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "sent": 12,
+          "dropped": 0,
+          "attempted": 12,
+          "datagrams_sent": 72,
+          "send_errors": 0,
+          "last_error": null
+        }
+      ]
+    }
+  ],
+  "restored": {
+    "lamp_1": true,
+    "lamp_2": true
+  },
+  "mixing_model": "physical",
+  "recovery": {
+    "lamp_1": {
+      "matched": true,
+      "ms": 90.10499995201826,
+      "state": {
+        "rssi": -83,
+        "state": true,
+        "sceneId": 0,
+        "r": 0,
+        "g": 52,
+        "b": 255,
+        "c": 0,
+        "w": 0,
+        "dimming": 45
+      }
+    },
+    "lamp_2": {
+      "matched": true,
+      "ms": 82.64719997532666,
+      "state": {
+        "rssi": -70,
+        "state": true,
+        "sceneId": 0,
+        "r": 0,
+        "g": 50,
+        "b": 255,
+        "c": 0,
+        "w": 0,
+        "dimming": 100
+      }
+    }
+  },
+  "recovery_link": [
+    {
+      "ip": "lamp_1",
+      "reachable": true,
+      "paused": false,
+      "queries": 13,
+      "replies": 11,
+      "timeouts": 2,
+      "rtt_ms": 8.987699984572828,
+      "rtt_p95_ms": 86.48089994676411,
+      "awake_pct": 81.81818181818181,
+      "rssi": -76,
+      "updates": 1,
+      "confirmed": 1,
+      "stale_events": 1,
+      "recoveries": 1,
+      "state_confirmed": true,
+      "recovery_ms": 55.283800000324845,
+      "resends": 1,
+      "confirm_ms": 382.1557000046596,
+      "confirm_p95_ms": 382.1557000046596,
+      "last_error": null
+    },
+    {
+      "ip": "lamp_2",
+      "reachable": true,
+      "paused": false,
+      "queries": 12,
+      "replies": 10,
+      "timeouts": 2,
+      "rtt_ms": 12.57310004439205,
+      "rtt_p95_ms": 255.6632999330759,
+      "awake_pct": 90.0,
+      "rssi": -70,
+      "updates": 1,
+      "confirmed": 1,
+      "stale_events": 1,
+      "recoveries": 1,
+      "state_confirmed": true,
+      "recovery_ms": 57.62510001659393,
+      "resends": 1,
+      "confirm_ms": 860.138599993661,
+      "confirm_p95_ms": 860.138599993661,
+      "last_error": null
+    }
+  ],
+  "soak_samples": [
+    {
+      "seconds": 6.14584669994656,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 141,
+          "replies": 128,
+          "timeouts": 13,
+          "rtt_ms": 8.700300008058548,
+          "rtt_p95_ms": 141.19320001918823,
+          "awake_pct": 84.375,
+          "rssi": -80,
+          "updates": 30,
+          "confirmed": 13,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 6,
+          "confirm_ms": 90.54280002601445,
+          "confirm_p95_ms": 382.1557000046596,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 224,
+          "replies": 216,
+          "timeouts": 8,
+          "rtt_ms": 7.880699937231839,
+          "rtt_p95_ms": 131.84929999988526,
+          "awake_pct": 89.35185185185185,
+          "rssi": -71,
+          "updates": 30,
+          "confirmed": 17,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 9,
+          "confirm_ms": 104.81609997805208,
+          "confirm_p95_ms": 860.138599993661,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 12.354715599911287,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 277,
+          "replies": 256,
+          "timeouts": 21,
+          "rtt_ms": 8.700300008058548,
+          "rtt_p95_ms": 150.82059998530895,
+          "awake_pct": 83.75,
+          "rssi": -78,
+          "updates": 58,
+          "confirmed": 28,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 16,
+          "confirm_ms": 90.54280002601445,
+          "confirm_p95_ms": 266.21880009770393,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 321,
+          "replies": 300,
+          "timeouts": 21,
+          "rtt_ms": 7.817499921657145,
+          "rtt_p95_ms": 150.58299992233515,
+          "awake_pct": 88.33333333333333,
+          "rssi": -74,
+          "updates": 58,
+          "confirmed": 25,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 13,
+          "confirm_ms": 98.55900006368756,
+          "confirm_p95_ms": 241.9392999727279,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 18.540279699955136,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 372,
+          "replies": 341,
+          "timeouts": 31,
+          "rtt_ms": 9.108199970796704,
+          "rtt_p95_ms": 211.10209997277707,
+          "awake_pct": 83.33333333333333,
+          "rssi": -76,
+          "updates": 87,
+          "confirmed": 40,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 22,
+          "confirm_ms": 90.54280002601445,
+          "confirm_p95_ms": 321.4516000589356,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 425,
+          "replies": 391,
+          "timeouts": 34,
+          "rtt_ms": 8.021799963898957,
+          "rtt_p95_ms": 160.05069995298982,
+          "awake_pct": 86.66666666666667,
+          "rssi": -68,
+          "updates": 87,
+          "confirmed": 32,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 19,
+          "confirm_ms": 81.88509999308735,
+          "confirm_p95_ms": 241.9392999727279,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 24.757771999924444,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 498,
+          "replies": 457,
+          "timeouts": 41,
+          "rtt_ms": 9.089200058951974,
+          "rtt_p95_ms": 211.10209997277707,
+          "awake_pct": 83.75,
+          "rssi": -76,
+          "updates": 94,
+          "confirmed": 44,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 25,
+          "confirm_ms": 110.33619998488575,
+          "confirm_p95_ms": 270.25840000715107,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 621,
+          "replies": 578,
+          "timeouts": 43,
+          "rtt_ms": 7.9913000809028745,
+          "rtt_p95_ms": 55.71990006137639,
+          "awake_pct": 92.08333333333333,
+          "rssi": -70,
+          "updates": 94,
+          "confirmed": 36,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 20,
+          "confirm_ms": 82.46289996895939,
+          "confirm_p95_ms": 241.9392999727279,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 30.96499349991791,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 652,
+          "replies": 599,
+          "timeouts": 53,
+          "rtt_ms": 8.67040001321584,
+          "rtt_p95_ms": 87.2409000294283,
+          "awake_pct": 87.5,
+          "rssi": -79,
+          "updates": 98,
+          "confirmed": 46,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 28,
+          "confirm_ms": 110.33619998488575,
+          "confirm_p95_ms": 270.25840000715107,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 965,
+          "replies": 915,
+          "timeouts": 50,
+          "rtt_ms": 7.293200003914535,
+          "rtt_p95_ms": 35.73809994850308,
+          "awake_pct": 95.0,
+          "rssi": -71,
+          "updates": 98,
+          "confirmed": 37,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 20,
+          "confirm_ms": 81.88509999308735,
+          "confirm_p95_ms": 241.9392999727279,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 37.16698899993207,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 778,
+          "replies": 710,
+          "timeouts": 68,
+          "rtt_ms": 8.387799956835806,
+          "rtt_p95_ms": 55.66369998268783,
+          "awake_pct": 91.25,
+          "rssi": -77,
+          "updates": 126,
+          "confirmed": 56,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 31,
+          "confirm_ms": 90.54280002601445,
+          "confirm_p95_ms": 270.25840000715107,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 1170,
+          "replies": 1111,
+          "timeouts": 59,
+          "rtt_ms": 7.957400055602193,
+          "rtt_p95_ms": 46.1430000141263,
+          "awake_pct": 92.5,
+          "rssi": -72,
+          "updates": 126,
+          "confirmed": 51,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 26,
+          "confirm_ms": 81.88509999308735,
+          "confirm_p95_ms": 241.9392999727279,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 43.352979599963874,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 931,
+          "replies": 850,
+          "timeouts": 81,
+          "rtt_ms": 7.9332999885082245,
+          "rtt_p95_ms": 37.64789993874729,
+          "awake_pct": 92.5,
+          "rssi": -81,
+          "updates": 154,
+          "confirmed": 71,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 34,
+          "confirm_ms": 80.61689999885857,
+          "confirm_p95_ms": 270.25840000715107,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 1300,
+          "replies": 1230,
+          "timeouts": 70,
+          "rtt_ms": 8.162699989043176,
+          "rtt_p95_ms": 118.00610006321222,
+          "awake_pct": 89.16666666666667,
+          "rssi": -70,
+          "updates": 154,
+          "confirmed": 60,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 31,
+          "confirm_ms": 62.85099999513477,
+          "confirm_p95_ms": 345.00920004211366,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 49.5575970999198,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 1013,
+          "replies": 921,
+          "timeouts": 92,
+          "rtt_ms": 8.45259998459369,
+          "rtt_p95_ms": 117.43270000442863,
+          "awake_pct": 88.33333333333333,
+          "rssi": -77,
+          "updates": 183,
+          "confirmed": 79,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 40,
+          "confirm_ms": 76.76910003647208,
+          "confirm_p95_ms": 321.4516000589356,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 1444,
+          "replies": 1364,
+          "timeouts": 80,
+          "rtt_ms": 7.5171999633312225,
+          "rtt_p95_ms": 141.39089989475906,
+          "awake_pct": 88.33333333333333,
+          "rssi": -67,
+          "updates": 183,
+          "confirmed": 71,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 37,
+          "confirm_ms": 54.458400001749396,
+          "confirm_p95_ms": 241.9392999727279,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 55.759439799934626,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 1209,
+          "replies": 1107,
+          "timeouts": 102,
+          "rtt_ms": 8.12220002990216,
+          "rtt_p95_ms": 149.50070006307214,
+          "awake_pct": 90.83333333333333,
+          "rssi": -74,
+          "updates": 186,
+          "confirmed": 83,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 41,
+          "confirm_ms": 80.61689999885857,
+          "confirm_p95_ms": 321.4516000589356,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 1542,
+          "replies": 1452,
+          "timeouts": 90,
+          "rtt_ms": 8.17249994724989,
+          "rtt_p95_ms": 203.88699998147786,
+          "awake_pct": 85.41666666666667,
+          "rssi": -69,
+          "updates": 186,
+          "confirmed": 72,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 37,
+          "confirm_ms": 51.979799987748265,
+          "confirm_p95_ms": 241.9392999727279,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 61.97891399997752,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 1402,
+          "replies": 1292,
+          "timeouts": 110,
+          "rtt_ms": 7.865100051276386,
+          "rtt_p95_ms": 102.02560003381222,
+          "awake_pct": 90.83333333333333,
+          "rssi": -75,
+          "updates": 196,
+          "confirmed": 87,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 43,
+          "confirm_ms": 74.95370006654412,
+          "confirm_p95_ms": 321.4516000589356,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 1713,
+          "replies": 1613,
+          "timeouts": 100,
+          "rtt_ms": 7.823599968105555,
+          "rtt_p95_ms": 169.1496999701485,
+          "awake_pct": 87.5,
+          "rssi": -71,
+          "updates": 196,
+          "confirmed": 75,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 39,
+          "confirm_ms": 51.979799987748265,
+          "confirm_p95_ms": 212.23840001039207,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 68.18494589999318,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 1487,
+          "replies": 1362,
+          "timeouts": 125,
+          "rtt_ms": 8.394300006330013,
+          "rtt_p95_ms": 108.14569995272905,
+          "awake_pct": 87.91666666666667,
+          "rssi": -79,
+          "updates": 224,
+          "confirmed": 96,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 47,
+          "confirm_ms": 74.95370006654412,
+          "confirm_p95_ms": 275.3229000372812,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 1829,
+          "replies": 1716,
+          "timeouts": 113,
+          "rtt_ms": 8.138700039125979,
+          "rtt_p95_ms": 84.73300002515316,
+          "awake_pct": 89.58333333333333,
+          "rssi": -70,
+          "updates": 224,
+          "confirmed": 88,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 42,
+          "confirm_ms": 48.53879997972399,
+          "confirm_p95_ms": 232.1773999137804,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 74.38885739992838,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 1571,
+          "replies": 1437,
+          "timeouts": 134,
+          "rtt_ms": 8.709199959412217,
+          "rtt_p95_ms": 145.15610004309565,
+          "awake_pct": 85.41666666666667,
+          "rssi": -77,
+          "updates": 252,
+          "confirmed": 105,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 57,
+          "confirm_ms": 74.95370006654412,
+          "confirm_p95_ms": 320.8520000334829,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 1993,
+          "replies": 1868,
+          "timeouts": 125,
+          "rtt_ms": 7.997799897566438,
+          "rtt_p95_ms": 53.97789995186031,
+          "awake_pct": 92.08333333333333,
+          "rssi": -69,
+          "updates": 252,
+          "confirmed": 98,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 46,
+          "confirm_ms": 48.53879997972399,
+          "confirm_p95_ms": 232.1773999137804,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 80.58830970001873,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 1783,
+          "replies": 1640,
+          "timeouts": 143,
+          "rtt_ms": 8.437099982984364,
+          "rtt_p95_ms": 145.15610004309565,
+          "awake_pct": 89.16666666666667,
+          "rssi": -77,
+          "updates": 279,
+          "confirmed": 122,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 63,
+          "confirm_ms": 71.99590001255274,
+          "confirm_p95_ms": 275.3229000372812,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 2193,
+          "replies": 2060,
+          "timeouts": 133,
+          "rtt_ms": 7.53539998549968,
+          "rtt_p95_ms": 45.22249998990446,
+          "awake_pct": 92.08333333333333,
+          "rssi": -67,
+          "updates": 279,
+          "confirmed": 113,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 51,
+          "confirm_ms": 36.66769992560148,
+          "confirm_p95_ms": 232.1773999137804,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 86.80170259997249,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 1936,
+          "replies": 1786,
+          "timeouts": 150,
+          "rtt_ms": 9.214799967594445,
+          "rtt_p95_ms": 148.64379994105548,
+          "awake_pct": 87.5,
+          "rssi": -81,
+          "updates": 279,
+          "confirmed": 122,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 63,
+          "confirm_ms": 71.99590001255274,
+          "confirm_p95_ms": 275.3229000372812,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 2379,
+          "replies": 2238,
+          "timeouts": 141,
+          "rtt_ms": 8.392400108277798,
+          "rtt_p95_ms": 118.0873999837786,
+          "awake_pct": 89.58333333333333,
+          "rssi": -68,
+          "updates": 279,
+          "confirmed": 114,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 51,
+          "confirm_ms": 48.53879997972399,
+          "confirm_p95_ms": 297.01310000382364,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 93.02035879995674,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 2094,
+          "replies": 1933,
+          "timeouts": 161,
+          "rtt_ms": 8.525199955329299,
+          "rtt_p95_ms": 129.23489999957383,
+          "awake_pct": 86.66666666666667,
+          "rssi": -79,
+          "updates": 293,
+          "confirmed": 129,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 64,
+          "confirm_ms": 73.45860009081662,
+          "confirm_p95_ms": 294.2880999762565,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 2530,
+          "replies": 2380,
+          "timeouts": 150,
+          "rtt_ms": 7.601900026202202,
+          "rtt_p95_ms": 116.76859995350242,
+          "awake_pct": 91.25,
+          "rssi": -72,
+          "updates": 293,
+          "confirmed": 119,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 55,
+          "confirm_ms": 48.53879997972399,
+          "confirm_p95_ms": 232.1773999137804,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 99.2320096999174,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 2358,
+          "replies": 2192,
+          "timeouts": 166,
+          "rtt_ms": 8.824900025501847,
+          "rtt_p95_ms": 60.407100012525916,
+          "awake_pct": 90.83333333333333,
+          "rssi": -76,
+          "updates": 321,
+          "confirmed": 147,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 73,
+          "confirm_ms": 38.15839998424053,
+          "confirm_p95_ms": 275.3229000372812,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 2706,
+          "replies": 2549,
+          "timeouts": 157,
+          "rtt_ms": 8.320200024172664,
+          "rtt_p95_ms": 154.7067000064999,
+          "awake_pct": 87.08333333333333,
+          "rssi": -67,
+          "updates": 321,
+          "confirmed": 135,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 63,
+          "confirm_ms": 61.684399959631264,
+          "confirm_p95_ms": 297.01310000382364,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 105.44139279995579,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 2499,
+          "replies": 2322,
+          "timeouts": 177,
+          "rtt_ms": 8.445100043900311,
+          "rtt_p95_ms": 95.25889996439219,
+          "awake_pct": 90.0,
+          "rssi": -80,
+          "updates": 349,
+          "confirmed": 157,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 77,
+          "confirm_ms": 37.08630008623004,
+          "confirm_p95_ms": 247.0746000763029,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 2953,
+          "replies": 2789,
+          "timeouts": 164,
+          "rtt_ms": 8.13239999115467,
+          "rtt_p95_ms": 45.27329991105944,
+          "awake_pct": 92.08333333333333,
+          "rssi": -68,
+          "updates": 349,
+          "confirmed": 152,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 71,
+          "confirm_ms": 54.69020002055913,
+          "confirm_p95_ms": 298.2678000116721,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 111.66132870002184,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 2704,
+          "replies": 2520,
+          "timeouts": 184,
+          "rtt_ms": 8.308500051498413,
+          "rtt_p95_ms": 78.41529999859631,
+          "awake_pct": 88.75,
+          "rssi": -79,
+          "updates": 371,
+          "confirmed": 176,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 84,
+          "confirm_ms": 40.82520003430545,
+          "confirm_p95_ms": 242.91609995998442,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 3269,
+          "replies": 3101,
+          "timeouts": 168,
+          "rtt_ms": 7.151199970394373,
+          "rtt_p95_ms": 96.250299946405,
+          "awake_pct": 90.83333333333333,
+          "rssi": -68,
+          "updates": 371,
+          "confirmed": 168,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 75,
+          "confirm_ms": 36.439299932681024,
+          "confirm_p95_ms": 298.2678000116721,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 117.87326569994912,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 2890,
+          "replies": 2698,
+          "timeouts": 192,
+          "rtt_ms": 8.410200010985136,
+          "rtt_p95_ms": 107.6195000205189,
+          "awake_pct": 89.16666666666667,
+          "rssi": -79,
+          "updates": 371,
+          "confirmed": 176,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 84,
+          "confirm_ms": 40.82520003430545,
+          "confirm_p95_ms": 242.91609995998442,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 3407,
+          "replies": 3227,
+          "timeouts": 180,
+          "rtt_ms": 7.8205999452620745,
+          "rtt_p95_ms": 92.0727999182418,
+          "awake_pct": 92.08333333333333,
+          "rssi": -69,
+          "updates": 371,
+          "confirmed": 168,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 75,
+          "confirm_ms": 36.439299932681024,
+          "confirm_p95_ms": 298.2678000116721,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 124.07206549996044,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 3254,
+          "replies": 3059,
+          "timeouts": 195,
+          "rtt_ms": 8.112200070172548,
+          "rtt_p95_ms": 36.9689998915419,
+          "awake_pct": 92.91666666666667,
+          "rssi": -77,
+          "updates": 391,
+          "confirmed": 191,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 87,
+          "confirm_ms": 39.280900033190846,
+          "confirm_p95_ms": 242.91609995998442,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 3627,
+          "replies": 3440,
+          "timeouts": 187,
+          "rtt_ms": 8.435299969278276,
+          "rtt_p95_ms": 45.85710004903376,
+          "awake_pct": 90.83333333333333,
+          "rssi": -67,
+          "updates": 391,
+          "confirmed": 181,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 79,
+          "confirm_ms": 36.439299932681024,
+          "confirm_p95_ms": 272.81310001853853,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 130.26607679994777,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 3399,
+          "replies": 3194,
+          "timeouts": 205,
+          "rtt_ms": 8.408900001086295,
+          "rtt_p95_ms": 96.67569992598146,
+          "awake_pct": 90.0,
+          "rssi": -73,
+          "updates": 419,
+          "confirmed": 201,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 93,
+          "confirm_ms": 33.74499990604818,
+          "confirm_p95_ms": 247.0746000763029,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 3812,
+          "replies": 3617,
+          "timeouts": 195,
+          "rtt_ms": 7.988800061866641,
+          "rtt_p95_ms": 120.9682000335306,
+          "awake_pct": 89.16666666666667,
+          "rssi": -68,
+          "updates": 419,
+          "confirmed": 197,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 85,
+          "confirm_ms": 38.87579997535795,
+          "confirm_p95_ms": 280.5574999656528,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 136.44694069994148,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": false,
+          "paused": false,
+          "queries": 3520,
+          "replies": 3304,
+          "timeouts": 216,
+          "rtt_ms": 8.552400046028197,
+          "rtt_p95_ms": 127.61259998660535,
+          "awake_pct": 88.75,
+          "rssi": -75,
+          "updates": 448,
+          "confirmed": 212,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 102,
+          "confirm_ms": 33.74499990604818,
+          "confirm_p95_ms": 265.26759995613247,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 3934,
+          "replies": 3728,
+          "timeouts": 206,
+          "rtt_ms": 7.913699955679476,
+          "rtt_p95_ms": 151.25709993299097,
+          "awake_pct": 88.75,
+          "rssi": -68,
+          "updates": 448,
+          "confirmed": 206,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 91,
+          "confirm_ms": 34.9366000154987,
+          "confirm_p95_ms": 272.81310001853853,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 142.65752489992883,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 3695,
+          "replies": 3468,
+          "timeouts": 227,
+          "rtt_ms": 8.083700085990131,
+          "rtt_p95_ms": 119.36060001607984,
+          "awake_pct": 90.0,
+          "rssi": -72,
+          "updates": 464,
+          "confirmed": 220,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 105,
+          "confirm_ms": 62.312699970789254,
+          "confirm_p95_ms": 272.5270000519231,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 4142,
+          "replies": 3928,
+          "timeouts": 214,
+          "rtt_ms": 8.386600064113736,
+          "rtt_p95_ms": 115.31070002820343,
+          "awake_pct": 91.25,
+          "rssi": -67,
+          "updates": 464,
+          "confirmed": 216,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 94,
+          "confirm_ms": 34.9366000154987,
+          "confirm_p95_ms": 280.5574999656528,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 148.864102399908,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 3882,
+          "replies": 3645,
+          "timeouts": 237,
+          "rtt_ms": 8.752099936828017,
+          "rtt_p95_ms": 58.02959995344281,
+          "awake_pct": 91.66666666666667,
+          "rssi": -72,
+          "updates": 464,
+          "confirmed": 220,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 105,
+          "confirm_ms": 62.312699970789254,
+          "confirm_p95_ms": 272.5270000519231,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 4385,
+          "replies": 4162,
+          "timeouts": 223,
+          "rtt_ms": 7.588699925690889,
+          "rtt_p95_ms": 52.48770001344383,
+          "awake_pct": 93.33333333333333,
+          "rssi": -68,
+          "updates": 464,
+          "confirmed": 216,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 94,
+          "confirm_ms": 34.9366000154987,
+          "confirm_p95_ms": 280.5574999656528,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 155.06933309999295,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 4009,
+          "replies": 3762,
+          "timeouts": 247,
+          "rtt_ms": 8.88219999615103,
+          "rtt_p95_ms": 130.73680002707988,
+          "awake_pct": 89.16666666666667,
+          "rssi": -74,
+          "updates": 487,
+          "confirmed": 227,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 110,
+          "confirm_ms": 49.52949995640665,
+          "confirm_p95_ms": 369.31690003257245,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 4538,
+          "replies": 4307,
+          "timeouts": 231,
+          "rtt_ms": 8.359699975699186,
+          "rtt_p95_ms": 109.22510002274066,
+          "awake_pct": 89.16666666666667,
+          "rssi": -68,
+          "updates": 487,
+          "confirmed": 228,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 100,
+          "confirm_ms": 38.85739995166659,
+          "confirm_p95_ms": 280.5574999656528,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 161.27212589990813,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 4162,
+          "replies": 3907,
+          "timeouts": 255,
+          "rtt_ms": 8.886900031939149,
+          "rtt_p95_ms": 193.71249992400408,
+          "awake_pct": 84.16666666666667,
+          "rssi": -73,
+          "updates": 515,
+          "confirmed": 243,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 119,
+          "confirm_ms": 70.3868999844417,
+          "confirm_p95_ms": 369.31690003257245,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 4722,
+          "replies": 4481,
+          "timeouts": 241,
+          "rtt_ms": 7.661799900233746,
+          "rtt_p95_ms": 67.11689999792725,
+          "awake_pct": 90.41666666666667,
+          "rssi": -68,
+          "updates": 515,
+          "confirmed": 241,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 104,
+          "confirm_ms": 38.85739995166659,
+          "confirm_p95_ms": 334.0851999819279,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 167.4694624999538,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 4342,
+          "replies": 4077,
+          "timeouts": 265,
+          "rtt_ms": 8.647299953736365,
+          "rtt_p95_ms": 80.98749991040677,
+          "awake_pct": 86.25,
+          "rssi": -75,
+          "updates": 544,
+          "confirmed": 256,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 123,
+          "confirm_ms": 50.328200100921094,
+          "confirm_p95_ms": 272.5270000519231,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": false,
+          "paused": false,
+          "queries": 4878,
+          "replies": 4625,
+          "timeouts": 253,
+          "rtt_ms": 7.77110003400594,
+          "rtt_p95_ms": 39.24370009917766,
+          "awake_pct": 92.08333333333333,
+          "rssi": -68,
+          "updates": 544,
+          "confirmed": 254,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 109,
+          "confirm_ms": 35.02209996804595,
+          "confirm_p95_ms": 334.0851999819279,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 173.65737409994472,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 4490,
+          "replies": 4214,
+          "timeouts": 276,
+          "rtt_ms": 8.512599975802004,
+          "rtt_p95_ms": 68.43119999393821,
+          "awake_pct": 87.91666666666667,
+          "rssi": -75,
+          "updates": 556,
+          "confirmed": 262,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 126,
+          "confirm_ms": 54.43209991790354,
+          "confirm_p95_ms": 272.5270000519231,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 5099,
+          "replies": 4839,
+          "timeouts": 260,
+          "rtt_ms": 7.254200056195259,
+          "rtt_p95_ms": 41.640100069344044,
+          "awake_pct": 91.66666666666667,
+          "rssi": -68,
+          "updates": 556,
+          "confirmed": 259,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 109,
+          "confirm_ms": 56.7777999676764,
+          "confirm_p95_ms": 292.80269995797426,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 179.8518401000183,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 4670,
+          "replies": 4384,
+          "timeouts": 286,
+          "rtt_ms": 7.94279994443059,
+          "rtt_p95_ms": 84.73290002439171,
+          "awake_pct": 88.33333333333333,
+          "rssi": -77,
+          "updates": 556,
+          "confirmed": 262,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 126,
+          "confirm_ms": 54.43209991790354,
+          "confirm_p95_ms": 272.5270000519231,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 5350,
+          "replies": 5081,
+          "timeouts": 269,
+          "rtt_ms": 7.339300005696714,
+          "rtt_p95_ms": 27.674299897626042,
+          "awake_pct": 95.0,
+          "rssi": -68,
+          "updates": 556,
+          "confirmed": 259,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 109,
+          "confirm_ms": 56.7777999676764,
+          "confirm_p95_ms": 292.80269995797426,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 186.03588699991815,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 4759,
+          "replies": 4461,
+          "timeouts": 298,
+          "rtt_ms": 8.481499971821904,
+          "rtt_p95_ms": 120.20709994249046,
+          "awake_pct": 86.66666666666667,
+          "rssi": -77,
+          "updates": 585,
+          "confirmed": 268,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 132,
+          "confirm_ms": 54.43209991790354,
+          "confirm_p95_ms": 249.38130006194115,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 5471,
+          "replies": 5190,
+          "timeouts": 281,
+          "rtt_ms": 7.897700066678226,
+          "rtt_p95_ms": 109.5353999407962,
+          "awake_pct": 90.41666666666667,
+          "rssi": -67,
+          "updates": 585,
+          "confirmed": 267,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 114,
+          "confirm_ms": 56.7777999676764,
+          "confirm_p95_ms": 292.80269995797426,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 192.23138159990776,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": false,
+          "paused": false,
+          "queries": 4782,
+          "replies": 4468,
+          "timeouts": 314,
+          "rtt_ms": 8.620799984782934,
+          "rtt_p95_ms": 145.01279999967664,
+          "awake_pct": 84.16666666666667,
+          "rssi": -74,
+          "updates": 613,
+          "confirmed": 270,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 136,
+          "confirm_ms": 64.2371999565512,
+          "confirm_p95_ms": 249.38130006194115,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 5634,
+          "replies": 5341,
+          "timeouts": 293,
+          "rtt_ms": 8.221799973398447,
+          "rtt_p95_ms": 109.5353999407962,
+          "awake_pct": 90.41666666666667,
+          "rssi": -67,
+          "updates": 613,
+          "confirmed": 282,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 117,
+          "confirm_ms": 56.7777999676764,
+          "confirm_p95_ms": 248.1294999597594,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 198.4391702999128,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": false,
+          "paused": false,
+          "queries": 4802,
+          "replies": 4468,
+          "timeouts": 334,
+          "rtt_ms": 8.620799984782934,
+          "rtt_p95_ms": 145.01279999967664,
+          "awake_pct": 84.16666666666667,
+          "rssi": -74,
+          "updates": 642,
+          "confirmed": 270,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 136,
+          "confirm_ms": 64.2371999565512,
+          "confirm_p95_ms": 249.38130006194115,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 5734,
+          "replies": 5432,
+          "timeouts": 302,
+          "rtt_ms": 8.706800057552755,
+          "rtt_p95_ms": 151.60510002169758,
+          "awake_pct": 86.66666666666667,
+          "rssi": -67,
+          "updates": 642,
+          "confirmed": 293,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 127,
+          "confirm_ms": 68.33489995915443,
+          "confirm_p95_ms": 251.32299994584173,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 204.66341509995982,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 4897,
+          "replies": 4548,
+          "timeouts": 349,
+          "rtt_ms": 8.476599934510887,
+          "rtt_p95_ms": 157.04800002276897,
+          "awake_pct": 83.33333333333333,
+          "rssi": -76,
+          "updates": 649,
+          "confirmed": 271,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 136,
+          "confirm_ms": 64.2371999565512,
+          "confirm_p95_ms": 272.5270000519231,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": false,
+          "paused": false,
+          "queries": 5754,
+          "replies": 5432,
+          "timeouts": 322,
+          "rtt_ms": 8.706800057552755,
+          "rtt_p95_ms": 151.60510002169758,
+          "awake_pct": 86.66666666666667,
+          "rssi": -67,
+          "updates": 649,
+          "confirmed": 293,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 127,
+          "confirm_ms": 68.33489995915443,
+          "confirm_p95_ms": 251.32299994584173,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 210.85917609999888,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 4997,
+          "replies": 4636,
+          "timeouts": 361,
+          "rtt_ms": 9.126399992965162,
+          "rtt_p95_ms": 211.79760002996773,
+          "awake_pct": 83.33333333333333,
+          "rssi": -80,
+          "updates": 653,
+          "confirmed": 274,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 137,
+          "confirm_ms": 67.21400003880262,
+          "confirm_p95_ms": 272.5270000519231,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 5842,
+          "replies": 5503,
+          "timeouts": 339,
+          "rtt_ms": 8.612999925389886,
+          "rtt_p95_ms": 134.2108000535518,
+          "awake_pct": 88.33333333333333,
+          "rssi": -70,
+          "updates": 653,
+          "confirmed": 296,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 127,
+          "confirm_ms": 72.73130002431571,
+          "confirm_p95_ms": 251.32299994584173,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 217.0654341999907,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 5116,
+          "replies": 4742,
+          "timeouts": 374,
+          "rtt_ms": 8.352500037290156,
+          "rtt_p95_ms": 130.60449995100498,
+          "awake_pct": 87.08333333333333,
+          "rssi": -75,
+          "updates": 681,
+          "confirmed": 284,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 139,
+          "confirm_ms": 64.2371999565512,
+          "confirm_p95_ms": 319.4984000874683,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 6034,
+          "replies": 5690,
+          "timeouts": 344,
+          "rtt_ms": 8.182500023394823,
+          "rtt_p95_ms": 127.74979998357594,
+          "awake_pct": 88.33333333333333,
+          "rssi": -67,
+          "updates": 681,
+          "confirmed": 315,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 134,
+          "confirm_ms": 59.00250002741814,
+          "confirm_p95_ms": 248.1294999597594,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 223.2826317999279,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 5344,
+          "replies": 4961,
+          "timeouts": 383,
+          "rtt_ms": 7.989599951542914,
+          "rtt_p95_ms": 36.279099993407726,
+          "awake_pct": 92.5,
+          "rssi": -75,
+          "updates": 709,
+          "confirmed": 301,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 144,
+          "confirm_ms": 31.94169991184026,
+          "confirm_p95_ms": 249.38130006194115,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 6386,
+          "replies": 6038,
+          "timeouts": 348,
+          "rtt_ms": 7.667599944397807,
+          "rtt_p95_ms": 35.53790005389601,
+          "awake_pct": 94.16666666666667,
+          "rssi": -68,
+          "updates": 709,
+          "confirmed": 334,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 137,
+          "confirm_ms": 38.40179997496307,
+          "confirm_p95_ms": 239.51310000848025,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 229.45652639993932,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 5557,
+          "replies": 5165,
+          "timeouts": 392,
+          "rtt_ms": 7.7931999694556,
+          "rtt_p95_ms": 37.11969999130815,
+          "awake_pct": 91.66666666666667,
+          "rssi": -82,
+          "updates": 738,
+          "confirmed": 318,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 148,
+          "confirm_ms": 38.01599994767457,
+          "confirm_p95_ms": 292.47499990742654,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 6519,
+          "replies": 6160,
+          "timeouts": 359,
+          "rtt_ms": 8.189400075934827,
+          "rtt_p95_ms": 44.286100077442825,
+          "awake_pct": 91.66666666666667,
+          "rssi": -67,
+          "updates": 738,
+          "confirmed": 345,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 141,
+          "confirm_ms": 51.28730006981641,
+          "confirm_p95_ms": 240.86310004349798,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 235.64972290000878,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 5825,
+          "replies": 5427,
+          "timeouts": 398,
+          "rtt_ms": 7.572800037451088,
+          "rtt_p95_ms": 36.53939999639988,
+          "awake_pct": 92.08333333333333,
+          "rssi": -79,
+          "updates": 741,
+          "confirmed": 322,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 149,
+          "confirm_ms": 34.34710006695241,
+          "confirm_p95_ms": 292.47499990742654,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 6708,
+          "replies": 6343,
+          "timeouts": 365,
+          "rtt_ms": 8.498999988660216,
+          "rtt_p95_ms": 132.62319995556027,
+          "awake_pct": 87.91666666666667,
+          "rssi": -69,
+          "updates": 741,
+          "confirmed": 347,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 144,
+          "confirm_ms": 51.28730006981641,
+          "confirm_p95_ms": 240.86310004349798,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 241.84549009997863,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 6119,
+          "replies": 5717,
+          "timeouts": 402,
+          "rtt_ms": 8.022399968467653,
+          "rtt_p95_ms": 34.65579997282475,
+          "awake_pct": 92.91666666666667,
+          "rssi": -76,
+          "updates": 751,
+          "confirmed": 327,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 150,
+          "confirm_ms": 34.34710006695241,
+          "confirm_p95_ms": 292.47499990742654,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 6985,
+          "replies": 6611,
+          "timeouts": 374,
+          "rtt_ms": 7.820799946784973,
+          "rtt_p95_ms": 24.40210001077503,
+          "awake_pct": 95.41666666666667,
+          "rssi": -69,
+          "updates": 751,
+          "confirmed": 348,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 145,
+          "confirm_ms": 52.294200053438544,
+          "confirm_p95_ms": 240.86310004349798,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 248.0384003999643,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 6248,
+          "replies": 5836,
+          "timeouts": 412,
+          "rtt_ms": 7.833700045011938,
+          "rtt_p95_ms": 120.83230004645884,
+          "awake_pct": 88.33333333333333,
+          "rssi": -75,
+          "updates": 779,
+          "confirmed": 341,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 158,
+          "confirm_ms": 31.94169991184026,
+          "confirm_p95_ms": 214.95189995039254,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 7235,
+          "replies": 6852,
+          "timeouts": 383,
+          "rtt_ms": 7.355500012636185,
+          "rtt_p95_ms": 30.57750000152737,
+          "awake_pct": 93.75,
+          "rssi": -75,
+          "updates": 779,
+          "confirmed": 363,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 147,
+          "confirm_ms": 46.58760002348572,
+          "confirm_p95_ms": 176.88560008537024,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 254.2293264999753,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 6387,
+          "replies": 5967,
+          "timeouts": 420,
+          "rtt_ms": 8.441900019533932,
+          "rtt_p95_ms": 185.49800000619143,
+          "awake_pct": 82.91666666666667,
+          "rssi": -74,
+          "updates": 807,
+          "confirmed": 357,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 165,
+          "confirm_ms": 59.51009993441403,
+          "confirm_p95_ms": 222.30280004441738,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 7392,
+          "replies": 7004,
+          "timeouts": 388,
+          "rtt_ms": 7.659700000658631,
+          "rtt_p95_ms": 170.91950005851686,
+          "awake_pct": 87.91666666666667,
+          "rssi": -67,
+          "updates": 807,
+          "confirmed": 376,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 155,
+          "confirm_ms": 38.40179997496307,
+          "confirm_p95_ms": 177.2794999415055,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 260.4066595999757,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 6566,
+          "replies": 6133,
+          "timeouts": 433,
+          "rtt_ms": 7.725600036792457,
+          "rtt_p95_ms": 43.04189991671592,
+          "awake_pct": 91.25,
+          "rssi": -76,
+          "updates": 834,
+          "confirmed": 366,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 166,
+          "confirm_ms": 62.51640000846237,
+          "confirm_p95_ms": 214.95189995039254,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 7561,
+          "replies": 7163,
+          "timeouts": 398,
+          "rtt_ms": 7.538100006058812,
+          "rtt_p95_ms": 172.83279995899647,
+          "awake_pct": 86.66666666666667,
+          "rssi": -72,
+          "updates": 834,
+          "confirmed": 388,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 163,
+          "confirm_ms": 54.08629996236414,
+          "confirm_p95_ms": 197.78389995917678,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 266.60407769994345,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 6822,
+          "replies": 6382,
+          "timeouts": 440,
+          "rtt_ms": 7.940100040286779,
+          "rtt_p95_ms": 38.37239998392761,
+          "awake_pct": 92.5,
+          "rssi": -80,
+          "updates": 834,
+          "confirmed": 367,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 166,
+          "confirm_ms": 62.51640000846237,
+          "confirm_p95_ms": 222.30280004441738,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 7778,
+          "replies": 7370,
+          "timeouts": 408,
+          "rtt_ms": 7.790300063788891,
+          "rtt_p95_ms": 50.588599988259375,
+          "awake_pct": 93.33333333333333,
+          "rssi": -68,
+          "updates": 834,
+          "confirmed": 388,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 163,
+          "confirm_ms": 54.08629996236414,
+          "confirm_p95_ms": 197.78389995917678,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 272.78364329994656,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 7051,
+          "replies": 6602,
+          "timeouts": 449,
+          "rtt_ms": 7.773300050757825,
+          "rtt_p95_ms": 33.62710005603731,
+          "awake_pct": 91.25,
+          "rssi": -81,
+          "updates": 846,
+          "confirmed": 372,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 166,
+          "confirm_ms": 62.51640000846237,
+          "confirm_p95_ms": 222.30280004441738,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 8026,
+          "replies": 7610,
+          "timeouts": 416,
+          "rtt_ms": 7.6558999717235565,
+          "rtt_p95_ms": 35.257200011983514,
+          "awake_pct": 93.33333333333333,
+          "rssi": -69,
+          "updates": 846,
+          "confirmed": 392,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 166,
+          "confirm_ms": 54.08629996236414,
+          "confirm_p95_ms": 197.78389995917678,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 278.95587329997215,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 7223,
+          "replies": 6767,
+          "timeouts": 456,
+          "rtt_ms": 8.244200027547777,
+          "rtt_p95_ms": 48.5989999724552,
+          "awake_pct": 90.0,
+          "rssi": -77,
+          "updates": 874,
+          "confirmed": 387,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 55.283800000324845,
+          "resends": 173,
+          "confirm_ms": 67.4152000574395,
+          "confirm_p95_ms": 260.2846999652684,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 8209,
+          "replies": 7783,
+          "timeouts": 426,
+          "rtt_ms": 7.653500069864094,
+          "rtt_p95_ms": 98.4950999263674,
+          "awake_pct": 92.5,
+          "rssi": -68,
+          "updates": 874,
+          "confirmed": 407,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 170,
+          "confirm_ms": 26.21559996623546,
+          "confirm_p95_ms": 197.78389995917678,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 285.1618094999576,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 7351,
+          "replies": 6887,
+          "timeouts": 464,
+          "rtt_ms": 8.611400029622018,
+          "rtt_p95_ms": 160.04289989359677,
+          "awake_pct": 87.91666666666667,
+          "rssi": -76,
+          "updates": 903,
+          "confirmed": 404,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 180,
+          "confirm_ms": 63.55100008659065,
+          "confirm_p95_ms": 200.02510002814233,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 8360,
+          "replies": 7925,
+          "timeouts": 435,
+          "rtt_ms": 8.529299986548722,
+          "rtt_p95_ms": 115.90530001558363,
+          "awake_pct": 90.41666666666667,
+          "rssi": -66,
+          "updates": 903,
+          "confirmed": 419,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": false,
+          "recovery_ms": 57.62510001659393,
+          "resends": 179,
+          "confirm_ms": 33.628599951043725,
+          "confirm_p95_ms": 197.78389995917678,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 291.35241179994773,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 7519,
+          "replies": 7045,
+          "timeouts": 474,
+          "rtt_ms": 8.42450000345707,
+          "rtt_p95_ms": 159.8374000750482,
+          "awake_pct": 85.83333333333333,
+          "rssi": -78,
+          "updates": 926,
+          "confirmed": 418,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 184,
+          "confirm_ms": 63.55100008659065,
+          "confirm_p95_ms": 359.2322999611497,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 8509,
+          "replies": 8061,
+          "timeouts": 448,
+          "rtt_ms": 7.905700011178851,
+          "rtt_p95_ms": 103.95010001957417,
+          "awake_pct": 91.25,
+          "rssi": -69,
+          "updates": 926,
+          "confirmed": 428,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 182,
+          "confirm_ms": 38.230499951168895,
+          "confirm_p95_ms": 322.21380004193634,
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "seconds": 297.5594284000108,
+      "links": [
+        {
+          "ip": "lamp_1",
+          "reachable": true,
+          "paused": false,
+          "queries": 7728,
+          "replies": 7245,
+          "timeouts": 483,
+          "rtt_ms": 8.096500067040324,
+          "rtt_p95_ms": 96.81810007896274,
+          "awake_pct": 89.58333333333333,
+          "rssi": -79,
+          "updates": 926,
+          "confirmed": 418,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 55.283800000324845,
+          "resends": 184,
+          "confirm_ms": 63.55100008659065,
+          "confirm_p95_ms": 359.2322999611497,
+          "last_error": null
+        },
+        {
+          "ip": "lamp_2",
+          "reachable": true,
+          "paused": false,
+          "queries": 8759,
+          "replies": 8305,
+          "timeouts": 454,
+          "rtt_ms": 8.001200039871037,
+          "rtt_p95_ms": 65.91530004516244,
+          "awake_pct": 90.0,
+          "rssi": -68,
+          "updates": 926,
+          "confirmed": 428,
+          "stale_events": 1,
+          "recoveries": 1,
+          "state_confirmed": true,
+          "recovery_ms": 57.62510001659393,
+          "resends": 182,
+          "confirm_ms": 38.230499951168895,
+          "confirm_p95_ms": 322.21380004193634,
+          "last_error": null
+        }
+      ]
+    }
+  ],
+  "soak": {
+    "seconds": 300.04059679992497,
+    "process_cpu_seconds": 18.8125,
+    "updates": 4839,
+    "links": [
+      {
+        "ip": "lamp_1",
+        "reachable": true,
+        "paused": false,
+        "queries": 7766,
+        "replies": 7279,
+        "timeouts": 487,
+        "rtt_ms": 8.267099969089031,
+        "rtt_p95_ms": 53.7213000934571,
+        "awake_pct": 90.0,
+        "rssi": -71,
+        "updates": 926,
+        "confirmed": 418,
+        "stale_events": 1,
+        "recoveries": 1,
+        "state_confirmed": true,
+        "recovery_ms": 55.283800000324845,
+        "resends": 184,
+        "confirm_ms": 63.55100008659065,
+        "confirm_p95_ms": 359.2322999611497,
+        "last_error": null
+      },
+      {
+        "ip": "lamp_2",
+        "reachable": true,
+        "paused": false,
+        "queries": 8810,
+        "replies": 8351,
+        "timeouts": 459,
+        "rtt_ms": 8.051599957980216,
+        "rtt_p95_ms": 105.28910008724779,
+        "awake_pct": 89.58333333333333,
+        "rssi": -68,
+        "updates": 926,
+        "confirmed": 428,
+        "stale_events": 1,
+        "recoveries": 1,
+        "state_confirmed": true,
+        "recovery_ms": 57.62510001659393,
+        "resends": 182,
+        "confirm_ms": 38.230499951168895,
+        "confirm_p95_ms": 322.21380004193634,
+        "last_error": null
+      }
+    ],
+    "senders": [
+      {
+        "ip": "lamp_1",
+        "sent": 4584,
+        "dropped": 0,
+        "attempted": 4584,
+        "datagrams_sent": 6086,
+        "send_errors": 0,
+        "last_error": null
+      },
+      {
+        "ip": "lamp_2",
+        "sent": 4584,
+        "dropped": 0,
+        "attempted": 4584,
+        "datagrams_sent": 6026,
+        "send_errors": 0,
+        "last_error": null
+      }
+    ]
+  },
+  "raw_sha256": "4d9503e523a626ddbbf3c18b9eb811739fa437ca8710590cc223d9f67e40f144"
+}

@@ -1,9 +1,16 @@
 """Configuration management for WizLight."""
 
 import json
-from dataclasses import asdict, dataclass, field
+import hashlib
+import math
+import os
+import tempfile
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
+from threading import RLock
 from typing import Optional
+
+from .device_identity import mac_identity
 
 
 SCREEN_SYNC_MODES = ("single", "zones")
@@ -27,9 +34,48 @@ class BulbConfig:
     ip: str
     name: str
     mac: Optional[str] = None
+    screen_sync_enabled: bool = True
 
 
 COLOR_ALGORITHMS = ("auto", "weighted", "kmeans", "histogram")
+COLOR_SOURCE_SPACES = ("auto", "srgb", "display-p3", "rec2020")
+DEVICE_PROFILES = ("auto", "generic", "mac", "bravia", "wide_gamut_hdr")
+SYNC_PROFILES = ("auto", "cinema", "action")
+BRIGHTNESS_MODES = ("follow", "constant")
+MIXING_MODELS = ("heuristic", "physical")
+
+
+def _settings_from_json(settings_type, value):
+    """Keep recognized valid fields while tolerating older/future schemas."""
+    defaults = settings_type()
+    if not isinstance(value, dict):
+        return defaults
+    kwargs = {}
+    for definition in fields(settings_type):
+        key = definition.name
+        if key not in value:
+            continue
+        item, fallback = value[key], getattr(defaults, key)
+        try:
+            if isinstance(fallback, bool):
+                if isinstance(item, str) and item.lower() in ("true", "false"):
+                    item = item.lower() == "true"
+                elif not isinstance(item, bool):
+                    continue
+            elif isinstance(fallback, (int, float)):
+                if isinstance(item, bool) or not math.isfinite(float(item)):
+                    continue
+                item = type(fallback)(item)
+            elif isinstance(fallback, dict):
+                if not isinstance(item, dict):
+                    continue
+                item = {k: v for k, v in item.items() if isinstance(k, str) and isinstance(v, str)}
+            elif item is not None and not isinstance(item, str):
+                continue
+            kwargs[key] = item
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return settings_type(**kwargs)
 
 
 @dataclass
@@ -56,8 +102,32 @@ class ScreenSyncConfig:
     max_fps: int = 24
     color_algorithm: str = "auto"
     predictive_smoothing: bool = True
+    source_color_space: str = "auto"
+    hdr_tone_mapping: bool = False
+    device_profile: str = "auto"
+    sync_profile: str = "auto"
+    brightness_follow: bool = True  # legacy; feeds brightness_mode default
+    # "follow": bulb brightness tracks scene brightness (black turns it off).
+    # "constant": brightness pinned at sync_brightness; only hue/sat track the
+    # screen and black frames hold the last color.
+    brightness_mode: Optional[str] = None
+    sync_brightness: int = 180
+    # "heuristic" (default): channel-gain + saturation-gated white mixing.
+    # "physical" (experimental): solves the bulb's actual LED-primary mixing
+    # equation instead -- see src/core/bulb_physical_model.py for the model
+    # and its stated, unverified spectral assumptions. Try it live; it is
+    # not proven better without a colorimeter.
+    mixing_model: str = "heuristic"
+    # Orange correction for physical sync. Keep the stored key for compatibility.
+    physical_color_trim: bool = True
+    # Hold each bulb's Wi-Fi radio awake during sync with a chain of read-only
+    # status queries, and use the replies to confirm delivery. Measured on a
+    # WiZ ESP25 bulb: updates arrive in about 18 ms instead of about 117 ms.
+    # Costs roughly 110 small packets per second per bulb while syncing.
+    keep_awake: bool = True
 
     def __post_init__(self) -> None:
+        self.keep_awake = bool(self.keep_awake)
         self.mode = self.mode if self.mode in SCREEN_SYNC_MODES else "single"
         self.fps = max(4, min(60, int(self.fps)))
         self.monitor = int(self.monitor)
@@ -79,6 +149,33 @@ class ScreenSyncConfig:
         self.use_gpu = bool(self.use_gpu)
         self.adaptive_fps = bool(self.adaptive_fps)
         self.predictive_smoothing = bool(self.predictive_smoothing)
+        normalized_space = str(self.source_color_space).lower().replace("_", "-")
+        aliases = {
+            "p3": "display-p3",
+            "display_p3": "display-p3",
+            "bt2020": "rec2020",
+            "bt.2020": "rec2020",
+            "rec-2020": "rec2020",
+        }
+        self.source_color_space = aliases.get(normalized_space, normalized_space)
+        if self.source_color_space not in COLOR_SOURCE_SPACES:
+            self.source_color_space = "auto"
+        self.hdr_tone_mapping = bool(self.hdr_tone_mapping)
+        normalized_profile = str(self.device_profile).lower().replace("-", "_")
+        if normalized_profile not in DEVICE_PROFILES:
+            normalized_profile = "auto"
+        self.device_profile = normalized_profile
+        normalized_sync = str(self.sync_profile).lower()
+        self.sync_profile = normalized_sync if normalized_sync in SYNC_PROFILES else "auto"
+        self.brightness_follow = bool(self.brightness_follow)
+        if self.brightness_mode is None:
+            self.brightness_mode = "follow" if self.brightness_follow else "constant"
+        normalized_mode = str(self.brightness_mode).lower()
+        self.brightness_mode = normalized_mode if normalized_mode in BRIGHTNESS_MODES else "follow"
+        self.brightness_follow = self.brightness_mode == "follow"
+        self.sync_brightness = max(30, min(255, int(self.sync_brightness)))
+        normalized_mixing_model = str(self.mixing_model).lower()
+        self.mixing_model = normalized_mixing_model if normalized_mixing_model in MIXING_MODELS else "heuristic"
 
 
 @dataclass
@@ -120,6 +217,8 @@ class Config:
     default_brightness: int = 128
     default_color_temp: int = 4000
     _config_path: Path = field(default=None, repr=False)
+    _load_warning: Optional[str] = field(default=None, repr=False)
+    _save_lock: object = field(default_factory=RLock, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self._config_path is None:
@@ -135,12 +234,36 @@ class Config:
             config.save()
             return config
 
-        with open(config_path, encoding="utf-8") as f:
-            data = json.load(f)
+        raw = config_path.read_bytes()
+        try:
+            data = json.loads(raw.decode("utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError("Expected an object")
+        except (ValueError, UnicodeError):
+            backup = config_path.with_name(
+                f"{config_path.stem}.corrupt-{hashlib.sha256(raw).hexdigest()[:16]}{config_path.suffix}"
+            )
+            try:
+                with backup.open("xb") as handle:
+                    handle.write(raw)
+            except FileExistsError:
+                if backup.read_bytes() != raw:
+                    raise OSError("Recovery backup does not match the original settings")
+            return cls(_config_path=config_path, _load_warning=f"Settings could not be read; original saved as {backup.name}")
 
-        bulbs = [BulbConfig(**bulb) for bulb in data.get("bulbs", [])]
-        screen_sync = ScreenSyncConfig(**data.get("screen_sync", {}))
-        clap = ClapConfig(**data.get("clap", {}))
+        bulb_values = data.get("bulbs", [])
+        bulbs = []
+        for bulb in bulb_values if isinstance(bulb_values, list) else []:
+            if not isinstance(bulb, dict) or not isinstance(bulb.get("ip"), str) or not bulb["ip"].strip():
+                continue
+            bulbs.append(BulbConfig(
+                ip=bulb["ip"].strip(),
+                name=bulb.get("name") if isinstance(bulb.get("name"), str) else "WiZ Bulb",
+                mac=bulb.get("mac") if isinstance(bulb.get("mac"), str) else None,
+                screen_sync_enabled=bulb.get("screen_sync_enabled") is not False,
+            ))
+        screen_sync = _settings_from_json(ScreenSyncConfig, data.get("screen_sync", {}))
+        clap = _settings_from_json(ClapConfig, data.get("clap", {}))
 
         return cls(
             bulbs=bulbs,
@@ -163,18 +286,90 @@ class Config:
             "default_color_temp": self.default_color_temp,
         }
 
-        with open(self._config_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        temporary = None
+        with self._save_lock:
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", suffix=".tmp",
+                    dir=self._config_path.parent, delete=False,
+                ) as handle:
+                    temporary = Path(handle.name)
+                    json.dump(data, handle, indent=2, allow_nan=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, self._config_path)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
-    def add_bulb(self, ip: str, name: str, mac: Optional[str] = None) -> None:
+    def screen_sync_bulbs(self) -> list[BulbConfig]:
+        return [bulb for bulb in self.bulbs if bulb.screen_sync_enabled]
+
+    def set_bulb_screen_sync(self, ip: str, enabled: bool) -> bool:
+        """Persist participation for a saved bulb and report whether it changed."""
+        for bulb in self.bulbs:
+            if bulb.ip == ip and bulb.screen_sync_enabled != enabled:
+                bulb.screen_sync_enabled = enabled
+                self.save()
+                return True
+        return False
+
+    def add_discovered_bulbs(self, devices: list[dict]) -> None:
+        """Merge a discovery snapshot by identity, including simultaneous address swaps."""
+        from collections import Counter
+
+        entries = [(device["ip"], mac_identity(device["mac"])) for device in devices
+                   if device.get("ip") and device.get("mac")]
+        ips = Counter(ip for ip, _ in entries)
+        identities = Counter(mac for _, mac in entries)
+        discovered = {mac: ip for ip, mac in entries if mac and ips[ip] == identities[mac] == 1}
+        if not discovered:
+            return
+        by_address = {ip: mac for mac, ip in discovered.items()}
+        merged, layout = [], {}
+        for bulb in self.bulbs:
+            identity = mac_identity(bulb.mac) or by_address.get(bulb.ip)
+            if identity in discovered:
+                updated = replace(bulb, ip=discovered.pop(identity), mac=identity)
+            elif bulb.ip in by_address:
+                continue  # Address is now occupied by a different lamp.
+            else:
+                updated = bulb
+            merged.append(updated)
+            if bulb.ip in self.screen_sync.bulb_layout:
+                layout[updated.ip] = self.screen_sync.bulb_layout[bulb.ip]
+        for mac, ip in discovered.items():
+            merged.append(BulbConfig(ip, f"Bulb {len(merged) + 1}", mac))
+        self.bulbs = merged
+        self.screen_sync.bulb_layout = layout
+        self.save()
+
+    def add_bulb(self, ip: str, name: str, mac: Optional[str] = None, *, preserve_name: bool = False) -> None:
         """Add a bulb to configuration."""
 
         preserved_region = self.screen_sync.bulb_layout.get(ip)
         normalized_mac = mac.lower() if mac else None
+        identity = mac_identity(mac)
+        at_address = next((bulb for bulb in self.bulbs if bulb.ip == ip), None)
+        known_bulb = next(
+            (bulb for bulb in self.bulbs if identity and mac_identity(bulb.mac) == identity),
+            None,
+        )
+        if known_bulb is None and at_address is not None:
+            address_identity = mac_identity(at_address.mac)
+            if not identity or not address_identity:
+                known_bulb = at_address
         stale_ips = {ip}
-        if normalized_mac:
+        for bulb in self.bulbs:
+            if bulb.ip == ip or (identity and mac_identity(bulb.mac) == identity):
+                if preserve_name:
+                    name = bulb.name
+                if mac is None:
+                    normalized_mac = bulb.mac
+                    identity = mac_identity(bulb.mac)
+        if identity:
             for bulb in self.bulbs:
-                if bulb.mac and bulb.mac.lower() == normalized_mac:
+                if mac_identity(bulb.mac) == identity:
                     stale_ips.add(bulb.ip)
                     preserved_region = preserved_region or self.screen_sync.bulb_layout.get(bulb.ip)
 
@@ -183,8 +378,36 @@ class Config:
             self.screen_sync.bulb_layout.pop(stale_ip, None)
         if preserved_region:
             self.screen_sync.bulb_layout[ip] = preserved_region
-        self.bulbs.append(BulbConfig(ip=ip, name=name, mac=normalized_mac or mac))
+        self.bulbs.append(BulbConfig(
+            ip=ip, name=name, mac=normalized_mac or mac,
+            screen_sync_enabled=known_bulb.screen_sync_enabled if known_bulb is not None else True,
+        ))
         self.save()
+
+    def reassign_bulb_addresses(self, moves: list[tuple[str, str, str]]) -> int:
+        """Apply a verified batch of address changes without losing identities or zones."""
+        if not moves:
+            return 0
+        old_ips = [old for old, _, _ in moves]
+        new_ips = [new for _, new, _ in moves]
+        if len(set(old_ips)) != len(moves) or len(set(new_ips)) != len(moves):
+            return 0
+        by_ip = {bulb.ip: bulb for bulb in self.bulbs}
+        if len(by_ip) != len(self.bulbs):
+            return 0
+        for old, new, mac in moves:
+            bulb = by_ip.get(old)
+            if (bulb is None or not mac_identity(mac) or mac_identity(bulb.mac) != mac_identity(mac)
+                    or not new or old == new or (new in by_ip and new not in old_ips)):
+                return 0
+        mapping = dict(zip(old_ips, new_ips))
+        self.bulbs = [replace(bulb, ip=mapping.get(bulb.ip, bulb.ip)) for bulb in self.bulbs]
+        self.screen_sync.bulb_layout = {
+            mapping.get(ip, ip): region for ip, region in self.screen_sync.bulb_layout.items()
+            if ip not in new_ips or ip in old_ips
+        }
+        self.save()
+        return len(moves)
 
     def remove_bulb(self, ip: str) -> bool:
         """Remove a bulb from configuration."""

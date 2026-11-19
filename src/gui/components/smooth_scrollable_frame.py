@@ -50,29 +50,27 @@ class SmoothScrollableFrame(ctk.CTkScrollableFrame):
         self._queue_canvas_repaint()
 
     def _queue_canvas_repaint(self):
-        if self._repaint_after_id is not None:
-            try:
-                self.after_cancel(self._repaint_after_id)
-            except Exception:
-                pass
-        self._repaint_after_id = self.after_idle(self._force_canvas_repaint)
+        # A burst of wheel, resize and scrollbar events needs one repaint.
+        # Keeping the already-scheduled callback also avoids starving it while
+        # events keep arriving.
+        if self._repaint_after_id is None:
+            self._repaint_after_id = self.after_idle(self._force_canvas_repaint)
 
     def _force_canvas_repaint(self):
         self._repaint_after_id = None
         scroll_region = self._parent_canvas.bbox("all")
-        if scroll_region:
+        current_region = self._parent_canvas.tk.splitlist(self._parent_canvas.cget("scrollregion"))
+        if scroll_region and tuple(map(int, current_region)) != scroll_region:
             self._parent_canvas.configure(scrollregion=scroll_region)
-        self._parent_canvas.update_idletasks()
-        self._parent_frame.update_idletasks()
 
         if sys.platform.startswith("win"):
             try:
                 import ctypes
 
                 user32 = ctypes.windll.user32
+                # Let the normal Windows message loop paint these windows;
+                # UpdateWindow and nested update_idletasks block the UI thread.
                 user32.InvalidateRect(int(self._parent_canvas.winfo_id()), 0, True)
-                user32.UpdateWindow(int(self._parent_canvas.winfo_id()))
                 user32.InvalidateRect(int(self._parent_frame.winfo_id()), 0, True)
-                user32.UpdateWindow(int(self._parent_frame.winfo_id()))
             except Exception:
                 pass
