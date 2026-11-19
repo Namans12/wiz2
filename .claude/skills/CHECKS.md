@@ -7,7 +7,7 @@
 ### Structure checks
 - [ ] The intended artifact exists on disk at its expected path:
       - Android: `wizlight-android\build\app\outputs\flutter-apk\app-release.apk`
-      - Windows desktop: `dist\WizLight.exe` (+ `dist\installer\WizLight-Setup.exe`)
+      - Windows desktop: `dist\WizLight\WizLight.exe` (onedir) + `dist\WizLight-portable.zip` (+ `dist\installer\WizLight-Setup.exe`)
       - macOS desktop: `dist/WizLight.app` (+ optional `dist/WizLight-macOS.dmg`) — only if built on macOS
 - [ ] Artifact size is plausible (APK ≈ 40–60 MB; not 0 bytes, not a few KB)
 - [ ] Artifact LastWriteTime is from this session (not a stale prior build)

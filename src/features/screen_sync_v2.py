@@ -1,24 +1,37 @@
 """Optimized screen capture and color extraction with GPU acceleration and adaptive FPS."""
 
 import gc
+import importlib.util
 import logging
 import os
 import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from functools import lru_cache
 from typing import Callable, Optional, Sequence
 
 import numpy as np
 
-# Try GPU capture first, fallback to mss
-try:
-    import dxcam
-    HAS_DXCAM = True
-except ImportError:
-    HAS_DXCAM = False
+# Try GPU capture first, fallback to mss. dxcam costs ~0.4 s to import, so only
+# check that it is installed here; _load_dxcam() imports it when a capture
+# backend is actually created.
+dxcam = None
+HAS_DXCAM = importlib.util.find_spec("dxcam") is not None
+
+
+def _load_dxcam():
+    """Import dxcam on first use; return the module, or None if unavailable."""
+    global dxcam, HAS_DXCAM
+    if dxcam is None:
+        try:
+            import dxcam as module
+        except ImportError:
+            HAS_DXCAM = False
+            return None
+        dxcam = module
+    return dxcam
 
 import mss
 
@@ -134,8 +147,10 @@ class OptimizedCaptureConfig(CaptureConfig):
     prediction_frames: int = 3
     prediction_weight: float = 0.3
     
-    # Parallel processing
-    parallel_regions: bool = True
+    # Threaded zone extraction. Off by default: the work is GIL-bound numpy
+    # and small-array code, and the pool handoff measured slower than a
+    # sequential loop (8.8 vs 6.0 ms at 4 zones).
+    parallel_regions: bool = False
 
     # Content-adaptive behavior
     sync_profile: str = "auto"       # "auto" | "cinema" | "action"
@@ -791,9 +806,9 @@ def build_optimized_capture_config(
         max_fps=max_fps,
         color_algorithm=color_algorithm,
         predictive_smoothing=bool(getattr(settings, "predictive_smoothing", True)),
-        # For two zones, per-frame thread handoff cost more CPU and time than
-        # sequential extraction in a benchmark of decoded film frames.
-        parallel_regions=len(tuple(active_regions)) > 2,
+        # Sequential extraction beat the thread pool at 2 and 4 zones (the
+        # work is GIL-bound), so the settings-driven path never enables it.
+        parallel_regions=False,
         sync_profile=str(getattr(settings, "sync_profile", "auto")),
         brightness_follow=bool(getattr(settings, "brightness_follow", True)),
         brightness_mode=str(getattr(settings, "brightness_mode", None) or ("follow" if getattr(settings, "brightness_follow", True) else "constant")),
@@ -888,6 +903,9 @@ class GPUCaptureManager:
         self._served_sample: Optional[np.ndarray] = None
         self._consecutive_errors = 0
         self._last_error: Optional[str] = None
+        # True when poll_change() consumed a frame it could not convert, so
+        # dxcam's cache holds a picture we have not served yet.
+        self._cache_frame_unserved = False
 
     @property
     def poll_waits_for_frame(self) -> bool:
@@ -932,6 +950,7 @@ class GPUCaptureManager:
         except Exception as exc:
             # A bad frame must not escape into the sync loop's wait.
             self._last_error = f"poll: {exc}"
+            self._cache_frame_unserved = True
             return None
         self._pending_frame = rgb
         served = self._served_sample
@@ -964,6 +983,7 @@ class GPUCaptureManager:
                 self._last_frame = None
                 self._pending_frame = None
                 self._served_sample = None
+                self._cache_frame_unserved = False
                 self._consecutive_errors = 0
                 self._last_error = None
                 # output_color="BGRA" keeps dxcam on the raw DXGI byte order and
@@ -978,7 +998,10 @@ class GPUCaptureManager:
                     # setting from the environment when it builds the session.
                     # A user-provided value wins.
                     os.environ.setdefault("DXCAM_WINRT_BORDER_REQUIRED", "0")
-                self._camera = dxcam.create(
+                backend_module = _load_dxcam()
+                if backend_module is None:
+                    return False
+                self._camera = backend_module.create(
                     device_idx=self._device,
                     output_idx=self._monitor,
                     output_color="BGRA",
@@ -1006,9 +1029,18 @@ class GPUCaptureManager:
 
     @staticmethod
     def _to_rgb(frame: np.ndarray) -> np.ndarray:
+        """Return a downscaled RGB array that never aliases ``frame``.
+
+        Callers may pass dxcam's reusable buffer (``copy=False``); the result
+        must stay valid after the next grab overwrites it.
+        """
         if frame.ndim == 3 and frame.shape[2] == 4:
-            return _downscale_for_processing(frame, bgra=True)
-        return _downscale_for_processing(frame)
+            rgb = _downscale_for_processing(frame, bgra=True)
+        else:
+            rgb = _downscale_for_processing(frame)
+        if np.may_share_memory(rgb, frame):
+            rgb = rgb.copy()
+        return rgb
 
     def grab(self) -> Optional[np.ndarray]:
         """Capture a frame. Returns RGB numpy array or None (never blocks)."""
@@ -1024,7 +1056,13 @@ class GPUCaptureManager:
             # WinRT's one-shot default waits briefly for a new frame; on
             # Windows that wait can be rounded up by the scheduler. Ask for
             # its cached frame instead so a static scene never incurs it.
-            frame = self._camera.grab(new_frame_only=False) if self.backend == "winrt" else self._camera.grab()
+            # copy=False skips a full-resolution copy (~37 MB at 4K); _to_rgb
+            # below produces our own downscaled array before the next grab
+            # can reuse dxcam's buffer.
+            if self.backend == "winrt":
+                frame = self._camera.grab(new_frame_only=False, copy=False)
+            else:
+                frame = self._camera.grab()
         except Exception as exc:
             self._consecutive_errors += 1
             self._last_error = str(exc)
@@ -1035,7 +1073,19 @@ class GPUCaptureManager:
             return None
         self._consecutive_errors = 0
         self._last_error = None
+        if (
+            frame is not None
+            and self.backend == "winrt"
+            and self._last_frame is not None
+            and not self._cache_frame_unserved
+            and self._winrt_frame_unchanged(self._camera)
+        ):
+            # dxcam replayed its cached frame: pixels are identical to what
+            # was served last. Hand back the same array object so callers
+            # can recognise it and skip re-downscaling and re-analysis.
+            return self._last_frame
         if frame is not None:
+            self._cache_frame_unserved = False
             return self._serve(self._to_rgb(frame))
         # None = screen unchanged since last acquire -> same pixels.
         return self._last_frame
@@ -1195,6 +1245,23 @@ class MotionDetector:
         self.last_scene_cut = False
         # Unaveraged frame-to-frame difference of the latest update (0..1).
         self.last_diff = 0.0
+        # The array object the stored baseline was computed from.
+        self._last_source: Optional[np.ndarray] = None
+
+    def update_unchanged(self, frame: np.ndarray) -> Optional[float]:
+        """Equivalent of ``update(frame)`` for the frame passed last time.
+
+        Re-feeding the identical array gives a zero diff, an unchanged
+        histogram and no cut, so only the motion history needs advancing.
+        Returns ``None`` when ``frame`` is not the stored baseline; the
+        caller must then call ``update()``.
+        """
+        if frame is not self._last_source or self._last_frame is None:
+            return None
+        self._motion_history.append(np.float32(0.0))
+        self.last_diff = 0.0
+        self.last_scene_cut = False
+        return float(np.mean(self._motion_history))
 
     _CUT_HIST_TARGET_COLS = 320  # keep the cut histogram this dense regardless of input size
 
@@ -1230,6 +1297,7 @@ class MotionDetector:
         )
         self._prev_hist = hist
 
+        self._last_source = frame
         if self._last_frame is None or self._last_frame.shape != small.shape:
             self._last_frame = small
             self._last_scene_sample = scene_sample
@@ -1290,6 +1358,7 @@ class MotionDetector:
         self._last_scene_sample = None
         self._motion_history.clear()
         self._prev_hist = None
+        self._last_source = None
         self.last_scene_cut = False
         self.last_diff = 0.0
 
@@ -1380,6 +1449,11 @@ class OptimizedScreenSync:
         self._last_neutral = 0.0
         self._scene_neutral = 0.0
         self._scene_luma = 0.0
+        # Image-derived work (crop, scene stats, per-zone colours) memoised
+        # for the array object last analysed; see _image_memo().
+        self._image_memo_state: Optional[dict] = None
+        self._prev_loop_image: Optional[np.ndarray] = None
+        self._frame_unchanged = False
         self._black_since: Optional[float] = None
         self._output_brightness = (
             255 if self.config.brightness_mode == "follow" else int(self.config.sync_brightness)
@@ -1695,12 +1769,44 @@ class OptimizedScreenSync:
         # must not light as brightly as a bright right edge.
         return region, adapted, effective_boost, region_value
 
-    def _extract_colors(self, image: np.ndarray) -> dict[str, tuple[int, int, int]]:
-        """Extract colors from image, using parallel processing if enabled."""
+    def _image_memo(self, image: np.ndarray, reuse: bool) -> dict:
+        """Image-derived work, reused only when the caller vouches for it.
+
+        ``reuse`` means the caller knows ``image`` is the very array analysed
+        last time with unchanged pixels (the capture layer returned its cached
+        frame). Without it everything is recomputed, so arrays that are
+        mutated in place or recycled can never serve stale colours. The
+        config is compared as well, so an edited setting recomputes.
+        """
+        signature = (self._effective_mode, astuple(self.config))
+        memo = self._image_memo_state
+        if reuse and memo is not None and memo["image"] is image and memo["signature"] == signature:
+            return memo
         content = crop_content_area(image, ignore_letterbox=self.config.ignore_letterbox)
+        memo = {
+            "image": image,
+            "signature": signature,
+            "content": content,
+            "scene": _scene_stats(content),
+            "single": None,
+            "regions": {},
+        }
+        self._image_memo_state = memo
+        return memo
+
+    def _extract_colors(self, image: np.ndarray) -> dict[str, tuple[int, int, int]]:
+        """Extract colors from image, using parallel processing if enabled.
+
+        When the sync loop set ``_frame_unchanged`` (the frame is identical
+        to the previous one) the pixel work is reused; per-frame state
+        (brightness smoothing, black persistence) is still advanced.
+        """
+        reuse, self._frame_unchanged = self._frame_unchanged, False
+        memo = self._image_memo(image, reuse)
+        content = memo["content"]
 
         # Scene-level content adaptation (B&W / dim-scene handling).
-        avg_saturation, avg_luma, avg_value = _scene_stats(content)
+        avg_saturation, avg_luma, avg_value = memo["scene"]
         neutral = _neutral_strength(avg_saturation)
         brightness = _brightness_factor(avg_value)
         follow = self.config.brightness_mode == "follow"
@@ -1747,7 +1853,9 @@ class OptimizedScreenSync:
             return {region: (0, 0, 0) for region in self.config.active_regions}
 
         if self._effective_mode == "single":
-            color = self._extract_single_color(content)
+            color = memo["single"]
+            if color is None:
+                color = memo["single"] = self._extract_single_color(content)
             effective_boost = adaptive_color_boost(color, self.config.color_boost)
             effective_boost = 1.0 + (effective_boost - 1.0) * (1.0 - neutral)
             with self._stats_lock:
@@ -1771,41 +1879,43 @@ class OptimizedScreenSync:
         colors: dict[str, tuple[int, int, int]] = {}
         region_values: dict[str, float] = {}
 
-        if self._executor and self.config.parallel_regions:
+        # Zone results depend only on the image and config, so an identical
+        # image reuses them; brightness smoothing below still runs per frame.
+        zone_memo = memo["regions"]
+        todo = [region for region in self.config.active_regions if region not in zone_memo]
+        if todo and self._executor and self.config.parallel_regions:
             # Parallel processing
             futures = [
-                self._executor.submit(self._process_region, content, region)
-                for region in self.config.active_regions
+                (region, self._executor.submit(self._process_region, content, region))
+                for region in todo
             ]
-            boosts: list[float] = []
             # Bound the whole frame, not each zone independently. Cancel work
             # that has not started so slow workers cannot accumulate stale
             # frames in the executor queue.
             deadline = time.perf_counter() + 0.1
-            for future in futures:
+            for region, future in futures:
                 try:
-                    region, color, effective_boost, region_value = future.result(
+                    zone_memo[region] = future.result(
                         timeout=max(0.0, deadline - time.perf_counter())
                     )
-                    colors[region] = color
-                    region_values[region] = region_value
-                    boosts.append(effective_boost)
                 except Exception:
                     future.cancel()
-            if boosts:
-                with self._stats_lock:
-                    self._effective_color_boost = float(np.mean(boosts))
         else:
             # Sequential processing
-            boosts = []
-            for region in self.config.active_regions:
-                _, color, effective_boost, region_value = self._process_region(content, region)
-                colors[region] = color
-                region_values[region] = region_value
-                boosts.append(effective_boost)
-            if boosts:
-                with self._stats_lock:
-                    self._effective_color_boost = float(np.mean(boosts))
+            for region in todo:
+                zone_memo[region] = self._process_region(content, region)
+        boosts: list[float] = []
+        for region in self.config.active_regions:
+            result = zone_memo.get(region)
+            if result is None:
+                continue
+            _, color, effective_boost, region_value = result
+            colors[region] = color
+            region_values[region] = region_value
+            boosts.append(effective_boost)
+        if boosts:
+            with self._stats_lock:
+                self._effective_color_boost = float(np.mean(boosts))
 
         peak = max((max(color) for color in colors.values()), default=0)
         if not follow and peak < 24:
@@ -1971,7 +2081,13 @@ class OptimizedScreenSync:
                     else now - self._last_loop_time
                 )
                 self._last_loop_time = now
-                motion_score = self._motion_detector.update(image)
+                # GPUCaptureManager hands back the identical array when the
+                # screen did not change; skip re-analysing identical pixels.
+                unchanged = image is self._prev_loop_image
+                self._prev_loop_image = image
+                motion_score = self._motion_detector.update_unchanged(image) if unchanged else None
+                if motion_score is None:
+                    motion_score = self._motion_detector.update(image)
                 scene_cut = self._motion_detector.last_scene_cut
                 self._update_adaptive_fps(motion_score)
                 smoothing_factor = 1.0 if scene_cut else self._target_smoothing(motion_score, dt)
@@ -1991,6 +2107,7 @@ class OptimizedScreenSync:
                 # Extract colors
                 self._frame_scene_cut = scene_cut
                 self._frame_dt = dt
+                self._frame_unchanged = unchanged
                 target_colors = self._extract_colors(image)
                 with self._stats_lock:
                     self._last_target_colors = dict(target_colors)

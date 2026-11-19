@@ -38,7 +38,7 @@ wizlight gui
 Built executable:
 
 ```powershell
-.\dist\WizLight.exe
+.\dist\WizLight\WizLight.exe
 ```
 
 ## CLI
@@ -126,9 +126,15 @@ python -m pytest -m hardware
 Outputs:
 
 ```text
-dist\WizLight.exe
+dist\WizLight\WizLight.exe   (onedir folder; keep it together)
+dist\WizLight-portable.zip   (unzip anywhere and run WizLight.exe)
 dist\installer\WizLight-Setup.exe
 ```
+
+The installer (and the portable zip) unpack the onedir build, so launches no longer extract
+to a temp folder. Installing over an older install replaces the old files; close WizLight first
+(the installer and uninstaller refuse to run while it is open). Uninstall removes the whole
+install folder plus the shortcuts.
 
 Run installer:
 

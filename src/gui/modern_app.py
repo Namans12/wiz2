@@ -102,7 +102,9 @@ class WizLightModernGUI(AnimationMixin):
         
         # Dashboard
         self._dashboard: Optional[BulbDashboard] = None
+        self._dashboard_frame = None
         self._current_view = "sync"
+        self._prebuild_after_id = None
 
         self.root = ctk.CTk()
         self.root.title("WizLight")
@@ -284,38 +286,61 @@ class WizLightModernGUI(AnimationMixin):
 
         self._view_host = ctk.CTkFrame(workspace, fg_color="transparent")
         self._view_host.pack(fill="both", expand=True)
-        self._view_frames: dict[str, ctk.CTkFrame] = {
-            "sync": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
-            "lights": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
-            "bulbs": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
-            "tools": SmoothScrollableFrame(self._view_host, fg_color="#0D1422"),
-        }
         self._view_host.grid_rowconfigure(0, weight=1)
         self._view_host.grid_columnconfigure(0, weight=1)
-        for frame in self._view_frames.values():
-            frame.grid(row=0, column=0, sticky="nsew")
-        self._controls_frame = self._view_frames["sync"]
-        self._dashboard_frame = ctk.CTkFrame(self._view_frames["bulbs"], fg_color="transparent")
-
-        self._build_controls_view()
-        self._dashboard = BulbDashboard(
-            self._dashboard_frame,
-            self.controller,
-            self._run_async,
-            on_bulb_select=self._on_bulb_select,
-            on_screen_sync_change=self._set_bulb_screen_sync,
-            before_power_off=self._exclude_bulb_before_power_off,
-        )
-        self._dashboard.pack(fill="both", expand=True)
+        # Only the Screen sync page is built at startup. The other pages are
+        # built on first visit (or in the background after the first paint)
+        # by _ensure_page, so anything touching their widgets must tolerate
+        # them not existing yet.
+        self._view_frames: dict[str, ctk.CTkFrame] = {}
         self._current_view = ""
+        self._controls_frame = self._ensure_page("sync")
         self._switch_view("sync")
+
+    _PAGE_BUILDERS = {
+        "sync": "_build_controls_view",
+        "lights": "_build_lights_view",
+        "bulbs": "_build_bulbs_view",
+        "tools": "_build_tools_view",
+    }
+
+    def _ensure_page(self, view: str):
+        """Return the scroll frame for a page, building the page if needed."""
+        frame = self._view_frames.get(view)
+        if frame is not None:
+            return frame
+        frame = SmoothScrollableFrame(self._view_host, fg_color="#0D1422")
+        self._view_frames[view] = frame
+        try:
+            getattr(self, self._PAGE_BUILDERS[view])()
+        except Exception:
+            self._view_frames.pop(view, None)
+            frame.destroy()
+            raise
+        # A page built late must pick up the state the earlier refreshes
+        # applied to the pages that already existed.
+        self._sync_bulb_widgets()
+        return frame
+
+    def _prebuild_next_page(self):
+        """Build the not-yet-visited pages one at a time while the UI is idle."""
+        self._prebuild_after_id = None
+        if self._closing:
+            return
+        for view in ("lights", "tools", "bulbs"):
+            if view not in self._view_frames:
+                self._ensure_page(view)
+                break
+        else:
+            if self._dashboard is not None and not self._dashboard.has_cards():
+                self._dashboard.prepare_cards(self._dashboard_bulbs())
+            else:
+                return
+        self._prebuild_after_id = self.root.after(60, self._prebuild_next_page)
     
     def _build_controls_view(self):
-        """Build Sync, Lights, Bulbs, and Tools views."""
+        """Build the Screen sync page."""
         sync = self._view_frames["sync"]
-        lights = self._view_frames["lights"]
-        bulbs_view = self._view_frames["bulbs"]
-        tools = self._view_frames["tools"]
 
         cockpit = self._card(sync, "Screen Sync", "Match your lights to movies, games and everyday screen content.")
         action_row = ctk.CTkFrame(cockpit, fg_color=self._surface_color(cockpit))
@@ -674,6 +699,9 @@ class WizLightModernGUI(AnimationMixin):
         ).pack(anchor="w", padx=4, pady=(0, 8))
         self._build_screen_sync_debug(sync)
 
+    def _build_lights_view(self):
+        """Build the Lights page."""
+        lights = self._view_frames["lights"]
         light_card = self._card(lights, "Lights", "Quick everyday controls for all configured bulbs.")
         button_row = ctk.CTkFrame(light_card, fg_color=self._surface_color(light_card))
         button_row.pack(fill="x", padx=14, pady=(0, 12))
@@ -713,6 +741,10 @@ class WizLightModernGUI(AnimationMixin):
             light_card, "Color Temperature", "4000K", 2200, 6500, self._on_temp_change, 4000, 43
         )
 
+    def _build_bulbs_view(self):
+        """Build the Bulbs page, including the dashboard."""
+        bulbs_view = self._view_frames["bulbs"]
+        self._dashboard_frame = ctk.CTkFrame(bulbs_view, fg_color="transparent")
         bulbs = self._card(
             bulbs_view,
             "Bulbs",
@@ -750,7 +782,19 @@ class WizLightModernGUI(AnimationMixin):
         self.bulb_info = ctk.CTkLabel(bulbs, text="No bulbs found", justify="left", text_color="gray")
         self.bulb_info.pack(anchor="w", padx=14, pady=(0, 14))
         self._dashboard_frame.pack(fill="both", expand=True, pady=(0, 12))
+        self._dashboard = BulbDashboard(
+            self._dashboard_frame,
+            self.controller,
+            self._run_async,
+            on_bulb_select=self._on_bulb_select,
+            on_screen_sync_change=self._set_bulb_screen_sync,
+            before_power_off=self._exclude_bulb_before_power_off,
+        )
+        self._dashboard.pack(fill="both", expand=True)
 
+    def _build_tools_view(self):
+        """Build the Tools & help page."""
+        tools = self._view_frames["tools"]
         tools_card = self._card(tools, "Diagnostics", "Useful checks and setup helpers.")
         ctk.CTkButton(
             tools_card,
@@ -1275,17 +1319,16 @@ class WizLightModernGUI(AnimationMixin):
             parts.append(text)
         return "Link " + "; ".join(parts) if parts else ""
 
-    def _update_bulb_status(self):
+    def _sync_bulb_widgets(self):
+        """Apply the configured-bulb state to whichever pages are built."""
         has_bulbs = bool(self.config.bulbs)
-        if self.config.bulbs:
-            text = "\n".join([f"- {bulb.name} ({bulb.ip})" for bulb in self.config.bulbs])
-            self.bulb_info.configure(text=text, text_color=("gray20", "gray80"))
-        else:
-            self.bulb_info.configure(text="No bulbs found", text_color="gray")
-        if hasattr(self, "header_bulbs_var"):
-            self.header_bulbs_var.set(f"Bulbs: {len(self.config.bulbs)}")
-        if hasattr(self, "header_monitor_var"):
-            self.header_monitor_var.set(f"Monitor: {self.monitor_menu.get()}")
+        bulb_info = getattr(self, "bulb_info", None)
+        if bulb_info is not None:
+            if has_bulbs:
+                text = "\n".join([f"- {bulb.name} ({bulb.ip})" for bulb in self.config.bulbs])
+                bulb_info.configure(text=text, text_color=("gray20", "gray80"))
+            else:
+                bulb_info.configure(text="No bulbs found", text_color="gray")
         for attr in (
             "sync_primary_button",
             "screen_sync_switch",
@@ -1304,6 +1347,13 @@ class WizLightModernGUI(AnimationMixin):
                     widget.configure(state="normal" if has_bulbs else "disabled")
                 except Exception:
                     pass
+
+    def _update_bulb_status(self):
+        self._sync_bulb_widgets()
+        if hasattr(self, "header_bulbs_var"):
+            self.header_bulbs_var.set(f"Bulbs: {len(self.config.bulbs)}")
+        if hasattr(self, "header_monitor_var"):
+            self.header_monitor_var.set(f"Monitor: {self.monitor_menu.get()}")
         if hasattr(self, "layout_frame"):
             self._refresh_screen_sync_layout_controls()
         if getattr(self, "_current_view", None) == "bulbs":
@@ -1768,8 +1818,9 @@ class WizLightModernGUI(AnimationMixin):
     def _update_sync_preview(self, engine, preview):
         if not self._closing and self.screen_sync is engine:
             color = f"#{preview[0]:02x}{preview[1]:02x}{preview[2]:02x}"
-            if self.color_preview.cget("fg_color") != color:
-                self.color_preview.configure(fg_color=color)
+            swatch = getattr(self, "color_preview", None)  # Lights page may not be built yet
+            if swatch is not None and swatch.cget("fg_color") != color:
+                swatch.configure(fg_color=color)
 
     @staticmethod
     def _run_sync_worker(operation, *args):
@@ -1948,6 +1999,10 @@ class WizLightModernGUI(AnimationMixin):
         if view == self._current_view:
             return
 
+        frame = self._ensure_page(view)
+        if not frame._parent_frame.winfo_manager():
+            frame.grid(row=0, column=0, sticky="nsew")
+
         previous_view = self._current_view
         if previous_view:
             self._view_buttons[previous_view].configure(
@@ -1960,20 +2015,23 @@ class WizLightModernGUI(AnimationMixin):
         self._page_subtitle_var.set(subtitle)
 
         self._view_buttons[view].configure(fg_color="#244D7B", text_color="#FFFFFF")
-        self._view_frames[view]._parent_frame.tkraise()
+        frame._parent_frame.tkraise()
 
         if view == "bulbs":
             self._update_dashboard()
         elif self._dashboard:
             self._dashboard.stop_auto_refresh()
     
+    def _dashboard_bulbs(self) -> list[BulbInfo]:
+        return [
+            BulbInfo(ip=b.ip, name=b.name, screen_sync_enabled=b.screen_sync_enabled)
+            for b in self.config.bulbs
+        ]
+
     def _update_dashboard(self):
         """Update dashboard with current bulbs."""
         if self._dashboard:
-            bulbs = [
-                BulbInfo(ip=b.ip, name=b.name, screen_sync_enabled=b.screen_sync_enabled)
-                for b in self.config.bulbs
-            ]
+            bulbs = self._dashboard_bulbs()
             self._dashboard.start_auto_refresh(interval_ms=5000)
             self._dashboard.set_bulbs(bulbs)
     
@@ -2042,12 +2100,14 @@ class WizLightModernGUI(AnimationMixin):
 
     def _set_brightness_quick(self, brightness: int):
         brightness = max(0, min(255, int(brightness)))
+        self._ensure_page("lights")
         self.brightness_slider.set(brightness)
         self._on_brightness_change(brightness)
         self._set_status(f"Brightness: {int((brightness / 255) * 100)}%")
 
     def _set_temp_quick(self, kelvin: int):
         kelvin = max(2200, min(6500, int(kelvin)))
+        self._ensure_page("lights")
         self.temp_slider.set(kelvin)
         self._on_temp_change(kelvin)
         self._set_status(f"Color temperature: {kelvin}K")
@@ -2136,6 +2196,11 @@ class WizLightModernGUI(AnimationMixin):
         if self._tray:
             self._tray.stop()
         
+        prebuild_id = getattr(self, "_prebuild_after_id", None)
+        if prebuild_id:
+            self.root.after_cancel(prebuild_id)
+            self._prebuild_after_id = None
+
         # Stop dashboard refresh
         if self._dashboard:
             self._dashboard.stop_auto_refresh()
@@ -2171,7 +2236,33 @@ class WizLightModernGUI(AnimationMixin):
             finally:
                 self.root.destroy()
 
+    def _present_window(self):
+        """Show the window only once it is fully laid out and painted.
+
+        The window stays withdrawn while the UI is built. Mapping it at
+        mainloop made Tk lay out and paint every widget on screen. Instead it
+        is mapped fully transparent, painted off-screen (update), and only
+        then made opaque, so the first frame the user sees is complete.
+        """
+        root = self.root
+        try:
+            root.attributes("-alpha", 0.0)
+        except Exception:
+            root.update()
+            return
+        try:
+            root.update()
+        finally:
+            try:
+                root.attributes("-alpha", 1.0)
+            except Exception:
+                pass
+
     def run(self):
+        self._present_window()
+        # Build the remaining pages a little after the first paint so the
+        # first visit to each is instant.
+        self._prebuild_after_id = self.root.after(150, self._prebuild_next_page)
         self.root.mainloop()
 
 

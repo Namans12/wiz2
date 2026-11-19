@@ -24,12 +24,14 @@ $started = [datetime]::UtcNow
 Assert-NativeSuccess 'Icon generation'
 & $Python -m PyInstaller --clean --noconfirm packaging\WizLight.spec
 Assert-NativeSuccess 'PyInstaller'
-Assert-FreshArtifact (Join-Path $RepoRoot 'dist\WizLight.exe') $started
+Assert-FreshArtifact (Join-Path $RepoRoot 'dist\WizLight\WizLight.exe') $started
 & $Python packaging\make_iexpress_installer.py
 Assert-NativeSuccess 'Installer generation'
+Assert-FreshArtifact (Join-Path $RepoRoot 'dist\WizLight-portable.zip') $started
 Assert-FreshArtifact (Join-Path $RepoRoot 'dist\installer\WizLight-Setup.exe') $started
 
 Write-Host ""
 Write-Host "Build complete:"
-Write-Host "  App:       $RepoRoot\dist\WizLight.exe"
+Write-Host "  App:       $RepoRoot\dist\WizLight\WizLight.exe (onedir)"
+Write-Host "  Portable:  $RepoRoot\dist\WizLight-portable.zip"
 Write-Host "  Installer: $RepoRoot\dist\installer\WizLight-Setup.exe"

@@ -22,7 +22,7 @@ tone curves, OLED true-black, FP16 HDR capture) is the heart of the project.
 - Flutter: `C:\Users\naman\Downloads\flutter\bin\flutter` (3.38.9, Dart 3.10.8). Android SDK 36.1.0 present.
 - Repo root: `C:\Users\naman\Desktop\wizlight-master`
 - Android build outputs: `wizlight-android\build\app\outputs\flutter-apk\app-release.apk`
-- Desktop build outputs (Windows): `dist\WizLight.exe`, `dist\installer\WizLight-Setup.exe`
+- Desktop build outputs (Windows): `dist\WizLight\WizLight.exe` (onedir) + `dist\WizLight-portable.zip`, `dist\installer\WizLight-Setup.exe`
 - Desktop build outputs (macOS, build ON macOS only): `dist/WizLight.app`, `dist/WizLight-macOS.dmg`
 - State file: `.claude\skills\state\state.json`
 - Checkpoint log: `.claude\skills\state\checkpoint.log`
@@ -47,7 +47,7 @@ Follow in order. Write a checkpoint (AGENT.md) after each step.
 10. Report the artifact path + install instructions to the user
 
 ## Output rules
-- Artifact naming: keep Flutter/PyInstaller defaults (`app-release.apk`, `WizLight.exe`, `WizLight.app`). Do not rename build outputs.
+- Artifact naming: keep Flutter/PyInstaller defaults (`app-release.apk`, `WizLight.exe` (inside onedir folder `dist\WizLight\`), `WizLight.app`). Do not rename build outputs.
 - A "release" report must include: artifact absolute path, size, build timestamp, and install steps for the target (Bravia/Google TV via adb, phone via adb/sideload, desktop via installer).
 - Code edits: match surrounding style; keep Android Kotlin and Python `color_mapping.py` color math in sync.
 

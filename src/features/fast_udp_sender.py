@@ -10,6 +10,8 @@ import time
 from collections import deque
 from typing import Callable, Mapping, Optional, Sequence
 
+from ..core.frame_pacer import FramePacer
+
 WIZ_PORT = 38899
 DEFAULT_MAX_SEND_HZ = 28.0
 _SNDBUF = 262144
@@ -169,6 +171,25 @@ def encode_set_pilot_payload(
     return encoded
 
 
+# Waits up to this long use the high-resolution pacer. Event.wait() on Windows
+# is quantised to the ~8-16 ms system timer (a 3 ms wait took ~9 ms), but it
+# can be interrupted at once; the pacer cannot, so the cap bounds how long a
+# stop request can go unnoticed. Longer waits stay on the interruptible Event.
+_PRECISE_WAIT_MAX = 0.05
+
+
+def _precise_wait(pacer: Optional[FramePacer], stop_event: threading.Event, seconds: float) -> bool:
+    """Wait ``seconds`` precisely; return True if ``stop_event`` is set."""
+    if stop_event.is_set():
+        return True
+    if seconds <= 0:
+        return False
+    if pacer is None or seconds > _PRECISE_WAIT_MAX:
+        return stop_event.wait(seconds)
+    pacer.sleep(seconds)
+    return stop_event.is_set()
+
+
 class BulbUDPSocket:
     """Persistent latest-wins sender for one WiZ bulb."""
 
@@ -275,6 +296,8 @@ class BulbUDPSocket:
         retry_packet: bytes | None = None
         retry_deadlines: list[float] = []
         retry_group_counted = False
+        # The waitable timer belongs to this worker thread; closed in finally.
+        pacer = FramePacer()
         try:
             while not self._stop_event.is_set():
                 timeout = max(0.0, retry_deadlines[0] - time.perf_counter()) if retry_deadlines else 1.0
@@ -325,7 +348,7 @@ class BulbUDPSocket:
                 retry_deadlines.clear()
                 retry_group_counted = False
                 wait_time = self._min_interval - (time.perf_counter() - self._last_send_at)
-                if self._stop_event.wait(max(0.0, wait_time)):
+                if _precise_wait(pacer, self._stop_event, wait_time):
                     return
                 with self._state_lock:
                     if not self._running:
@@ -357,7 +380,7 @@ class BulbUDPSocket:
                     if not success:
                         break
                     sent_any = True
-                    if attempt + 1 < repeats and self._stop_event.wait(_BURST_GAP):
+                    if attempt + 1 < repeats and _precise_wait(pacer, self._stop_event, _BURST_GAP):
                         break
                 with self._state_lock:
                     if sent_any:
@@ -372,6 +395,7 @@ class BulbUDPSocket:
                         retry_deadlines = [self._last_send_at + delay for delay in _SETTLED_RETRY_DELAYS]
                         retry_group_counted = sent_any
         finally:
+            pacer.close()
             try:
                 self._socket.close()
             except OSError:

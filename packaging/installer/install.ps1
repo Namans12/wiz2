@@ -1,6 +1,9 @@
 param(
     [string]$SourceDir = $PSScriptRoot,
-    [string]$InstallDir = "$env:LOCALAPPDATA\Programs\WizLight"
+    [string]$InstallDir = "$env:LOCALAPPDATA\Programs\WizLight",
+    [string]$StartMenuDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\WizLight",
+    [string]$DesktopDir = [Environment]::GetFolderPath("Desktop"),
+    [switch]$NoLaunch
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,40 +15,68 @@ if ($InstallDir -eq [System.IO.Path]::GetPathRoot($InstallDir) -or
     throw 'Choose a dedicated application directory.'
 }
 
-$appSource = Join-Path $SourceDir "WizLight.exe"
-if (-not (Test-Path -LiteralPath $appSource)) {
-    throw "WizLight.exe was not found next to the installer script."
+$payloadZip = Join-Path $SourceDir "WizLight-app.zip"
+if (-not (Test-Path -LiteralPath $payloadZip -PathType Leaf)) {
+    throw "WizLight-app.zip was not found next to the installer script."
 }
 
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Copy-Item -LiteralPath $appSource -Destination (Join-Path $InstallDir "WizLight.exe") -Force
+$installedExe = Join-Path $InstallDir "WizLight.exe"
+$running = @(Get-Process -Name WizLight -ErrorAction SilentlyContinue | Where-Object {
+    try { $_.Path -and ([System.IO.Path]::GetFullPath($_.Path) -eq $installedExe) } catch { $false }
+})
+if ($running.Count -gt 0) {
+    throw "WizLight is running. Close it (also from the system tray) and run the installer again."
+}
+
+# Extract to a scratch folder first so a failed or corrupt extraction leaves any existing install untouched.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("WizLight-setup-" + [guid]::NewGuid().ToString("N"))
+try {
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($payloadZip, $scratch)
+    $payloadRoot = Join-Path $scratch "WizLight"
+    if (-not (Test-Path -LiteralPath (Join-Path $payloadRoot "WizLight.exe") -PathType Leaf)) {
+        throw "The installer package is missing WizLight.exe."
+    }
+
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+    # Replace our own files cleanly (also removes stale files from older builds, including the old
+    # single-file layout); anything else the user keeps in this folder is left alone.
+    foreach ($name in @('WizLight.exe', '_internal', 'README.md', 'LICENSE', 'uninstall.cmd', 'uninstall.ps1')) {
+        $old = Join-Path $InstallDir $name
+        if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force }
+    }
+    Copy-Item -Path (Join-Path $payloadRoot "*") -Destination $InstallDir -Recurse -Force
+}
+finally {
+    if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 $uninstallCmdSource = Join-Path $SourceDir "uninstall.cmd"
 if (Test-Path -LiteralPath $uninstallCmdSource -PathType Leaf) {
     Copy-Item -LiteralPath $uninstallCmdSource -Destination (Join-Path $InstallDir "uninstall.cmd") -Force
 }
 
 $readme = Join-Path $SourceDir "README.md"
-if (Test-Path -LiteralPath $readme) {
+if ((Test-Path -LiteralPath $readme) -and -not (Test-Path -LiteralPath (Join-Path $InstallDir "README.md"))) {
     Copy-Item -LiteralPath $readme -Destination (Join-Path $InstallDir "README.md") -Force
 }
 
 $license = Join-Path $SourceDir "LICENSE"
-if (Test-Path -LiteralPath $license) {
+if ((Test-Path -LiteralPath $license) -and -not (Test-Path -LiteralPath (Join-Path $InstallDir "LICENSE"))) {
     Copy-Item -LiteralPath $license -Destination (Join-Path $InstallDir "LICENSE") -Force
 }
 
 $shell = New-Object -ComObject WScript.Shell
-$startMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\WizLight"
-New-Item -ItemType Directory -Force -Path $startMenuDir | Out-Null
+New-Item -ItemType Directory -Force -Path $StartMenuDir | Out-Null
 
-$appShortcut = $shell.CreateShortcut((Join-Path $startMenuDir "WizLight.lnk"))
-$appShortcut.TargetPath = Join-Path $InstallDir "WizLight.exe"
+$appShortcut = $shell.CreateShortcut((Join-Path $StartMenuDir "WizLight.lnk"))
+$appShortcut.TargetPath = $installedExe
 $appShortcut.WorkingDirectory = $InstallDir
 $appShortcut.Description = "WizLight desktop controller"
 $appShortcut.Save()
 
-$desktopShortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Desktop")) "WizLight.lnk"))
-$desktopShortcut.TargetPath = Join-Path $InstallDir "WizLight.exe"
+$desktopShortcut = $shell.CreateShortcut((Join-Path $DesktopDir "WizLight.lnk"))
+$desktopShortcut.TargetPath = $installedExe
 $desktopShortcut.WorkingDirectory = $InstallDir
 $desktopShortcut.Description = "WizLight desktop controller"
 $desktopShortcut.Save()
@@ -62,6 +93,12 @@ $exe = Join-Path $target 'WizLight.exe'
 if ($target -eq [System.IO.Path]::GetPathRoot($target) -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) {
     throw 'Refusing to remove an invalid application directory.'
 }
+$running = @(Get-Process -Name WizLight -ErrorAction SilentlyContinue | Where-Object {
+    try { $_.Path -and ([System.IO.Path]::GetFullPath($_.Path) -eq $exe) } catch { $false }
+})
+if ($running.Count -gt 0) {
+    throw 'WizLight is running. Close it (also from the system tray) and run the uninstaller again.'
+}
 $shell = New-Object -ComObject WScript.Shell
 foreach ($shortcut in @((Join-Path $StartMenuDir 'WizLight.lnk'), (Join-Path $DesktopDir 'WizLight.lnk'))) {
     if (Test-Path -LiteralPath $shortcut -PathType Leaf) {
@@ -71,9 +108,9 @@ foreach ($shortcut in @((Join-Path $StartMenuDir 'WizLight.lnk'), (Join-Path $De
         }
     }
 }
-foreach ($name in @('WizLight.exe', 'uninstall.cmd', 'uninstall.ps1')) {
-    $file = Join-Path $target $name
-    if (Test-Path -LiteralPath $file -PathType Leaf) { Remove-Item -LiteralPath $file -Force }
+foreach ($name in @('WizLight.exe', '_internal', 'README.md', 'LICENSE', 'uninstall.cmd', 'uninstall.ps1')) {
+    $item = Join-Path $target $name
+    if (Test-Path -LiteralPath $item) { Remove-Item -LiteralPath $item -Recurse -Force }
 }
 if ((Test-Path -LiteralPath $StartMenuDir -PathType Container) -and
     @(Get-ChildItem -LiteralPath $StartMenuDir -Force).Count -eq 0) {
@@ -85,4 +122,6 @@ if (@(Get-ChildItem -LiteralPath $target -Force).Count -eq 0) {
 '@ | Set-Content -LiteralPath $uninstallScript -Encoding UTF8
 
 Write-Host "WizLight installed to $InstallDir"
-Start-Process -FilePath (Join-Path $InstallDir "WizLight.exe")
+if (-not $NoLaunch) {
+    Start-Process -FilePath $installedExe -WorkingDirectory $InstallDir
+}
