@@ -62,6 +62,15 @@ object SyncSessionRegistry {
         if (owner == null) finish(sessionId) else owner()
     }
 
+    @Synchronized fun isActive(): Boolean = state in setOf("starting", "running")
+
+    /** Stops whichever session is starting/running; false when nothing was active. */
+    @Synchronized fun stopCurrent(): Boolean {
+        if (!isActive()) return false
+        stop(id)
+        return true
+    }
+
     @Synchronized fun finish(sessionId: String, failure: String? = null) {
         if (sessionId != id || state in setOf("stopped", "error")) return
         state = if (failure == null) "stopped" else "error"

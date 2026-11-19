@@ -11,8 +11,10 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     SharedPreferences.setMockInitialValues({});
     const channel = MethodChannel('com.wizlight.app/screen_capture');
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel,
-        (call) async => {'sessionId': '', 'backend': 'screen', 'state': 'stopped'});
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async =>
+            {'sessionId': '', 'backend': 'screen', 'state': 'stopped'});
     addTearDown(() => tester.binding.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null));
     await tester.pumpWidget(const WizLightAndroidApp());

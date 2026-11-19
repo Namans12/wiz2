@@ -173,6 +173,9 @@ jobs:
             echo "Release keystore configured."
           elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             echo "::warning title=PR build: debug-signed by design::Pull request builds never use the release key. The APK is signed with the debug key."
+          elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ "${GITHUB_REF#refs/tags/v}" != "$GITHUB_REF" ]; then
+            echo "::error title=Release key missing::A tagged release must be signed with the release key, but the ANDROID_* signing secrets are not all set. See docs/releasing.md."
+            exit 1
           else
             echo "::warning title=No keystore secret: debug-signed::The ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD secrets are not all set, so the APK is signed with the debug key. Updates will not install over an APK signed with a different key. See docs/releasing.md."
           fi

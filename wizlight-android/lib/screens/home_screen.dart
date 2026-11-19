@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/wiz_bulb.dart';
+import '../widgets/focus_ring.dart';
 import '../widgets/remote_slider.dart';
 import '../services/screen_capture_service.dart';
 import '../services/settings_service.dart';
@@ -29,6 +31,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   SyncSettings _settings = const SyncSettings();
   SyncRuntimeStats? _runtimeStats;
   final _syncActionFocus = FocusNode(debugLabel: 'Sync action');
+  final _bodyFocus = FocusNode(
+      debugLabel: 'Body', canRequestFocus: false, skipTraversal: true);
+  final _headerFocus = <FocusNode>[
+    FocusNode(debugLabel: 'Header: Discover'),
+    FocusNode(debugLabel: 'Header: Add'),
+    FocusNode(debugLabel: 'Header: Help'),
+  ];
+  bool _hdrFallbackShown = false;
+  bool _playingPending = false;
+  bool _pendingAutoRetry = false;
+  String? _pendingMediaUri;
   bool _loading = true;
   bool _syncRunning = false;
   bool _playerRunning = false;
@@ -47,9 +60,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ..onStats = (stats) {
         if (mounted) {
           setState(() => _runtimeStats = stats);
+          if (stats.hdrFallback) _noteHdrFallback();
         }
       };
     _captureService.onSession = _onSession;
+    _captureService.onPendingMedia = _checkPendingMedia;
     _load();
   }
 
@@ -66,6 +81,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _status = _settingsService.warning;
     });
     await _refreshSession();
+    await _checkPendingMedia();
   }
 
   Future<bool> _saveBulbs(List<WizBulb> bulbs, {String? turnOffIp}) async {
@@ -113,6 +129,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 : 'Bulb did not confirm power off';
           });
         }
+      }
+      if (mounted) {
+        setState(() => _busy = false);
+        _retryPendingSoon();
       }
       return true;
     } catch (error) {
@@ -206,7 +226,105 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _playerRunning = running && session['backend'] == 'usb';
       if (running) _syncBackend = session['backend'] as String? ?? 'screen';
       _status = session['error'] as String? ?? 'Sync $_sessionState';
+      if (_sessionState == 'stopped' || _sessionState == 'error') {
+        // Stale numbers from the previous run must not look live.
+        _runtimeStats = null;
+        _settingsPending = false;
+      }
     });
+    if (session['hdrFallback'] == true) _noteHdrFallback();
+    _retryPendingSoon();
+  }
+
+  void _noteHdrFallback() {
+    if (_hdrFallbackShown || !mounted) return;
+    _hdrFallbackShown = true;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+        content: Text(
+            "HDR capture isn't supported on this device - using standard capture.")));
+  }
+
+  /// Collects a video opened from outside the app ("Open with"). The URI is
+  /// kept in [_pendingMediaUri] until the player actually accepts it.
+  Future<void> _checkPendingMedia() async {
+    if (!mounted) return;
+    final uri = await _captureService.takePendingMediaUri();
+    if (uri != null && mounted) {
+      setState(() {
+        _pendingMediaUri = uri;
+        _syncBackend = 'usb';
+      });
+    }
+    await _playPending();
+  }
+
+  String get _pendingMediaName {
+    var uri = _pendingMediaUri ?? '';
+    try {
+      uri = Uri.decodeFull(uri);
+    } catch (_) {}
+    final tail =
+        uri.split(RegExp(r'[/:]')).where((e) => e.isNotEmpty).lastOrNull;
+    return tail ?? 'video';
+  }
+
+  void _retryPendingSoon() {
+    if (_pendingMediaUri == null || !_pendingAutoRetry || !mounted) return;
+    if (_transitioning || _playingPending) return;
+    _pendingAutoRetry = false;
+    Future<void>.microtask(_playPending);
+  }
+
+  Future<void> _playPending() async {
+    final uri = _pendingMediaUri;
+    if (uri == null || _playingPending || !mounted) return;
+    _playingPending = true;
+    try {
+      for (var i = 0; i < 20 && _transitioning && mounted; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+      if (!mounted) return;
+      if (_transitioning) {
+        _pendingAutoRetry = true; // retried when the transition finishes
+        return;
+      }
+      if (WizBulb.syncTargets(_bulbs).isEmpty) {
+        final name = _pendingMediaName;
+        _pendingAutoRetry = true; // retried once bulbs are added
+        setState(() => _status = _bulbs.isEmpty
+            ? 'Add at least one bulb first, then play $name.'
+            : 'Include at least one bulb in screen sync, then play $name.');
+        ScaffoldMessenger.maybeOf(context)
+          ?..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+              content: Text('Add a bulb to play $name.'),
+              action: SnackBarAction(
+                  label: 'Play $name', onPressed: _playPending)));
+        return;
+      }
+      setState(() => _syncBackend = 'usb');
+      try {
+        if (_playerRunning) {
+          await _captureService.stopMedia();
+          await _refreshSession();
+        } else if (_syncRunning) {
+          await _captureService.stopCapture();
+          await _refreshSession();
+        }
+      } catch (error) {
+        if (mounted) setState(() => _status = 'Local player: $error');
+        return;
+      }
+      if (!mounted) return;
+      final played = await _pickAndPlayUsb(replayUri: uri);
+      if (!mounted) return;
+      if (played && _pendingMediaUri == uri) {
+        setState(() => _pendingMediaUri = null);
+        ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+      }
+    } finally {
+      _playingPending = false;
+    }
   }
 
   Future<void> _refreshSession() async {
@@ -221,7 +339,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refreshSession();
+    if (state == AppLifecycleState.resumed) {
+      _refreshSession().then((_) => _checkPendingMedia());
+    }
   }
 
   @override
@@ -229,6 +349,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _captureService.dispose();
     _syncActionFocus.dispose();
+    _bodyFocus.dispose();
+    for (final node in _headerFocus) {
+      node.dispose();
+    }
     super.dispose();
   }
 
@@ -275,21 +399,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _pickAndPlayUsb({String? replayUri}) async {
-    if (_transitioning) return;
+  Future<bool> _pickAndPlayUsb({String? replayUri}) async {
+    if (_transitioning) return false;
     setState(() => _busy = true);
     try {
       if (_playerRunning) {
         await _captureService.stopMedia();
         await _refreshSession();
-        return;
+        return false;
       }
       if (_syncRunning) {
         throw StateError('Stop screen capture before starting the player');
       }
       final targets = _requireSyncTargets();
       final uri = replayUri ?? await _captureService.pickMedia();
-      if (!mounted || uri == null || uri.isEmpty) return;
+      if (!mounted || uri == null || uri.isEmpty) return false;
       _lastMediaUri = uri;
       setState(() {
         _settingsPending = false;
@@ -299,11 +423,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           mediaUri: uri, bulbs: targets, settings: _settings);
       if (!accepted) throw StateError('Player start was rejected');
       await _refreshSession();
+      return true;
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(() => _status = error.code == 'NO_PICKER'
+            ? "No file picker on this device. Open the video from your TV's file browser and choose WizLight."
+            : 'Local player: ${error.message ?? error.code}');
+      }
     } catch (error) {
       if (mounted) setState(() => _status = 'Local player: $error');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    return false;
   }
 
   Future<void> _applySettings() async {
@@ -351,7 +483,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (_settingsPending)
           ListTile(
             title: const Text(
-                'Settings saved; running sync still uses previous settings.'),
+                'Settings changed. Press Apply / restart to use them - the running sync still uses the old settings.'),
             trailing: FilledButton(
                 onPressed: _transitioning ? null : _applySettings,
                 child: const Text('Apply / restart')),
@@ -372,95 +504,283 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     // Build the small settings form eagerly so off-screen controls remain in
     // focus traversal. A lazy ListView can strand a remote at its last child.
-    return FocusTraversalGroup(
-      policy: ReadingOrderTraversalPolicy(),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (!_syncActionFocus.hasFocus && _syncActionFocus.context != null) {
+          _focusSyncAction();
+        } else {
+          SystemNavigator.pop();
+        }
+      },
       child: Scaffold(
         appBar: AppBar(
           title: const Text('WizLight'),
-          actions: <Widget>[
-            IconButton(
-                onPressed: _discover,
-                icon: const Icon(Icons.search),
-                tooltip: 'Discover bulbs'),
-            IconButton(
-                onPressed: _addIp,
-                icon: const Icon(Icons.add),
-                tooltip: 'Add bulb by IP'),
-            IconButton(
-                onPressed: _showSyncGuide,
-                icon: const Icon(Icons.help_outline),
-                tooltip: 'Sync guide'),
-          ],
+          actions: <Widget>[_buildHeaderActions()],
         ),
         body: SafeArea(
           child: LayoutBuilder(builder: (context, constraints) {
             final wide = constraints.maxWidth >= 900;
-            return SingleChildScrollView(
-              padding: EdgeInsets.all(wide ? 32 : 16),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 960),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text('Your screen. Your atmosphere.',
-                          style: Theme.of(context).textTheme.headlineSmall),
-                      const SizedBox(height: 6),
-                      const Text(
-                          'Remote: Up / Down moves between controls. Left / Right adjusts a slider.'),
-                      const SizedBox(height: 20),
-                      _pendingSettingsNotice(),
-                      _buildSyncHero(),
-                      const SizedBox(height: 16),
-                      Text('Your lights',
-                          style: Theme.of(context).textTheme.titleLarge),
-                      const SizedBox(height: 8),
-                      ..._bulbs.map(_buildBulbTile),
-                      if (_bulbs.isEmpty)
-                        const Card(
-                            child: ListTile(
-                          leading: Icon(Icons.lightbulb_outline),
-                          title: Text('No bulbs configured'),
-                          subtitle: Text(
-                              'Use Discover or + above to add your lights.'),
-                        )),
-                      const SizedBox(height: 16),
-                      _buildSyncControls(),
-                      const SizedBox(height: 16),
-                      Card(
-                          child: ExpansionTile(
-                        title: const Text('Live diagnostics'),
-                        subtitle: const Text(
-                            'Performance, capture details and support report'),
-                        children: [
-                          _buildRuntimeCard(),
-                          _buildDiagnosticsCard()
-                        ],
-                      )),
-                      const SizedBox(height: 16),
-                      Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            onPressed: () {
-                              _syncActionFocus.requestFocus();
-                              final actionContext = _syncActionFocus.context;
-                              if (actionContext != null) {
-                                Scrollable.ensureVisible(actionContext,
-                                    alignment: 0.1);
-                              }
+            return FocusTraversalGroup(
+                policy: ReadingOrderTraversalPolicy(),
+                child: Focus(
+                    focusNode: _bodyFocus,
+                    child: Shortcuts(
+                        shortcuts: const <ShortcutActivator, Intent>{
+                          SingleActivator(LogicalKeyboardKey.arrowUp):
+                              PreviousFocusIntent(),
+                          SingleActivator(LogicalKeyboardKey.arrowDown):
+                              NextFocusIntent(),
+                        },
+                        child: Actions(
+                            actions: <Type, Action<Intent>>{
+                              PreviousFocusIntent:
+                                  CallbackAction<PreviousFocusIntent>(
+                                      onInvoke: (_) => _moveVertical(-1)),
+                              NextFocusIntent: CallbackAction<NextFocusIntent>(
+                                  onInvoke: (_) => _moveVertical(1)),
+                              DirectionalFocusIntent:
+                                  CallbackAction<DirectionalFocusIntent>(
+                                      onInvoke: (intent) =>
+                                          _moveHorizontal(intent.direction)),
                             },
-                            icon: const Icon(Icons.arrow_upward),
-                            label: const Text('Back to sync'),
-                          )),
-                    ],
-                  ),
-                ),
-              ),
-            );
+                            child: SingleChildScrollView(
+                              padding: EdgeInsets.all(wide ? 32 : 16),
+                              child: Center(
+                                child: ConstrainedBox(
+                                  constraints:
+                                      const BoxConstraints(maxWidth: 960),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      Text('Your screen. Your atmosphere.',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .headlineSmall),
+                                      const SizedBox(height: 6),
+                                      const Text(
+                                          'Remote: Up / Down moves between controls. Left / Right adjusts a slider.'),
+                                      const SizedBox(height: 20),
+                                      _pendingSettingsNotice(),
+                                      _buildSyncHero(),
+                                      const SizedBox(height: 16),
+                                      Text('Your lights',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleLarge),
+                                      const SizedBox(height: 8),
+                                      ..._bulbs.map(_buildBulbTile),
+                                      if (_bulbs.isEmpty)
+                                        const Card(
+                                            child: ListTile(
+                                          leading:
+                                              Icon(Icons.lightbulb_outline),
+                                          title: Text('No bulbs configured'),
+                                          subtitle: Text(
+                                              'Use Discover or + above to add your lights.'),
+                                        )),
+                                      const SizedBox(height: 16),
+                                      _buildSyncControls(),
+                                      const SizedBox(height: 16),
+                                      Card(
+                                          child: FocusRing(
+                                              child: ExpansionTile(
+                                        title: const Text('Live diagnostics'),
+                                        subtitle: const Text(
+                                            'Performance, capture details and support report'),
+                                        children: [
+                                          _buildRuntimeCard(),
+                                          _buildDiagnosticsCard()
+                                        ],
+                                      ))),
+                                      const SizedBox(height: 16),
+                                      Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: TextButton.icon(
+                                            onPressed: () {
+                                              _syncActionFocus.requestFocus();
+                                              final actionContext =
+                                                  _syncActionFocus.context;
+                                              if (actionContext != null) {
+                                                Scrollable.ensureVisible(
+                                                    actionContext,
+                                                    alignment: 0.1);
+                                              }
+                                            },
+                                            icon:
+                                                const Icon(Icons.arrow_upward),
+                                            label: const Text('Back to sync'),
+                                          )),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            )))));
           }),
         ),
       ),
     );
+  }
+
+  void _focusSyncAction() {
+    _syncActionFocus.requestFocus();
+    final ctx = _syncActionFocus.context;
+    if (ctx != null) Scrollable.ensureVisible(ctx, alignment: 0.1);
+  }
+
+  /// Header icons: their own group. Left/Right move between them only, Down
+  /// returns to the Start/Stop button, Up does nothing (already at the top).
+  Widget _buildHeaderActions() {
+    KeyEventResult onKey(FocusNode _, KeyEvent event) {
+      if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+        return KeyEventResult.ignored;
+      }
+      final key = event.logicalKey;
+      final index = _headerFocus.indexWhere((node) => node.hasFocus);
+      if (key == LogicalKeyboardKey.arrowDown) {
+        _focusSyncAction();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.arrowUp) return KeyEventResult.handled;
+      if (index >= 0 &&
+          (key == LogicalKeyboardKey.arrowLeft ||
+              key == LogicalKeyboardKey.arrowRight)) {
+        final next = index + (key == LogicalKeyboardKey.arrowRight ? 1 : -1);
+        if (next >= 0 && next < _headerFocus.length) {
+          _headerFocus[next].requestFocus();
+        }
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+
+    return FocusTraversalGroup(
+      policy: ReadingOrderTraversalPolicy(),
+      child: Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onKeyEvent: onKey,
+        child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+          IconButton(
+              focusNode: _headerFocus[0],
+              onPressed: _discover,
+              icon: const Icon(Icons.search),
+              tooltip: 'Discover bulbs'),
+          IconButton(
+              focusNode: _headerFocus[1],
+              onPressed: _addIp,
+              icon: const Icon(Icons.add),
+              tooltip: 'Add bulb by IP'),
+          IconButton(
+              focusNode: _headerFocus[2],
+              onPressed: _showSyncGuide,
+              icon: const Icon(Icons.help_outline),
+              tooltip: 'Sync guide'),
+        ]),
+      ),
+    );
+  }
+
+  bool _isOffstage(BuildContext context) {
+    var hidden = false;
+    context.visitAncestorElements((element) {
+      final widget = element.widget;
+      if (widget is Offstage && widget.offstage) {
+        hidden = true;
+        return false;
+      }
+      return true;
+    });
+    return hidden;
+  }
+
+  List<FocusNode> _bodyStops() => [for (final row in _bodyRows()) ...row];
+
+  /// Body stops grouped into visual rows (top to bottom, left to right).
+  List<List<FocusNode>> _bodyRows() {
+    final nodes = _bodyFocus.traversalDescendants
+        .where((node) =>
+            node.context != null &&
+            node.context!.mounted &&
+            node.rect.height > 0 &&
+            !_isOffstage(node.context!))
+        .toList()
+      ..sort((a, b) => a.rect.top.compareTo(b.rect.top));
+    final rows = <List<FocusNode>>[];
+    for (final node in nodes) {
+      final r = node.rect;
+      if (rows.isNotEmpty &&
+          r.center.dy >= rows.last.first.rect.top &&
+          r.center.dy <= rows.last.first.rect.bottom) {
+        rows.last.add(node);
+      } else {
+        rows.add([node]);
+      }
+    }
+    for (final row in rows) {
+      row.sort((a, b) => a.rect.left.compareTo(b.rect.left));
+    }
+    return rows;
+  }
+
+  void _focusNode(FocusNode node) {
+    node.requestFocus();
+    final ctx = node.context;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx,
+          alignment: 0.5, duration: const Duration(milliseconds: 120));
+    }
+  }
+
+  /// Up/Down: previous/next visual row in reading order (column kept as close
+  /// as possible). Down stops at the last row; Up from the first row
+  /// deliberately enters the header.
+  Object? _moveVertical(int delta) {
+    final rows = _bodyRows();
+    final current = FocusManager.instance.primaryFocus;
+    final rowIndex =
+        current == null ? -1 : rows.indexWhere((row) => row.contains(current));
+    if (rowIndex < 0) {
+      if (rows.isNotEmpty) {
+        _focusNode(delta > 0 ? rows.first.first : rows.last.first);
+      }
+      return null;
+    }
+    final next = rowIndex + delta;
+    if (next < 0) {
+      _headerFocus.first.requestFocus();
+    } else if (next < rows.length) {
+      // Pick the stop in the next row closest to the current column.
+      final x = current!.rect.center.dx;
+      final target = rows[next].reduce((a, b) =>
+          (a.rect.center.dx - x).abs() <= (b.rect.center.dx - x).abs() ? a : b);
+      _focusNode(target);
+    }
+    return null;
+  }
+
+  /// Left/Right: nearest stop in the same visual row, otherwise stay put.
+  Object? _moveHorizontal(TraversalDirection direction) {
+    final current = FocusManager.instance.primaryFocus;
+    if (current == null) return null;
+    final here = current.rect;
+    final sign = direction == TraversalDirection.right ? 1 : -1;
+    FocusNode? best;
+    var bestDistance = double.infinity;
+    for (final node in _bodyStops()) {
+      if (node == current) continue;
+      final r = node.rect;
+      if (r.center.dy < here.top || r.center.dy > here.bottom) continue;
+      final distance = (r.center.dx - here.center.dx) * sign;
+      if (distance > 0 && distance < bestDistance) {
+        best = node;
+        bestDistance = distance;
+      }
+    }
+    if (best != null) _focusNode(best);
+    return null;
   }
 
   Widget _buildSyncHero() {
@@ -546,13 +866,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'Capture looks black. The scene may be dark, or this '
-                        'app or input may not allow screen capture. For local '
-                        'files, you can try USB Media mode.',
+                        'Screen looks black. Netflix, Hotstar, Sony LIV and '
+                        'some TV players block screen capture (protected '
+                        'video). For your own videos use Play from USB.',
                         style: TextStyle(fontSize: 12),
                       ),
                     ),
                   ],
+                ),
+              ),
+            ],
+            if (_sendFailure != null) ...<Widget>[
+              const SizedBox(height: 10),
+              Row(children: <Widget>[
+                const Icon(Icons.wifi_off, color: Colors.orange),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: Text("Can't reach the lamp: $_sendFailure",
+                        style: const TextStyle(fontSize: 12))),
+              ]),
+            ],
+            if (_pendingMediaUri != null) ...<Widget>[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.tonalIcon(
+                  onPressed: _transitioning ? null : _playPending,
+                  icon: const Icon(Icons.play_circle_outline),
+                  label: Text('Play $_pendingMediaName',
+                      overflow: TextOverflow.ellipsis),
                 ),
               ),
             ],
@@ -617,6 +959,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  String? get _sendFailure {
+    final error = _runtimeStats?.sendError;
+    return (error == null || error.isEmpty) ? null : error;
+  }
+
   Widget _buildStatChip(String label, String value) {
     return Chip(
       label: Text('$label: $value'),
@@ -631,36 +978,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           leading: const Icon(Icons.lightbulb),
           title: Text(bulb.name),
           subtitle: Text(bulb.ip),
-          trailing: DropdownButton<String>(
-            value: bulb.region,
-            items: const <DropdownMenuItem<String>>[
-              DropdownMenuItem(value: 'left', child: Text('Left')),
-              DropdownMenuItem(value: 'right', child: Text('Right')),
-              DropdownMenuItem(value: 'top', child: Text('Top')),
-              DropdownMenuItem(value: 'bottom', child: Text('Bottom')),
-              DropdownMenuItem(value: 'center', child: Text('Center')),
-            ],
-            onChanged: _transitioning
-                ? null
-                : (value) {
-                    if (value == null) {
-                      return;
-                    }
-                    final next = _bulbs
-                        .map(
-                          (item) => item.ip == bulb.ip
-                              ? item.copyWith(region: value)
-                              : item,
-                        )
-                        .toList(growable: false);
-                    _saveBulbs(next);
-                  },
-          ),
+          trailing: FocusRing(
+              radius: 8,
+              child: DropdownButton<String>(
+                value: bulb.region,
+                items: const <DropdownMenuItem<String>>[
+                  DropdownMenuItem(value: 'left', child: Text('Left')),
+                  DropdownMenuItem(value: 'right', child: Text('Right')),
+                  DropdownMenuItem(value: 'top', child: Text('Top')),
+                  DropdownMenuItem(value: 'bottom', child: Text('Bottom')),
+                  DropdownMenuItem(value: 'center', child: Text('Center')),
+                ],
+                onChanged: _transitioning
+                    ? null
+                    : (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        final next = _bulbs
+                            .map(
+                              (item) => item.ip == bulb.ip
+                                  ? item.copyWith(region: value)
+                                  : item,
+                            )
+                            .toList(growable: false);
+                        _saveBulbs(next);
+                      },
+              )),
         ),
         Row(
           children: [
             Expanded(
-              child: CheckboxListTile(
+              child: FocusRing(
+                  child: CheckboxListTile(
                 title: const Text('Include in screen sync'),
                 controlAffinity: ListTileControlAffinity.leading,
                 value: bulb.screenSyncEnabled,
@@ -675,7 +1025,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 : item,
                         ]);
                       },
-              ),
+              )),
             ),
             IconButton(
               tooltip: 'Turn off ${bulb.name}',
@@ -747,6 +1097,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Widget _ringedSwitch({
+    required bool value,
+    required ValueChanged<bool>? onChanged,
+    required Widget title,
+    Widget? subtitle,
+  }) {
+    return FocusRing(
+        child: SwitchListTile(
+            value: value,
+            onChanged: onChanged,
+            title: title,
+            subtitle: subtitle));
+  }
+
   Widget _buildSyncControls() {
     return Card(
       child: Padding(
@@ -808,7 +1172,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       : 'Adapts between calm and fast based on on-screen motion.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
-            SwitchListTile(
+            _ringedSwitch(
               value: _settings.brightnessFollow,
               onChanged: (value) =>
                   _saveSettings(_settings.copyWith(brightnessFollow: value)),
@@ -817,7 +1181,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   'Dim scenes dim the bulb; black turns it off; B&W maps to true white.'),
             ),
             const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
+            FocusRing(
+                child: DropdownButtonFormField<String>(
               initialValue: _settings.sourceColorSpace,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Color Source'),
@@ -838,14 +1203,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   _saveSettings(_settings.copyWith(sourceColorSpace: value));
                 }
               },
-            ),
-            SwitchListTile(
+            )),
+            _ringedSwitch(
               value: _settings.hdrToneMapping,
-              onChanged: (value) =>
-                  _saveSettings(_settings.copyWith(hdrToneMapping: value)),
+              onChanged: _settings.sourceColorSpace == 'auto'
+                  ? null
+                  : (value) =>
+                      _saveSettings(_settings.copyWith(hdrToneMapping: value)),
               title: const Text('HDR tone mapping'),
+              subtitle: _settings.sourceColorSpace == 'auto'
+                  ? const Text(
+                      'Only used when source colour space is set manually')
+                  : null,
             ),
-            SwitchListTile(
+            _ringedSwitch(
               value: _settings.hdrCapture,
               onChanged: (value) =>
                   _saveSettings(_settings.copyWith(hdrCapture: value)),
@@ -856,9 +1227,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _buildSlider(
               label: 'Max FPS',
               value: _settings.maxFps.toDouble(),
-              min: 8,
+              min: _settings.minFps.toDouble(),
               max: 30,
-              divisions: 22,
+              divisions:
+                  30 - _settings.minFps > 0 ? 30 - _settings.minFps : null,
               onChanged: (value) =>
                   _saveSettings(_settings.copyWith(maxFps: value.round())),
             ),
@@ -880,7 +1252,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onChanged: (value) =>
                   _saveSettings(_settings.copyWith(colorBoost: value)),
             ),
-            SwitchListTile(
+            _buildSlider(
+              label: 'Minimum brightness',
+              value: _settings.minBrightness.clamp(10, 60).toDouble(),
+              min: 10,
+              max: 60,
+              divisions: 10,
+              onChanged: (value) => _saveSettings(
+                  _settings.copyWith(minBrightness: value.round())),
+            ),
+            _ringedSwitch(
               value: _settings.ignoreLetterbox,
               onChanged: (value) =>
                   _saveSettings(_settings.copyWith(ignoreLetterbox: value)),
@@ -959,6 +1340,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Text('Profile: ${stats?.syncProfile ?? _settings.syncProfile}'),
             Text(
                 'Scene: ${((stats?.sceneNeutral ?? 0) * 100).toStringAsFixed(0)}% neutral, luma ${(stats?.sceneLuma ?? 0).toStringAsFixed(2)}'),
+            Text('Datagrams sent: ${stats?.datagramsSent ?? 0}'),
+            Text('Send errors: ${stats?.sendErrors ?? 0}'),
+            if (_sendFailure != null)
+              Text("Can't reach the lamp: $_sendFailure",
+                  style: const TextStyle(color: Colors.orange)),
             Text('Frames: ${stats?.framesProcessed ?? 0}'),
             Text('Replayed frames: ${stats?.replayedFrames ?? 0}'),
             Text(

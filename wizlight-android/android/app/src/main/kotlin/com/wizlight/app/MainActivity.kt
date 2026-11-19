@@ -2,7 +2,11 @@ package com.wizlight.app
 
 import android.app.Activity
 import android.content.Context
+import android.content.ClipData
 import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import io.flutter.plugin.common.MethodCall
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
@@ -17,6 +21,47 @@ class MainActivity : FlutterActivity() {
     private var methodChannel: MethodChannel? = null
     private var pendingResult: MethodChannel.Result? = null
     private var pendingPickResult: MethodChannel.Result? = null
+    private var pendingMediaUri: String? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        handleViewIntent(intent, notifyDart = false)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleViewIntent(intent, notifyDart = true)
+    }
+
+    /** Remember a video opened from a file browser ("Open with WizLight"). */
+    private fun handleViewIntent(intent: Intent?, notifyDart: Boolean) {
+        if (intent == null || intent.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        val type = intent.type ?: contentResolver.getType(uri)
+        if (type != null && !type.startsWith("video/") && type != "application/octet-stream") return
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: Exception) {
+            // Not every provider offers persistable grants; the activity grant still works while we run.
+        }
+        pendingMediaUri = uri.toString()
+        // Mark consumed so a recreation does not re-deliver the same VIEW intent.
+        intent.action = Intent.ACTION_MAIN
+        if (notifyDart) methodChannel?.invokeMethod("onPendingMediaUri", null)
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        SyncBridge.detach(methodChannel)
+        methodChannel?.setMethodCallHandler(null)
+        methodChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    override fun onDestroy() {
+        SyncBridge.detach(methodChannel)
+        super.onDestroy()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -34,6 +79,12 @@ class MainActivity : FlutterActivity() {
                     ) { accepted -> result.success(accepted) }
                 }
                 "pickMedia" -> pickMedia(result)
+                "takePendingMediaUri" -> {
+                    val uri = pendingMediaUri
+                    pendingMediaUri = null
+                    result.success(uri)
+                }
+                "isTelevision" -> result.success(isTelevisionDevice(this))
                 "playMedia" -> playMedia(call, result)
                 "stopMedia" -> {
                     SyncSessionRegistry.stop(call.argument<String>("sessionId") ?: "")
@@ -91,17 +142,26 @@ class MainActivity : FlutterActivity() {
             return
         }
         pendingPickResult = result
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        val open = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "video/*"
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        try {
-            startActivityForResult(intent, requestPickMedia)
-        } catch (error: Exception) {
-            pendingPickResult = null
-            result.success(null)
+        // Sony TVs often have no DocumentsUI: fall back to GET_CONTENT, then report NO_PICKER.
+        val get = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "video/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        for (candidate in listOf(open, get)) {
+            try {
+                startActivityForResult(candidate, requestPickMedia)
+                return
+            } catch (_: Exception) {
+            }
+        }
+        pendingPickResult = null
+        result.error("NO_PICKER", "No file picker is available on this device", null)
     }
 
     private fun playMedia(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
@@ -117,6 +177,13 @@ class MainActivity : FlutterActivity() {
         }
         val intent = Intent(this, PlayerActivity::class.java).apply {
             putExtra(PlayerActivity.EXTRA_MEDIA_URI, uri)
+            val parsed = Uri.parse(uri)
+            if (parsed.scheme == "content") {
+                // Forward our read grant (picked or "Open with") to the player activity.
+                data = parsed
+                clipData = ClipData.newRawUri("media", parsed)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
             putCommonSyncExtras(call)
         }
         try {

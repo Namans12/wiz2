@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// One focus stop: horizontal arrows adjust, vertical arrows leave the slider.
+/// One focus stop: Left/Right adjust the value. Up/Down are left to the
+/// surrounding traversal so every control navigates the same way.
 /// The child Slider still handles touch, mouse, and accessibility actions.
 class RemoteSlider extends StatefulWidget {
   const RemoteSlider({
@@ -40,17 +41,6 @@ class _RemoteSliderState extends State<RemoteSlider> {
       return KeyEventResult.ignored;
     }
     final key = event.logicalKey;
-    if (key == LogicalKeyboardKey.arrowUp ||
-        key == LogicalKeyboardKey.arrowDown) {
-      // Linear traversal is deliberate: a spatial search can choose this
-      // slider again, especially at either end of a scrolled TV screen.
-      if (key == LogicalKeyboardKey.arrowUp) {
-        node.previousFocus();
-      } else {
-        node.nextFocus();
-      }
-      return KeyEventResult.handled;
-    }
     if (key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.arrowRight) {
       final step = (widget.max - widget.min) / (widget.divisions ?? 20);
@@ -93,7 +83,7 @@ class _RemoteSliderState extends State<RemoteSlider> {
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
                 color: _focused ? scheme.primary : scheme.outlineVariant,
-                width: 2),
+                width: _focused ? 3 : 2),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

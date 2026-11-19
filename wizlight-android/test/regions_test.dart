@@ -7,6 +7,9 @@ void main() {
       final bulb = WizBulb(ip: '192.168.1.2', name: 'Lamp', region: region);
       expect(WizBulb.fromJson(bulb.toJson()).region, region);
     }
-    expect(WizBulb.fromJson(const {'ip': '192.168.1.2', 'region': 'invalid'}).region, 'left');
+    expect(
+        WizBulb.fromJson(const {'ip': '192.168.1.2', 'region': 'invalid'})
+            .region,
+        'left');
   });
 }

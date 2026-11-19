@@ -1,0 +1,80 @@
+wiz_rgbcw_lut_v1.bin 0 0 0 -> 0 0 0 0 0
+wiz_rgbcw_lut_v1.bin 255 255 255 -> 0 0 13 251 0
+wiz_rgbcw_lut_v1.bin 128 128 128 -> 0 0 3 126 0
+wiz_rgbcw_lut_v1.bin 40 40 40 -> 0 0 0 39 0
+wiz_rgbcw_lut_v1.bin 200 190 180 -> 151 146 148 29 33
+wiz_rgbcw_lut_v1.bin 255 0 0 -> 235 0 0 0 0
+wiz_rgbcw_lut_v1.bin 0 255 0 -> 0 241 0 0 0
+wiz_rgbcw_lut_v1.bin 0 0 255 -> 0 0 255 0 0
+wiz_rgbcw_lut_v1.bin 255 255 0 -> 235 241 0 0 0
+wiz_rgbcw_lut_v1.bin 0 255 255 -> 0 241 255 0 0
+wiz_rgbcw_lut_v1.bin 255 0 255 -> 235 0 255 0 0
+wiz_rgbcw_lut_v1.bin 255 128 0 -> 235 121 0 0 0
+wiz_rgbcw_lut_v1.bin 255 140 5 -> 235 132 5 0 0
+wiz_rgbcw_lut_v1.bin 200 150 40 -> 185 142 40 0 0
+wiz_rgbcw_lut_v1.bin 90 60 30 -> 82 56 30 0 0
+wiz_rgbcw_lut_v1.bin 30 80 200 -> 27 75 200 0 0
+wiz_rgbcw_lut_v1.bin 10 200 120 -> 9 189 120 0 0
+wiz_rgbcw_lut_v1.bin 180 20 90 -> 166 18 90 0 0
+wiz_rgbcw_lut_v1.bin 255 200 160 -> 235 189 160 0 0
+wiz_rgbcw_lut_v1.bin 13 77 251 -> 11 72 251 0 0
+wiz_rgbcw_physical_lut_v1.bin 0 0 0 -> 0 0 0 0 0
+wiz_rgbcw_physical_lut_v1.bin 255 255 255 -> 0 18 0 255 2
+wiz_rgbcw_physical_lut_v1.bin 128 128 128 -> 0 4 0 55 0
+wiz_rgbcw_physical_lut_v1.bin 40 40 40 -> 0 0 0 5 0
+wiz_rgbcw_physical_lut_v1.bin 200 190 180 -> 0 17 0 145 23
+wiz_rgbcw_physical_lut_v1.bin 255 0 0 -> 255 3 0 0 21
+wiz_rgbcw_physical_lut_v1.bin 0 255 0 -> 0 255 0 3 38
+wiz_rgbcw_physical_lut_v1.bin 0 0 255 -> 0 52 255 0 0
+wiz_rgbcw_physical_lut_v1.bin 255 255 0 -> 121 255 0 0 64
+wiz_rgbcw_physical_lut_v1.bin 0 255 255 -> 0 255 105 67 0
+wiz_rgbcw_physical_lut_v1.bin 255 0 255 -> 205 0 255 0 53
+wiz_rgbcw_physical_lut_v1.bin 255 128 0 -> 255 105 0 0 43
+wiz_rgbcw_physical_lut_v1.bin 255 140 5 -> 255 126 0 0 51
+wiz_rgbcw_physical_lut_v1.bin 200 150 40 -> 127 147 0 0 100
+wiz_rgbcw_physical_lut_v1.bin 90 60 30 -> 2 2 1 1 26
+wiz_rgbcw_physical_lut_v1.bin 30 80 200 -> 0 57 147 13 0
+wiz_rgbcw_physical_lut_v1.bin 10 200 120 -> 0 147 3 43 0
+wiz_rgbcw_physical_lut_v1.bin 180 20 90 -> 116 0 27 0 18
+wiz_rgbcw_physical_lut_v1.bin 255 200 160 -> 0 7 1 181 255
+wiz_rgbcw_physical_lut_v1.bin 13 77 251 -> 0 76 246 9 0
+wiz_rgbw_physical_lut_v1.bin 0 0 0 -> 0 0 0 0
+wiz_rgbw_physical_lut_v1.bin 255 255 255 -> 0 255 180 181
+wiz_rgbw_physical_lut_v1.bin 128 128 128 -> 0 55 39 39
+wiz_rgbw_physical_lut_v1.bin 40 40 40 -> 0 5 4 4
+wiz_rgbw_physical_lut_v1.bin 200 190 180 -> 0 145 98 120
+wiz_rgbw_physical_lut_v1.bin 255 0 0 -> 255 3 0 21
+wiz_rgbw_physical_lut_v1.bin 0 255 0 -> 0 255 2 40
+wiz_rgbw_physical_lut_v1.bin 0 0 255 -> 0 52 255 0
+wiz_rgbw_physical_lut_v1.bin 255 255 0 -> 121 255 0 65
+wiz_rgbw_physical_lut_v1.bin 0 255 255 -> 0 255 122 36
+wiz_rgbw_physical_lut_v1.bin 255 0 255 -> 205 0 255 53
+wiz_rgbw_physical_lut_v1.bin 255 128 0 -> 255 105 0 43
+wiz_rgbw_physical_lut_v1.bin 255 140 5 -> 255 126 0 51
+wiz_rgbw_physical_lut_v1.bin 200 150 40 -> 127 147 0 101
+wiz_rgbw_physical_lut_v1.bin 90 60 30 -> 2 3 1 26
+wiz_rgbw_physical_lut_v1.bin 30 80 200 -> 0 64 147 8
+wiz_rgbw_physical_lut_v1.bin 10 200 120 -> 0 147 25 23
+wiz_rgbw_physical_lut_v1.bin 180 20 90 -> 116 0 27 18
+wiz_rgbw_physical_lut_v1.bin 255 200 160 -> 0 112 83 255
+wiz_rgbw_physical_lut_v1.bin 13 77 251 -> 0 82 246 6
+wiz_rgb_physical_lut_v1.bin 0 0 0 -> 0 0 0 0
+wiz_rgb_physical_lut_v1.bin 255 255 255 -> 163 255 100 0
+wiz_rgb_physical_lut_v1.bin 128 128 128 -> 35 55 22 0
+wiz_rgb_physical_lut_v1.bin 40 40 40 -> 3 5 2 0
+wiz_rgb_physical_lut_v1.bin 200 190 180 -> 100 145 52 0
+wiz_rgb_physical_lut_v1.bin 255 0 0 -> 255 33 4 0
+wiz_rgb_physical_lut_v1.bin 0 255 0 -> 62 255 8 0
+wiz_rgb_physical_lut_v1.bin 0 0 255 -> 0 52 255 0
+wiz_rgb_physical_lut_v1.bin 255 255 0 -> 175 255 9 0
+wiz_rgb_physical_lut_v1.bin 0 255 255 -> 58 255 104 0
+wiz_rgb_physical_lut_v1.bin 255 0 255 -> 255 72 219 0
+wiz_rgb_physical_lut_v1.bin 255 128 0 -> 255 132 7 0
+wiz_rgb_physical_lut_v1.bin 255 140 5 -> 255 151 7 0
+wiz_rgb_physical_lut_v1.bin 200 150 40 -> 147 142 9 0
+wiz_rgb_physical_lut_v1.bin 90 60 30 -> 26 22 3 0
+wiz_rgb_physical_lut_v1.bin 30 80 200 -> 16 77 147 0
+wiz_rgb_physical_lut_v1.bin 10 200 120 -> 35 147 23 0
+wiz_rgb_physical_lut_v1.bin 180 20 90 -> 116 23 24 0
+wiz_rgb_physical_lut_v1.bin 255 200 160 -> 240 255 65 0
+wiz_rgb_physical_lut_v1.bin 13 77 251 -> 11 91 246 0
