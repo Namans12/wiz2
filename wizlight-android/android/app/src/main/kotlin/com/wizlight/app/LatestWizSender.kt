@@ -34,6 +34,12 @@ internal class LatestWizSender(
         }
     }
 
+    /** Drop everything queued, then queue [updates] so nothing stale can follow them. */
+    fun invalidateThenOffer(updates: Map<String, ByteArray>): Boolean {
+        invalidate()
+        return offerBatch(updates)
+    }
+
     private fun run() {
         try {
             while (true) {

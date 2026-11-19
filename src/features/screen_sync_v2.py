@@ -911,19 +911,43 @@ class GPUCaptureManager:
             # the next False grab would then resurrect an older scene.
             # False also avoids WinRT's wait for frame arrival. Repeated
             # cached pixels compare as zero change and are paced below.
-            frame = camera.grab(new_frame_only=False) if self.backend == "winrt" else camera.grab()
+            if self.backend == "winrt":
+                # copy=False hands back dxcam's cached object on a static
+                # screen instead of a full-resolution copy (~5 ms at 1080p);
+                # _to_rgb below makes our own downscaled copy before the
+                # next grab can reuse that buffer.
+                frame = camera.grab(new_frame_only=False, copy=False)
+                if self._winrt_frame_unchanged(camera):
+                    return None
+            else:
+                frame = camera.grab()
         except Exception:
             # grab() owns error accounting; an idle poll must not double-count.
             return None
         if frame is None:
             return None
-        rgb = self._to_rgb(frame)
+        try:
+            rgb = self._to_rgb(frame)
+            sample = _sample_even_rgb(rgb, 32).astype(np.int16)
+        except Exception as exc:
+            # A bad frame must not escape into the sync loop's wait.
+            self._last_error = f"poll: {exc}"
+            return None
         self._pending_frame = rgb
-        sample = _sample_even_rgb(rgb, 32).astype(np.int16)
         served = self._served_sample
         if served is None or served.shape != sample.shape:
             return 1.0
         return float(np.abs(sample - served).mean() / 255.0)
+
+    @staticmethod
+    def _winrt_frame_unchanged(camera) -> bool:
+        """True when the last grab() found no new WinRT frame (cache replay).
+
+        Reads dxcam's duplicator flag; when it is unavailable the answer is
+        False and the caller compares pixels as before.
+        """
+        duplicator = getattr(camera, "_duplicator", None)
+        return getattr(duplicator, "updated", None) is False
 
     def _serve(self, frame: np.ndarray) -> np.ndarray:
         self._last_frame = frame
@@ -2128,6 +2152,21 @@ class OptimizedScreenSync:
                 self._wait_for_next_frame(frame_time, target_frame_time)
 
     def _wait_for_next_frame(self, frame_time: float, target_frame_time: float) -> None:
+        """Crash-safe wrapper: polling errors degrade to a plain sleep."""
+        started = time.perf_counter()
+        try:
+            self._wait_for_next_frame_inner(frame_time, target_frame_time)
+        except Exception as exc:
+            with self._stats_lock:
+                self._last_error = f"early-wake poll: {exc}"
+            left = target_frame_time - frame_time - (time.perf_counter() - started)
+            if left > 0:
+                try:
+                    self._frame_pacer.sleep(left)
+                except Exception:
+                    time.sleep(left)
+
+    def _wait_for_next_frame_inner(self, frame_time: float, target_frame_time: float) -> None:
         """Sleep until the next scheduled frame, waking early for a new scene.
 
         Adaptive FPS slows the loop on a static screen, which used to delay

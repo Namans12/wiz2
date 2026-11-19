@@ -11,7 +11,9 @@ import '../services/sync_service.dart';
 import '../services/wiz_bulb_service.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.bulbService});
+
+  final WizBulbService? bulbService;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -19,7 +21,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final SettingsService _settingsService = SettingsService();
-  final WizBulbService _bulbService = WizBulbService();
+  late final WizBulbService _bulbService =
+      widget.bulbService ?? WizBulbService();
   late final ScreenCaptureService _captureService;
 
   List<WizBulb> _bulbs = const <WizBulb>[];
@@ -71,6 +74,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final targets = WizBulb.syncTargets(bulbs);
       final previousTargets = WizBulb.syncTargets(_bulbs);
+      var stoppedIps = const <String>[];
       if ((_syncRunning || _playerRunning) &&
           WizBulb.encodeList(targets) != WizBulb.encodeList(previousTargets)) {
         if (targets.isEmpty) {
@@ -80,6 +84,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             await _captureService.stopCapture();
           }
           await _refreshSession();
+          stoppedIps = previousTargets.map((bulb) => bulb.ip).toList();
         } else {
           await _captureService.updateTargets(targets);
         }
@@ -89,6 +94,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() => _bulbs = bulbs.toList(growable: false));
       if (turnOffIp != null) {
         final confirmed = await _bulbService.turnOff(turnOffIp);
+        if (mounted) {
+          setState(() {
+            _status = confirmed
+                ? 'Bulb turned off'
+                : 'Bulb did not confirm power off';
+          });
+        }
+      }
+      // The last selected light left the session: switch it off, not freeze it.
+      for (final ip in stoppedIps) {
+        if (ip == turnOffIp) continue;
+        final confirmed = await _bulbService.turnOff(ip);
         if (mounted) {
           setState(() {
             _status = confirmed

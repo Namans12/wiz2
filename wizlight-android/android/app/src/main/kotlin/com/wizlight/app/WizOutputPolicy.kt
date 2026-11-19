@@ -24,6 +24,7 @@ object WizOutputPolicy {
         if (peak < 8 || peak >= 255) return rgb.copyOf()
         return IntArray(rgb.size) { Math.rint(rgb[it] * 255.0 / peak).toInt().coerceIn(0, 255) }
     }
+    val OFF_PACKET: ByteArray = "{\"method\":\"setPilot\",\"params\":{\"state\":false}}".toByteArray(Charsets.UTF_8)
     fun packet(channels: IntArray, brightness: Int): String {
         require(channels.size == 5)
         require(channels.all { it in 0..255 })

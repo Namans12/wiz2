@@ -47,6 +47,10 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 UNASSIGNED_REGION = "(Unassigned)"
+# Keep-awake link health: a bulb silent this long triggers the address poll
+# early instead of waiting for the 30 s timer.
+LINK_CHECK_INTERVAL_MS = 3000
+LINK_EARLY_RECOVERY_S = 5.0
 
 
 
@@ -1602,6 +1606,7 @@ class WizLightModernGUI(AnimationMixin):
         if self._screen_sync_debug_id:
             self.root.after_cancel(self._screen_sync_debug_id)
         self._refresh_screen_sync_debug()
+        self._schedule_link_check()
 
         profile = "cinematic single" if mode == "single" and settings.color_algorithm == "auto" else settings.color_algorithm.upper()
         mapping = self.controller.summarize_screen_sync_mapping(ips)
@@ -1681,6 +1686,41 @@ class WizLightModernGUI(AnimationMixin):
             return
         if getattr(self, "_bulb_recovery_monitor_id", None) is None:
             self._bulb_recovery_monitor_id = self.root.after(30000, self._poll_sync_bulbs)
+
+    def _schedule_link_check(self):
+        if self._closing or not self.screen_sync or not self.screen_sync.is_running:
+            return
+        if getattr(self, "_link_check_id", None) is None:
+            self._link_check_id = self.root.after(LINK_CHECK_INTERVAL_MS, self._check_link_silence)
+
+    def _check_link_silence(self):
+        """Start the address poll early when the keep-awake link loses a bulb."""
+        self._link_check_id = None
+        engine = self.screen_sync
+        if self._closing or not engine or not engine.is_running:
+            return
+        transport = getattr(self, "_screen_sync_transport", None)
+        stats = getattr(getattr(transport, "fast_sender", None), "link_stats", None) or []
+        silent = set()
+        for link in stats:
+            seconds = link.get("silent_for_s")
+            if seconds is not None and seconds >= LINK_EARLY_RECOVERY_S:
+                silent.add(link.get("ip"))
+        alerted = getattr(self, "_link_alerted_ips", set())
+        # A bulb that answered again starts a new outage.
+        alerted &= silent
+        new = silent - alerted
+        if new and getattr(self, "_bulb_recovery_token", None) is None:
+            alerted |= new
+            monitor = getattr(self, "_bulb_recovery_monitor_id", None)
+            if monitor is not None:
+                self.root.after_cancel(monitor)
+                self._bulb_recovery_monitor_id = None
+            self._link_alerted_ips = alerted
+            self._poll_sync_bulbs()
+        else:
+            self._link_alerted_ips = alerted
+        self._schedule_link_check()
 
     def _poll_sync_bulbs(self):
         self._bulb_recovery_monitor_id = None
@@ -1803,6 +1843,11 @@ class WizLightModernGUI(AnimationMixin):
         if monitor is not None:
             self.root.after_cancel(monitor)
             self._bulb_recovery_monitor_id = None
+        link_check = getattr(self, "_link_check_id", None)
+        if link_check is not None:
+            self.root.after_cancel(link_check)
+            self._link_check_id = None
+        self._link_alerted_ips = set()
         engine, self.screen_sync = self.screen_sync, None
         transport, self._screen_sync_transport = self._screen_sync_transport, None
         if self._screen_sync_debug_id:

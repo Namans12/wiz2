@@ -247,7 +247,10 @@ class ColorSyncEngine {
     // Called on the same worker that submits capture frames.
     fun updateTargets(targets: List<BulbTarget>, mode: String) {
         if (targets == bulbTargets && mode == effectiveMode) return
-        outputSender?.invalidate()
+        // Excluded lights are switched off once, after their queued colours are dropped.
+        val offs = removedTargetIps(bulbTargets, targets).associateWith { WizOutputPolicy.OFF_PACKET }
+        if (offs.isEmpty()) outputSender?.invalidate() else outputSender?.invalidateThenOffer(offs)
+        for (ip in offs.keys) { currentOutputColors.remove(ip); predictionTargets.remove(ip); refreshPolicy.remove(ip) }
         bulbTargets = targets
         effectiveMode = mode
         lastSentColors.clear()

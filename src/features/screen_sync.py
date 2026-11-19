@@ -352,13 +352,24 @@ def build_bulb_color_map(
     if not bulb_ips or not colors_by_target:
         return {}
 
-    if effective_screen_sync_mode(mode, tuple(colors_by_target)) == "single" or "all" in colors_by_target:
+    # The mapping decision comes from the configured mode/layout, never from
+    # which keys happen to be in this (possibly partial) update.
+    active_regions = resolve_active_regions(bulb_layout, bulb_ips)
+    if "all" in colors_by_target or effective_screen_sync_mode(mode, active_regions) == "single":
         single_color = colors_by_target.get("all", average_colors(tuple(colors_by_target.values())))
         return {ip: single_color for ip in bulb_ips}
 
+    # Zone mode: only bulbs whose region is in this update are touched; the rest
+    # keep their last colour (the engine sends only zones that changed).
+    result: dict[str, tuple[int, int, int]] = {}
+    update_has_all_regions = all(region in colors_by_target for region in active_regions)
     fallback = average_colors(tuple(colors_by_target.values()))
-    return {
-        ip: colors_by_target.get(bulb_layout.get(ip, ""), fallback)
-        for ip in bulb_ips
-    }
+    for ip in bulb_ips:
+        region = bulb_layout.get(ip, "")
+        if region in active_regions:
+            if region in colors_by_target:
+                result[ip] = colors_by_target[region]
+        elif update_has_all_regions:
+            result[ip] = fallback
+    return result
 

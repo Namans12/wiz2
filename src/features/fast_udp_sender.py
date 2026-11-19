@@ -67,6 +67,23 @@ _CONFIRM_MAX_RESENDS = 4
 # resend loop on firmware that reports channels differently.
 _CONFIRM_RETRY_COOLDOWN = 1.0
 _STALE_CONFIRM_AFTER = 0.035
+# A connected UDP socket reports an ICMP port-unreachable as a connection
+# error on the next recv (Windows: WSAECONNRESET). That is "no reply", not a
+# broken socket: keep the chain going, pacing queries at this interval.
+_LINK_RESET_PACE = 0.1
+# Persistent socket errors: reopen after a short, doubling pause.
+_LINK_ERROR_BACKOFF_MIN = 0.05
+_LINK_ERROR_BACKOFF_MAX = 0.5
+# While the bulb stays silent its radio is asleep and the AP buffers frames
+# for it. Re-send the unconfirmed colour on reply timeouts so a copy is
+# already queued when it wakes: at most one per interval, bounded per outage,
+# and only through resend_if_latest so a stale colour is never queued.
+_OUTAGE_RESEND_INTERVAL = 0.25
+_OUTAGE_MAX_RESENDS = 12
+# After this much silence, query once per _LINK_SLOW_INTERVAL instead of
+# back-to-back; the first reply restores the reply-clocked chain.
+_LINK_SLOW_AFTER = 5.0
+_LINK_SLOW_INTERVAL = 1.0
 
 
 def _clamp_channel(value: int) -> int:
@@ -437,6 +454,11 @@ class BulbLinkMonitor:
         self._expected: Optional[_Expectation] = None
         self._last_activity = time.perf_counter()
         self._last_reply_at = 0.0
+        self._started_at = time.perf_counter()
+        self._socket_resets = 0
+        self._reconnects = 0
+        self._outage_resends = 0
+        self._timeout_resends = 0
         self._reply_gaps = 0
         self._longest_reply_gap = 0.0
         self._rtts: deque = deque(maxlen=240)
@@ -498,6 +520,12 @@ class BulbLinkMonitor:
                 data = sock.recv(2048)
             except TimeoutError:
                 return None
+            except ConnectionError:
+                # ICMP port-unreachable from an earlier datagram: the socket
+                # is fine. Treat it as "no reply" but keep the chain moving.
+                self._socket_resets += 1
+                deadline = min(deadline, time.perf_counter() + _LINK_RESET_PACE)
+                continue
             try:
                 reply = json.loads(data)
             except ValueError:
@@ -510,6 +538,8 @@ class BulbLinkMonitor:
     def _run(self) -> None:
         sock: Optional[socket.socket] = None
         sequence = 0
+        error_delay = _LINK_ERROR_BACKOFF_MIN
+        reconnecting = False
         try:
             while not self._stop_event.is_set():
                 if time.perf_counter() - self._last_activity > _LINK_IDLE_PAUSE:
@@ -521,14 +551,24 @@ class BulbLinkMonitor:
                     if time.perf_counter() - self._last_activity > _LINK_IDLE_PAUSE:
                         self._wake_event.wait(0.5)
                     continue
-                self._paused = False
+                if self._paused:
+                    with self._lock:
+                        # Silence is measured from the resume, not the pause.
+                        self._started_at = time.perf_counter()
+                        self._paused = False
                 try:
                     if sock is None:
                         sock = self._connect()
+                        if reconnecting:
+                            self._reconnects += 1
                     sequence = sequence % 1_000_000 + 1
                     sent_at = time.perf_counter()
-                    sock.send(_LINK_QUERY % sequence)
+                    try:
+                        sock.send(_LINK_QUERY % sequence)
+                    except ConnectionError:
+                        self._socket_resets += 1  # transient; wait as usual
                     result = self._await_reply(sock, sequence)
+                    error_delay = _LINK_ERROR_BACKOFF_MIN
                 except OSError as exc:
                     self._last_error = str(exc)
                     if sock is not None:
@@ -537,18 +577,33 @@ class BulbLinkMonitor:
                         except OSError:
                             pass
                         sock = None
+                    reconnecting = True
                     with self._lock:
                         self._queries += 1
                         self._timeouts += 1
-                    if self._stop_event.wait(0.5):
+                    if self._stop_event.wait(error_delay):
                         return
+                    error_delay = min(error_delay * 2.0, _LINK_ERROR_BACKOFF_MAX)
                     continue
                 now = time.perf_counter()
+                resend_action = None
+                resend_packet = b""
                 with self._lock:
                     self._queries += 1
                     if result is None:
                         self._timeouts += 1
+                        expected = self._expected
+                        if (expected is not None and not expected.confirmed
+                                and self._resend is not None
+                                and self._outage_resends < _OUTAGE_MAX_RESENDS
+                                and now - expected.last_attempt_at >= _OUTAGE_RESEND_INTERVAL):
+                            expected.last_attempt_at = now
+                            self._outage_resends += 1
+                            self._timeout_resends += 1
+                            resend_action = self._resend
+                            resend_packet = expected.packet
                     else:
+                        self._outage_resends = 0
                         self._replies += 1
                         if self._last_reply_at:
                             gap = now - self._last_reply_at
@@ -560,8 +615,17 @@ class BulbLinkMonitor:
                         rssi = result.get("rssi")
                         if isinstance(rssi, int):
                             self._rssi = rssi
+                # Callbacks take the sender's lock; never call them holding ours.
+                if resend_action is not None:
+                    resend_action(resend_packet)
                 if result:
                     self._check(result, now)
+                elif result is None:
+                    reference = max(self._last_reply_at, self._started_at)
+                    if now - reference >= _LINK_SLOW_AFTER:
+                        # Long silence: the bulb is gone or asleep. Poll slowly.
+                        if self._stop_event.wait(max(0.0, sent_at + _LINK_SLOW_INTERVAL - time.perf_counter())):
+                            return
         finally:
             if sock is not None:
                 try:
@@ -630,6 +694,14 @@ class BulbLinkMonitor:
             confirms = sorted(self._confirm_ms)
             return {
                 "ip": self.ip,
+                # Seconds without any reply (since start if it never replied);
+                # None while the chain is paused for lack of colour updates.
+                "silent_for_s": (
+                    None if self._paused else now - max(self._last_reply_at, self._started_at)
+                ),
+                "socket_resets": self._socket_resets,
+                "reconnects": self._reconnects,
+                "timeout_resends": self._timeout_resends,
                 "reachable": bool(self._last_reply_at) and now - self._last_reply_at < 1.5,
                 "paused": self._paused,
                 "reply_gaps_over_1s": self._reply_gaps,

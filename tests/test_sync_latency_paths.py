@@ -155,7 +155,7 @@ def test_winrt_polled_frame_cannot_revert_to_an_older_backend_cache():
             self.frames = [red, blue]
             self.cached = None
 
-        def grab(self, *, new_frame_only=True):
+        def grab(self, *, new_frame_only=True, copy=True):
             if self.frames:
                 frame = self.frames.pop(0)
                 if not new_frame_only:
@@ -171,6 +171,89 @@ def test_winrt_polled_frame_cannot_revert_to_an_older_backend_cache():
     for _ in range(3):
         assert tuple(capture.grab()[0, 0]) == (0, 0, 255)
     assert capture.poll_change() in (None, 0.0)
+
+
+def test_winrt_static_poll_skips_the_frame_conversion():
+    red = np.zeros((64, 64, 4), dtype=np.uint8)
+    red[:, :, 2] = 255
+    blue = np.zeros_like(red)
+    blue[:, :, 0] = 255
+
+    class Duplicator:
+        updated = False
+
+    class Camera:
+        def __init__(self):
+            self._duplicator = Duplicator()
+            self.cached = red
+            self.copies = []
+
+        def grab(self, *, new_frame_only=True, copy=True):
+            assert new_frame_only is False  # keeps dxcam's fallback cache coherent
+            self.copies.append(copy)
+            return self.cached
+
+    capture = GPUCaptureManager(backend="winrt")
+    capture._camera = Camera()
+    assert tuple(capture.grab()[0, 0]) == (255, 0, 0)
+
+    def explode(frame):
+        raise AssertionError("a static poll must not convert the frame")
+
+    capture._to_rgb = explode
+    for _ in range(5):
+        assert capture.poll_change() is None
+    assert capture._camera.copies[1:] == [False] * 5  # polls never copy
+
+    del capture._to_rgb
+    capture._camera.cached = blue
+    capture._camera._duplicator.updated = True
+    assert capture.poll_change() > sync_module._EARLY_WAKE_CHANGE
+    assert tuple(capture.grab()[0, 0]) == (0, 0, 255)
+
+
+def test_poll_conversion_error_is_contained_and_recorded():
+    frame = np.zeros((64, 64, 4), dtype=np.uint8)
+
+    class Camera:
+        def grab(self):
+            return frame
+
+    capture = GPUCaptureManager()
+    capture._camera = Camera()
+
+    def explode(_frame):
+        raise ValueError("bad frame")
+
+    capture._to_rgb = explode
+    assert capture.poll_change() is None
+    assert "bad frame" in capture._last_error
+
+
+def test_wait_survives_a_raising_poll_and_sleeps_the_remaining_time():
+    engine = _engine()
+    engine.config.adaptive_fps = True
+    engine.config.max_fps = 30
+
+    class Gpu:
+        is_active = True
+        poll_waits_for_frame = False
+
+        def poll_change(self):
+            raise RuntimeError("capture exploded")
+
+    class Pacer:
+        slept = 0.0
+
+        def sleep(self, seconds):
+            self.slept += seconds
+
+    engine._gpu_capture, engine._frame_pacer, engine._running = Gpu(), Pacer(), True
+    engine._wait_for_next_frame(0.001, 0.25)  # must not raise
+    assert "capture exploded" in engine._last_error
+    # The fake pacer takes no wall time, so the fallback sleeps the whole
+    # remainder; a real one has already consumed the head by then.
+    assert engine._frame_pacer.slept > 0.2
 
 
 def test_wait_returns_early_when_the_polled_frame_changed():

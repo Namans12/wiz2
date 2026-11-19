@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wizlight_android/main.dart';
 import 'package:wizlight_android/models/wiz_bulb.dart';
+import 'package:wizlight_android/screens/home_screen.dart';
+import 'package:wizlight_android/services/wiz_bulb_service.dart';
 import 'package:wizlight_android/services/settings_service.dart';
 
 void main() {
@@ -68,7 +70,8 @@ void main() {
       return true;
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-    await tester.pumpWidget(const WizLightAndroidApp());
+    await tester.pumpWidget(
+        MaterialApp(home: HomeScreen(bulbService: _RecordingBulbService())));
     await tester.pumpAndSettle();
     final checkbox = find.byType(CheckboxListTile);
     await tester.tap(find.text('Start Screen Sync'));
@@ -102,4 +105,55 @@ void main() {
     expect(calls.where((call) => call.method == 'requestPermission'),
         hasLength(1));
   });
+
+  testWidgets('unticking the only selected light stops sync and turns it off once',
+      (tester) async {
+    tester.view.physicalSize = const Size(1280, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({});
+    await SettingsService().saveBulbs(const [
+      WizBulb(ip: '192.168.1.2', name: 'One'),
+    ]);
+    var state = 'stopped';
+    var session = '';
+    const channel = MethodChannel('com.wizlight.app/screen_capture');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'querySession':
+          return {'sessionId': session, 'backend': 'screen', 'state': state};
+        case 'startCapture':
+          state = 'running';
+          session = (call.arguments as Map)['sessionId'] as String;
+        case 'stopCapture':
+          state = 'stopped';
+      }
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final service = _RecordingBulbService();
+    await tester.pumpWidget(MaterialApp(home: HomeScreen(bulbService: service)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Start Screen Sync'));
+    await tester.pumpAndSettle();
+    expect(state, 'running');
+    final checkbox = find.byType(CheckboxListTile);
+    await tester.ensureVisible(checkbox.first);
+    await tester.tap(checkbox.first);
+    await tester.pumpAndSettle();
+    expect(state, 'stopped');
+    expect(service.off, ['192.168.1.2']);
+  });
+}
+
+class _RecordingBulbService extends WizBulbService {
+  final off = <String>[];
+
+  @override
+  Future<bool> turnOff(String ip) async {
+    off.add(ip);
+    return true;
+  }
 }
