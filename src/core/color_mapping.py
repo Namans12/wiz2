@@ -27,6 +27,10 @@ Wide-gamut strategy
 
 from __future__ import annotations
 
+import hashlib
+import json
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -62,6 +66,39 @@ def _linear_to_srgb(v: np.ndarray) -> np.ndarray:
 def _smoothstep01(t: np.ndarray) -> np.ndarray:
     t = np.clip(t, 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
+
+
+# ─── Built-table memo ───────────────────────────────────────────────────────────
+#
+# Building the tables is pure: it depends only on the profile fields below and
+# the content of the calibration / tone tables. Settings changes rebuild the
+# mapper, and the physical model is expensive, so identical inputs reuse the
+# already built (read-only) arrays. Bump _LUT_BUILD_VERSION if the build maths
+# ever changes.
+
+_LUT_BUILD_VERSION = 1
+_LUT_CACHE_MAX = 16
+_lut_cache: "OrderedDict[tuple, tuple[np.ndarray, np.ndarray]]" = OrderedDict()
+_lut_cache_lock = threading.Lock()
+
+# Identity-only profile fields that never influence the built tables.
+_LUT_KEY_IGNORED_FIELDS = frozenset({"model_name", "mac"})
+
+
+def _table_fingerprint(table: Optional[BulbCalibrationTable]) -> Optional[str]:
+    """Content hash of a calibration table (None when absent)."""
+
+    if table is None:
+        return None
+    payload = json.dumps(table.to_dict(), sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def clear_lut_cache() -> None:
+    """Drop every memoised mapper table (tests, or to reclaim memory)."""
+
+    with _lut_cache_lock:
+        _lut_cache.clear()
 
 
 # ─── Bulb hardware profile ──────────────────────────────────────────────────────
@@ -149,10 +186,42 @@ class BulbGamutMapper:
         self._rgb_gain   = self._derive_rgb_gain()
         self._dual_white = self.profile.white_channels >= 2
         self._gamut_matrix = self._choose_gamut_matrix()
-        self._lookup     = self._build_lookup()
-        self._gray_lookup = self._build_gray_lookup()
+        self._lookup, self._gray_lookup = self._load_or_build_tables()
 
     # ── Private ────────────────────────────────────────────────────────────────
+
+    def _lut_cache_key(self) -> tuple:
+        profile_items = tuple(
+            (name, getattr(self.profile, name))
+            for name in sorted(self.profile.__dataclass_fields__)
+            if name not in _LUT_KEY_IGNORED_FIELDS
+        )
+        return (
+            _LUT_BUILD_VERSION,
+            profile_items,
+            _table_fingerprint(self.calibration),
+            _table_fingerprint(self.tone_lut),
+        )
+
+    def _load_or_build_tables(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return (lattice LUT, gray ramp), reusing identical earlier builds."""
+
+        key = self._lut_cache_key()
+        with _lut_cache_lock:
+            hit = _lut_cache.get(key)
+            if hit is not None:
+                _lut_cache.move_to_end(key)
+                return hit
+        lookup = self._build_lookup()
+        gray = self._build_gray_lookup()
+        lookup.setflags(write=False)
+        gray.setflags(write=False)
+        with _lut_cache_lock:
+            _lut_cache[key] = (lookup, gray)
+            _lut_cache.move_to_end(key)
+            while len(_lut_cache) > _LUT_CACHE_MAX:
+                _lut_cache.popitem(last=False)
+        return lookup, gray
 
     def _choose_gamut_matrix(self) -> Optional[np.ndarray]:
         cs = self.profile.color_space

@@ -166,7 +166,13 @@ def crop_content_area(image: np.ndarray, ignore_letterbox: bool = True) -> np.nd
     if not ignore_letterbox:
         return image
 
-    left, top, width, height = detect_content_bounds(image)
+    return apply_content_bounds(image, detect_content_bounds(image))
+
+
+def apply_content_bounds(image: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
+    """Crop ``image`` to ``(left, top, width, height)`` bounds, or return it as is."""
+
+    left, top, width, height = bounds
     if width < _MIN_CROP_PIXELS or height < _MIN_CROP_PIXELS:
         return image
 
