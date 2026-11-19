@@ -15,6 +15,25 @@ class FocusRing extends StatefulWidget {
 
 class _FocusRingState extends State<FocusRing> {
   bool _focused = false;
+  bool _keyboardMode = _isKeyboardMode();
+
+  @override
+  void initState() {
+    super.initState();
+    FocusManager.instance.addHighlightModeListener(_onHighlightMode);
+  }
+
+  @override
+  void dispose() {
+    FocusManager.instance.removeHighlightModeListener(_onHighlightMode);
+    super.dispose();
+  }
+
+  void _onHighlightMode(FocusHighlightMode mode) {
+    if (!mounted) return;
+    final keyboard = mode == FocusHighlightMode.traditional;
+    if (keyboard != _keyboardMode) setState(() => _keyboardMode = keyboard);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -25,7 +44,9 @@ class _FocusRingState extends State<FocusRing> {
       onFocusChange: (focused) {
         if (!mounted) return;
         setState(() => _focused = focused);
-        if (focused) {
+        // Touch/mouse focus must not scroll or move anything under the
+        // finger; only keyboard / D-pad focus scrolls into view.
+        if (focused && _isKeyboardMode()) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted && _focused) {
               Scrollable.ensureVisible(context,
@@ -38,7 +59,7 @@ class _FocusRingState extends State<FocusRing> {
         position: DecorationPosition.foreground,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(widget.radius),
-          border: _focused
+          border: _focused && _keyboardMode
               ? Border.all(color: color, width: 3)
               : Border.all(color: Colors.transparent, width: 0),
         ),
@@ -47,3 +68,11 @@ class _FocusRingState extends State<FocusRing> {
     );
   }
 }
+
+/// True when focus came from a keyboard / D-pad (ring should show); false for
+/// touch and mouse interaction.
+bool _isKeyboardMode() =>
+    FocusManager.instance.highlightMode == FocusHighlightMode.traditional;
+
+/// Public helper for other focus-aware widgets.
+bool isKeyboardFocusMode() => _isKeyboardMode();
