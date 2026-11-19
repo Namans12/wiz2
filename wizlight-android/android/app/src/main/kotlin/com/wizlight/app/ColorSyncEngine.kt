@@ -10,6 +10,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -45,10 +46,16 @@ class ColorSyncEngine {
 
     // ── Configurable params ──────────────────────────────────────────────────
     var effectiveMode = "single"
+    /** False for front-ends that only supply the whole frame (USB player): Regions then runs as Single. */
+    var supportsZones = true
+    /** Monotonic ms clock; unit tests substitute a fake one. */
+    internal var clock: () -> Long = { SystemClock.elapsedRealtime() }
+    /** Unit tests capture the per-light packets here instead of a socket. Returns true if accepted. */
+    internal var batchSink: ((Map<String, ByteArray>) -> Boolean)? = null
     var adaptiveFps = true
     var minFps = 10
     var maxFps = 24
-    var currentFps = 24
+    @Volatile var currentFps = 24
     var smoothing = 0.2
     var colorBoost = 1.18
     var colorAlgorithm = "auto"
@@ -212,6 +219,7 @@ class ColorSyncEngine {
     }
 
     fun reset() {
+        synchronized(requestLock) { lastRequested = null; pendingSettings.set(null) }
         previousMotionSample = null
         previousSingleColor = null
         prevLumaHist = null
@@ -273,6 +281,86 @@ class ColorSyncEngine {
         lastSentColors.clear()
         lastSentBrightness.clear()
         lastSentTable.clear()
+        lastSubmitAtMs = 0L
+    }
+
+    // ── Live settings ───────────────────────────────────────────────────────────
+    private val pendingSettings = AtomicReference<LiveSettings?>(null)
+
+    // Producer side (main thread): the last snapshot REQUESTED. Every partial update merges against
+    // this, never against what the capture thread has or has not installed yet.
+    private val requestLock = Any()
+    private var lastRequested: LiveSettings? = null
+
+    /**
+     * Any thread. Merges [args] onto the last requested snapshot ([current] seeds the first one) and
+     * publishes the merged result atomically for the capture thread to install between frames.
+     */
+    internal fun requestSettings(args: Map<String, Any?>, current: () -> LiveSettings): LiveSettings =
+        synchronized(requestLock) {
+            val merged = LiveSettings.merge(lastRequested ?: current(), args)
+            lastRequested = merged
+            pendingSettings.set(merged)
+            merged
+        }
+
+    /** The settings the engine is running with, as a snapshot. */
+    internal fun liveSettings(requestedMode: String, sampleSize: Int, ignoreLetterbox: Boolean, hdrCapture: Boolean) =
+        LiveSettings(
+            mode = requestedMode, minFps = minFps, maxFps = maxFps, smoothing = smoothing,
+            sampleSize = sampleSize, colorBoost = colorBoost, edgeWeight = edgeWeight,
+            colorAlgorithm = colorAlgorithm, minBrightness = minBrightness, minColorDelta = minColorDelta,
+            adaptiveFps = adaptiveFps, predictiveSmoothing = predictiveSmoothing, ignoreLetterbox = ignoreLetterbox,
+            sourceColorSpace = requestedColorSpace, hdrToneMapping = requestedHdrToneMapping,
+            hdrCapture = hdrCapture, syncProfile = syncProfile, brightnessFollow = brightnessFollow,
+        )
+
+    /**
+     * CAPTURE THREAD, between frames: installs a queued snapshot. Returns it (so the front-end can
+     * apply its own fields: sample size, letterbox, mode for grid building) or null if none was queued.
+     */
+    internal fun applyPendingSettings(): LiveSettings? {
+        val s = pendingSettings.getAndSet(null) ?: return null
+        minFps = s.minFps
+        maxFps = s.maxFps.coerceAtLeast(s.minFps)
+        smoothing = s.smoothing
+        colorBoost = s.colorBoost
+        edgeWeight = s.edgeWeight
+        colorAlgorithm = s.colorAlgorithm
+        minBrightness = s.minBrightness
+        minColorDelta = s.minColorDelta
+        predictiveSmoothing = s.predictiveSmoothing
+        if (s.brightnessFollow != brightnessFollow) {
+            dimmingPolicy.reset()
+            regionDimming.reset()
+        }
+        brightnessFollow = s.brightnessFollow
+        syncProfile = s.syncProfile
+        adaptiveFps = s.adaptiveFps
+        currentFps = if (adaptiveFps) currentFps.coerceIn(minFps, maxFps) else maxFps
+        requestedColorSpace = s.sourceColorSpace
+        requestedHdrToneMapping = s.hdrToneMapping
+        applyRequestedColorSpace()
+        val mode = if (supportsZones) resolveSyncMode(s.mode, bulbTargets) else "single"
+        if (mode != effectiveMode) {
+            effectiveMode = mode
+            resetPerLampState()
+        }
+        return s
+    }
+
+    /** Smoothing history, prediction and dimming memory belong to the old mode; lamps resend at once. */
+    private fun resetPerLampState() {
+        previousSingleColor = null
+        predictionTargets.clear()
+        currentOutputColors.clear()
+        lastSentColors.clear()
+        lastSentBrightness.clear()
+        lastSentTable.clear()
+        regionDimming.reset()
+        regionBrightness.clear()
+        regionNeutral.clear()
+        dimmingPolicy.reset()
         lastSubmitAtMs = 0L
     }
 
@@ -378,6 +466,15 @@ class ColorSyncEngine {
         // map); an explicit user selection is still honored for exotic setups.
         // Panel detection results stay in the stats and still drive the device
         // profile (Bravia cool bias, OLED true-black, FP16 curve choice).
+        applyRequestedColorSpace()
+    }
+
+    /**
+     * Resolves the effective colour space / tone mapping from the user's request.
+     * Source colour space "auto" forces tone mapping OFF (the HDR switch is ignored); choose
+     * sRGB / Display P3 / Rec.2020 explicitly for the HDR tone-mapping switch to take effect.
+     */
+    internal fun applyRequestedColorSpace() {
         if (requestedColorSpace == "auto") {
             sourceColorSpace = "srgb"
             hdrToneMapping = false
@@ -418,7 +515,7 @@ class ColorSyncEngine {
      */
     fun submitFrame(grids: Map<String, IntArray>, size: Int): Boolean {
         if (grids.isEmpty()) return false
-        val nowMs = SystemClock.elapsedRealtime()
+        val nowMs = clock()
         val dtSeconds = if (lastSubmitAtMs == 0L) {
             1.0 / max(1, currentFps)
         } else {
@@ -451,9 +548,9 @@ class ColorSyncEngine {
         var pixelCount = 0
         for (grid in statGrids) {
             for (pixel in grid) {
-                val r = Color.red(pixel)
-                val g = Color.green(pixel)
-                val b = Color.blue(pixel)
+                val r = redOf(pixel)
+                val g = greenOf(pixel)
+                val b = blueOf(pixel)
                 satSum += rgbSaturation(r, g, b)
                 lumaSum += rgbLuma(r, g, b)
                 valueSum += max(r, max(g, b)) / 255.0
@@ -567,7 +664,7 @@ class ColorSyncEngine {
                 pendingTables[ip] = table
             }
         }
-        if (pendingPayloads.isNotEmpty() && outputSender?.offerBatch(pendingPayloads) == true) {
+        if (pendingPayloads.isNotEmpty() && offerBatch(pendingPayloads)) {
             for ((ip, color) in pendingColors) {
                 lastSentColors[ip] = color
                 lastSentBrightness[ip] = brightnessForIp(ip)
@@ -598,6 +695,9 @@ class ColorSyncEngine {
         }
         return sentAnyUpdate
     }
+
+    private fun offerBatch(payloads: Map<String, ByteArray>): Boolean =
+        batchSink?.invoke(payloads) ?: (outputSender?.offerBatch(payloads) == true)
 
     fun sendRateHz(): Double {
         val intervalAverage = if (sendIntervalsMs.isEmpty()) 0.0 else sendIntervalsMs.average()
@@ -745,9 +845,9 @@ class ColorSyncEngine {
         val bins = HashMap<Int, Int>()
         val sums = HashMap<Int, IntArray>()
         for (pixel in sample.pixels) {
-            val r = Color.red(pixel)
-            val g = Color.green(pixel)
-            val b = Color.blue(pixel)
+            val r = redOf(pixel)
+            val g = greenOf(pixel)
+            val b = blueOf(pixel)
             val qr = (r / binSize).coerceIn(0, 7)
             val qg = (g / binSize).coerceIn(0, 7)
             val qb = (b / binSize).coerceIn(0, 7)
@@ -771,15 +871,15 @@ class ColorSyncEngine {
         val clusterCount = 3
         val centroids = Array(clusterCount) { index ->
             val pixel = sample.pixels[(index * sample.pixels.size / clusterCount).coerceIn(0, sample.pixels.size - 1)]
-            floatArrayOf(Color.red(pixel).toFloat(), Color.green(pixel).toFloat(), Color.blue(pixel).toFloat())
+            floatArrayOf(redOf(pixel).toFloat(), greenOf(pixel).toFloat(), blueOf(pixel).toFloat())
         }
         repeat(5) {
             val sums = Array(clusterCount) { floatArrayOf(0f, 0f, 0f) }
             val counts = IntArray(clusterCount)
             for (pixel in sample.pixels) {
-                val r = Color.red(pixel).toFloat()
-                val g = Color.green(pixel).toFloat()
-                val b = Color.blue(pixel).toFloat()
+                val r = redOf(pixel).toFloat()
+                val g = greenOf(pixel).toFloat()
+                val b = blueOf(pixel).toFloat()
                 var bestIndex = 0
                 var bestDistance = Double.MAX_VALUE
                 for (index in centroids.indices) {
@@ -916,9 +1016,9 @@ class ColorSyncEngine {
         for (y in 0 until sample.height) {
             for (x in 0 until sample.width) {
                 val pixel = sample.pixels[y * sample.width + x]
-                val r = Color.red(pixel)
-                val g = Color.green(pixel)
-                val b = Color.blue(pixel)
+                val r = redOf(pixel)
+                val g = greenOf(pixel)
+                val b = blueOf(pixel)
                 val saturation = rgbSaturation(r, g, b)
                 val luma = rgbLuma(r, g, b)
                 var weight = 0.15 + saturation * 2.2 + luma * 0.5
@@ -942,7 +1042,7 @@ class ColorSyncEngine {
         val energies = DoubleArray(sample.pixels.size)
         for (index in sample.pixels.indices) {
             val pixel = sample.pixels[index]
-            val saturation = rgbSaturation(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
+            val saturation = rgbSaturation(redOf(pixel), greenOf(pixel), blueOf(pixel))
             val luma = colorLuma(pixel)
             energies[index] = saturation * 0.8 + luma * 0.2
         }
@@ -956,9 +1056,9 @@ class ColorSyncEngine {
         for (index in sample.pixels.indices) {
             if (energies[index] < threshold) continue
             val pixel = sample.pixels[index]
-            totalR += srgb8ToLinear[Color.red(pixel)]
-            totalG += srgb8ToLinear[Color.green(pixel)]
-            totalB += srgb8ToLinear[Color.blue(pixel)]
+            totalR += srgb8ToLinear[redOf(pixel)]
+            totalG += srgb8ToLinear[greenOf(pixel)]
+            totalB += srgb8ToLinear[blueOf(pixel)]
             count += 1
         }
         if (count == 0) {
@@ -971,7 +1071,7 @@ class ColorSyncEngine {
         val energies = DoubleArray(sample.pixels.size)
         for (index in sample.pixels.indices) {
             val pixel = sample.pixels[index]
-            val saturation = rgbSaturation(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
+            val saturation = rgbSaturation(redOf(pixel), greenOf(pixel), blueOf(pixel))
             val luma = colorLuma(pixel)
             energies[index] = saturation * 0.9 + max(0.0, 0.65 - abs(luma - 0.42)) * 0.1
         }
@@ -985,9 +1085,9 @@ class ColorSyncEngine {
         for (index in sample.pixels.indices) {
             val pixel = sample.pixels[index]
             if (energies[index] < threshold || colorLuma(pixel) <= 0.05) continue
-            totalR += srgb8ToLinear[Color.red(pixel)]
-            totalG += srgb8ToLinear[Color.green(pixel)]
-            totalB += srgb8ToLinear[Color.blue(pixel)]
+            totalR += srgb8ToLinear[redOf(pixel)]
+            totalG += srgb8ToLinear[greenOf(pixel)]
+            totalB += srgb8ToLinear[blueOf(pixel)]
             count += 1
         }
         if (count == 0) {
@@ -1019,9 +1119,9 @@ class ColorSyncEngine {
         for (y in 0 until sample.height) {
             for (x in 0 until sample.width) {
                 val pixel = sample.pixels[y * sample.width + x]
-                val r = Color.red(pixel)
-                val g = Color.green(pixel)
-                val b = Color.blue(pixel)
+                val r = redOf(pixel)
+                val g = greenOf(pixel)
+                val b = blueOf(pixel)
                 val sat = rgbSaturation(r, g, b)
                 val luma = rgbLuma(r, g, b)
                 var ambient = 0.15 + sat * 2.2 + luma * 0.5
@@ -1128,7 +1228,7 @@ class ColorSyncEngine {
     private fun averageSaturation(sample: SampledFrame): Double {
         var total = 0.0
         for (pixel in sample.pixels) {
-            total += rgbSaturation(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
+            total += rgbSaturation(redOf(pixel), greenOf(pixel), blueOf(pixel))
         }
         return total / sample.pixels.size.toDouble()
     }
@@ -1144,9 +1244,9 @@ class ColorSyncEngine {
     private fun vividRatio(sample: SampledFrame, saturationThreshold: Double, lumaThreshold: Double): Double {
         var count = 0
         for (pixel in sample.pixels) {
-            val r = Color.red(pixel)
-            val g = Color.green(pixel)
-            val b = Color.blue(pixel)
+            val r = redOf(pixel)
+            val g = greenOf(pixel)
+            val b = blueOf(pixel)
             if (rgbSaturation(r, g, b) > saturationThreshold && rgbLuma(r, g, b) > lumaThreshold) {
                 count += 1
             }
@@ -1159,17 +1259,8 @@ class ColorSyncEngine {
 
     private fun neutralStrength(avgSaturation: Double): Double = ZoneOutput.neutralStrength(avgSaturation)
 
-    private fun buildBulbColorMap(targetColors: Map<String, RgbColor>): Map<String, RgbColor> {
-        if (bulbTargets.isEmpty() || targetColors.isEmpty()) {
-            return emptyMap()
-        }
-        if (effectiveMode != "zones" || targetColors.containsKey("all")) {
-            val single = targetColors["all"] ?: averageColors(targetColors.values.toList())
-            return bulbTargets.associate { it.ip to single }
-        }
-        val fallback = averageColors(targetColors.values.toList())
-        return bulbTargets.associate { bulb -> bulb.ip to (targetColors[bulb.region] ?: fallback) }
-    }
+    private fun buildBulbColorMap(targetColors: Map<String, RgbColor>): Map<String, RgbColor> =
+        bulbColorsFor(effectiveMode == "zones", bulbTargets, targetColors, ::averageColors)
 
     // ── Color transforms ───────────────────────────────────────────────────────
     private fun blendColors(base: RgbColor, accent: RgbColor, weight: Double): RgbColor {
@@ -1442,7 +1533,7 @@ class ColorSyncEngine {
 
     fun colorLuma(color: RgbColor): Double = rgbLuma(color.r, color.g, color.b)
 
-    fun colorLuma(pixel: Int): Double = rgbLuma(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
+    fun colorLuma(pixel: Int): Double = rgbLuma(redOf(pixel), greenOf(pixel), blueOf(pixel))
 
     private fun rgbSaturation(r: Int, g: Int, b: Int): Double {
         val maxChannel = max(r, max(g, b)) / 255.0
@@ -1729,3 +1820,7 @@ class ColorSyncEngine {
         return (l * 100.0).coerceIn(0.0, 100.0)
     }
 }
+
+private fun redOf(pixel: Int): Int = (pixel shr 16) and 0xFF
+private fun greenOf(pixel: Int): Int = (pixel shr 8) and 0xFF
+private fun blueOf(pixel: Int): Int = pixel and 0xFF

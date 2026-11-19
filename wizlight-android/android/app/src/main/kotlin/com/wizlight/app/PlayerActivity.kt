@@ -139,6 +139,7 @@ class PlayerActivity : Activity() {
 
     @Volatile private var isSyncing = false
     private val framePending = AtomicBoolean(false)
+    @Volatile private var cadenceFps = 24
     private var sessionId = ""
     private var sessionFailure: String? = null
     private var lastStatusAt = 0L
@@ -148,7 +149,7 @@ class PlayerActivity : Activity() {
         override fun run() {
             if (!isSyncing) return
             captureAndSubmit()
-            val delay = Math.max(15L, (1000L / Math.max(engine.currentFps, 1)).toLong())
+            val delay = Math.max(15L, (1000L / Math.max(cadenceFps, 1)).toLong())
             mainHandler.postDelayed(this, delay)
         }
     }
@@ -189,6 +190,7 @@ class PlayerActivity : Activity() {
             finish()
             return
         }
+        SyncSessionRegistry.attachSettings(sessionId, ::updateSettings)
         try {
         configureEngineFromIntent()
 
@@ -239,6 +241,7 @@ class PlayerActivity : Activity() {
         engine.brightnessFollow = intent.getBooleanExtra(ScreenCaptureService.EXTRA_BRIGHTNESS_FOLLOW, true)
         engine.bulbTargets = parseSyncTargets(intent.getStringExtra(ScreenCaptureService.EXTRA_BULBS_JSON) ?: "[]")
         engine.effectiveMode = "single"
+        engine.supportsZones = false
         engine.configureAutoFromDisplay(
             this,
             intent.getStringExtra(ScreenCaptureService.EXTRA_SOURCE_COLOR_SPACE) ?: "auto",
@@ -259,7 +262,10 @@ class PlayerActivity : Activity() {
         val grid = samplePixels.copyOf()
         sampleHandler?.post {
             try {
+                // Install queued settings here, on the worker, never while a frame is mid-flight.
+                engine.applyPendingSettings()
                 engine.submitFrame(mapOf("all" to grid), GRID)
+                cadenceFps = engine.currentFps
                 if (engine.updatesSent > 0) lastError = null
             } catch (error: Exception) {
                 lastError = error.message ?: error.toString()
@@ -280,6 +286,12 @@ class PlayerActivity : Activity() {
         payload["frameTimeMs"] = 0.0
         payload["lastError"] = lastError
         SyncBridge.post("onSyncUpdate", payload)
+    }
+
+    /** Engine settings apply live; the player has no letterbox/sample-size/HDR-reader state of its own. */
+    private fun updateSettings(args: Map<String, Any?>): Map<String, Any?> {
+        engine.requestSettings(args) { engine.liveSettings("single", 0, true, false) }
+        return LiveSettings.reportForPlayer(args)
     }
 
     private fun updateTargets(targets: List<ColorSyncEngine.BulbTarget>, complete: (Boolean) -> Unit) {

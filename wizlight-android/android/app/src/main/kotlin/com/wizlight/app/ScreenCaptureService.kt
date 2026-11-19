@@ -105,16 +105,17 @@ class ScreenCaptureService : Service() {
     private var screenDensity = 0
 
     private var bulbTargets: List<ColorSyncEngine.BulbTarget> = emptyList()
-    private var requestedMode = "single"
-    private var ignoreLetterbox = true
-    private var sampleSize = 56
+    @Volatile private var requestedMode = "single"
+    @Volatile private var ignoreLetterbox = true
+    @Volatile private var sampleSize = 56
     private var requestedColorSpace = "auto"
     private var requestedHdrToneMapping = false
-    private var requestedHdrCapture = false
+    @Volatile private var requestedHdrCapture = false
     private var hdrCaptureActive = false
     private var hdrReaderActive = false
     private var captureBufferFormat = "rgba8888"
     private var hdrFallback = false
+    private var hdrFallbackReason: String? = null
     private var hdrStartedAtMs = 0L
     private var sdrSwitchedAtMs = 0L
     private var displayRebuilt = false
@@ -128,6 +129,8 @@ class ScreenCaptureService : Service() {
     private var sessionId = ""
     private var sessionFailure: String? = null
     private var latestGrids: Map<String, IntArray>? = null
+    private var latestGridsSize = 56
+    private var freshNeededSinceMs = 0L
     private var lastStatusUpdateAt = 0L
     private var cachedContentBounds: Rect? = null
     private var cachedContentBoundsAtFrame = -1
@@ -272,6 +275,7 @@ class ScreenCaptureService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                SyncSessionRegistry.attachSettings(sessionId, ::updateSettings)
                 try {
                 bulbTargets = parseSyncTargets(intent.getStringExtra(EXTRA_BULBS_JSON) ?: "[]")
                 requestedMode = intent.getStringExtra(EXTRA_MODE) ?: "single"
@@ -397,16 +401,26 @@ class ScreenCaptureService : Service() {
 
     private fun createImageReaderWithHdrFallback(): ImageReader {
         val sdrReader = {
-            captureBufferFormat = if (hdrFallback) "rgba8888 (HDR unavailable)" else "rgba8888"
+            captureBufferFormat = CaptureFormatPolicy.sdrBufferLabel(hdrFallback, hdrFallbackReason)
             hdrCaptureActive = false
             hdrReaderActive = false
             engine.capturedPixelsAreSrgb = false
             ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
         }
-        if (!requestedHdrCapture || hdrFallback) return sdrReader()
-        if (Build.VERSION.SDK_INT < 34) return sdrReader()
-        if (!engine.detectedHdrSupport && engine.deviceProfile != ColorSyncEngine.DeviceProfile.BRAVIA) {
-            return sdrReader()
+        // A requested HDR reader that cannot be used must say so: never fall through silently,
+        // or diagnostics read as if HDR capture had never been asked for.
+        val gate = CaptureFormatPolicy.hdrGate(
+            requestedHdrCapture, hdrFallback, Build.VERSION.SDK_INT,
+            engine.detectedHdrSupport, engine.deviceProfile == ColorSyncEngine.DeviceProfile.BRAVIA,
+        )
+        when (gate) {
+            CaptureFormatPolicy.HdrGate.NOT_REQUESTED, CaptureFormatPolicy.HdrGate.ALREADY_FELL_BACK -> return sdrReader()
+            CaptureFormatPolicy.HdrGate.SDK_TOO_OLD, CaptureFormatPolicy.HdrGate.DISPLAY_NOT_HDR -> {
+                hdrFallback = true
+                hdrFallbackReason = gate.reason
+                return sdrReader()
+            }
+            CaptureFormatPolicy.HdrGate.ATTEMPT -> Unit
         }
         return try {
             val builderClass = Class.forName("android.media.ImageReader\$Builder")
@@ -426,12 +440,15 @@ class ScreenCaptureService : Service() {
             hdrReaderActive = true
             hdrCaptureActive = false
             reader
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            hdrFallback = true
+            hdrFallbackReason = "FP16 reader rejected (${error.javaClass.simpleName})"
             sdrReader()
         }
     }
 
     private fun captureFrame() {
+        applyQueuedSettings()
         val wasHdrReader = hdrReaderActive
         val image = CaptureFormatPolicy.acquire(
             wasHdrReader,
@@ -444,8 +461,14 @@ class ScreenCaptureService : Service() {
             // on change) — keep the diagnostics heartbeat alive regardless so
             // the UI doesn't look dead.
             latestGrids?.let {
-                replayedFrames += 1
-                engine.submitFrame(it, sampleSize)
+                val allowed = CaptureFormatPolicy.replayAllowed(
+                    freshNeededSinceMs, SystemClock.elapsedRealtime(), engine.effectiveMode == "zones",
+                    it.keys, bulbTargets.map { target -> target.region }.toSet(),
+                )
+                if (allowed) {
+                    replayedFrames += 1
+                    engine.submitFrame(it, latestGridsSize)
+                }
             }
             maybePostStatus()
             return
@@ -475,18 +498,20 @@ class ScreenCaptureService : Service() {
             val frame = imageToFrame(image) ?: return
             val contentFrame = cropContentArea(frame, ignoreLetterbox)
 
-            val grids = if (engine.effectiveMode == "single") {
-                mapOf("all" to sampleGrid(contentFrame, sampleSize))
-            } else {
-                val map = mutableMapOf("all" to sampleGrid(contentFrame, sampleSize))
+            // Dedicated area grids only while Regions is active. A live switch to Regions is made
+            // immediate by forcing a fresh frame (applyQueuedSettings), not by always sampling them.
+            val size = sampleSize
+            val grids = mutableMapOf("all" to sampleGrid(contentFrame, size))
+            if (engine.effectiveMode == "zones") {
                 for (region in bulbTargets.map { it.region }.toSet()) {
-                    map[region] = sampleGrid(cropRelativeRegion(contentFrame, region), sampleSize)
+                    grids[region] = sampleGrid(cropRelativeRegion(contentFrame, region), size)
                 }
-                map
             }
 
             latestGrids = grids
-            engine.submitFrame(grids, sampleSize)
+            latestGridsSize = size
+            freshNeededSinceMs = 0L
+            engine.submitFrame(grids, size)
             framesProcessed += 1
             if (engine.updatesSent > 0) {
                 lastError = null
@@ -513,8 +538,9 @@ class ScreenCaptureService : Service() {
             hdrReaderActive = false
             hdrCaptureActive = false
             engine.capturedPixelsAreSrgb = false
-            captureBufferFormat = "rgba8888 (HDR unavailable)"
             hdrFallback = true
+            hdrFallbackReason = hdrFallbackReason ?: "no usable HDR frames"
+            captureBufferFormat = CaptureFormatPolicy.sdrBufferLabel(true, hdrFallbackReason)
             sdrSwitchedAtMs = SystemClock.elapsedRealtime()
             lastAcquiredAtMs = 0L
             lastError = null
@@ -586,6 +612,42 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /** Capture thread, between frames. */
+    private fun applyQueuedSettings() {
+        val modeBefore = engine.effectiveMode
+        val s = engine.applyPendingSettings() ?: return
+        val letterboxChanged = s.ignoreLetterbox != ignoreLetterbox
+        if (letterboxChanged) {
+            cachedContentBounds = null
+            cachedContentBoundsAtFrame = -1
+        }
+        val gridsChanged = letterboxChanged || s.sampleSize != sampleSize || engine.effectiveMode != modeBefore
+        ignoreLetterbox = s.ignoreLetterbox
+        sampleSize = s.sampleSize
+        requestedMode = s.mode
+        if (gridsChanged) {
+            // Replayed grids were built with the old crop / size / mode. Hold them back and make the
+            // virtual display deliver a fresh frame (same nudge as rebuildDisplay) so it takes effect now.
+            freshNeededSinceMs = SystemClock.elapsedRealtime()
+            nudgeFreshFrame()
+        }
+    }
+
+    private fun nudgeFreshFrame() {
+        val display = virtualDisplay ?: return
+        try {
+            display.resize(screenWidth, screenHeight, screenDensity + 1)
+            display.resize(screenWidth, screenHeight, screenDensity)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Any thread: publish a merged settings snapshot for the capture thread and say what needs a restart. */
+    private fun updateSettings(args: Map<String, Any?>): Map<String, Any?> {
+        engine.requestSettings(args) { engine.liveSettings(requestedMode, sampleSize, ignoreLetterbox, requestedHdrCapture) }
+        return LiveSettings.report(args, requestedHdrCapture)
+    }
+
     private fun updateTargets(targets: List<ColorSyncEngine.BulbTarget>, complete: (Boolean) -> Unit) {
         val worker = captureHandler?.looper
         // Share the capture looper, but let this acknowledgement survive cancellation of frame callbacks.
@@ -602,9 +664,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun resolveEffectiveMode(mode: String, bulbs: List<ColorSyncEngine.BulbTarget>): String {
-        if (mode != "zones") return "single"
-        val regions = bulbs.map { it.region }.toSet()
-        return if (regions.size >= 2 && bulbs.size >= 2) "zones" else "single"
+        return resolveSyncMode(mode, bulbs)
     }
 
     private fun imageToFrame(image: Image): ImageFrame? {
@@ -758,6 +818,7 @@ class ScreenCaptureService : Service() {
         payload["captureBufferFormat"] = captureBufferFormat
         payload["lastError"] = lastError
         payload["hdrFallback"] = hdrFallback
+        payload["hdrFallbackReason"] = hdrFallbackReason
 
         updateBlackWarning(engine.captureLooksBlack)
         SyncBridge.post("onSyncUpdate", payload)

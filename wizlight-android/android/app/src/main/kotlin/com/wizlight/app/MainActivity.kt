@@ -78,6 +78,12 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("sessionId") ?: "", readSyncTargets(call),
                     ) { accepted -> result.success(accepted) }
                 }
+                "updateSettings" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val args = (call.arguments as? Map<String, Any?>) ?: emptyMap()
+                    val report = SyncSessionRegistry.updateSettings(args["sessionId"] as? String ?: "", args)
+                    result.success(report ?: mapOf("accepted" to false))
+                }
                 "pickMedia" -> pickMedia(result)
                 "takePendingMediaUri" -> {
                     val uri = pendingMediaUri

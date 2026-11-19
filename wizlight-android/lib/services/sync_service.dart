@@ -109,6 +109,12 @@ class SyncSettings {
     };
   }
 
+  /// Every setting, without the lamp list: the payload of a live update.
+  Map<String, Object> toLiveArgs() {
+    return Map<String, Object>.of(toMethodArgs(const <WizBulb>[]))
+      ..remove('bulbsJson');
+  }
+
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
       'mode': mode,
@@ -227,6 +233,7 @@ class SyncRuntimeStats {
     this.brightnessFollow = true,
     this.captureLooksBlack = false,
     this.hdrFallback = false,
+    this.hdrFallbackReason,
     this.sendError,
     this.sendErrors = 0,
     this.datagramsSent = 0,
@@ -269,6 +276,9 @@ class SyncRuntimeStats {
   final bool brightnessFollow;
   final bool captureLooksBlack;
   final bool hdrFallback;
+
+  /// Why HDR-aware capture is not in use (null when it is, or was never requested).
+  final String? hdrFallbackReason;
   final String? sendError;
   final int sendErrors;
   final int datagramsSent;
@@ -327,6 +337,7 @@ class SyncRuntimeStats {
       'brightnessFollow': brightnessFollow,
       'captureLooksBlack': captureLooksBlack,
       'hdrFallback': hdrFallback,
+      'hdrFallbackReason': hdrFallbackReason,
       'sendError': sendError,
       'sendErrors': sendErrors,
       'datagramsSent': datagramsSent,
@@ -379,6 +390,10 @@ class SyncRuntimeStats {
       brightnessFollow: map['brightnessFollow'] as bool? ?? true,
       captureLooksBlack: map['captureLooksBlack'] as bool? ?? false,
       hdrFallback: map['hdrFallback'] as bool? ?? false,
+      hdrFallbackReason: switch (map['hdrFallbackReason']) {
+        final String reason when reason.isNotEmpty => reason,
+        _ => null,
+      },
       sendError: map['sendError'] as String?,
       sendErrors: (map['sendErrors'] as num?)?.toInt() ?? 0,
       datagramsSent: (map['datagramsSent'] as num?)?.toInt() ?? 0,

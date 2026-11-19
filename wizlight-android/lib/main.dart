@@ -11,9 +11,13 @@ void main() {
 /// button family draws a thick outline when focused.
 ThemeData buildWizTheme({bool tv = false}) {
   final scheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xFF80B7FF),
+    seedColor: const Color(0xFF8B7CF6),
     brightness: Brightness.dark,
-    surface: const Color(0xFF172234),
+    primary: const Color(0xFFBAAEFF),
+    onPrimary: const Color(0xFF21164F),
+    secondaryContainer: const Color(0xFF504090),
+    onSecondaryContainer: const Color(0xFFF1EBFF),
+    surface: const Color(0xFF1B1534),
   );
   const ringWidth = 3.0;
   WidgetStateProperty<BorderSide?> ring(Color color) =>
@@ -28,13 +32,43 @@ ThemeData buildWizTheme({bool tv = false}) {
   final density = tv ? const VisualDensity(horizontal: 1, vertical: 1) : null;
   return ThemeData(
     brightness: Brightness.dark,
-    scaffoldBackgroundColor: const Color(0xFF0D1422),
+    scaffoldBackgroundColor: Colors.transparent,
+    fontFamily: 'Roboto',
     colorScheme: scheme,
     focusColor: scheme.primary.withValues(alpha: 0.28),
-    appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF0D1422)),
+    appBarTheme: const AppBarTheme(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      scrolledUnderElevation: 0,
+      titleTextStyle: TextStyle(
+        color: Color(0xFFF4EFFF),
+        fontFamily: 'Roboto',
+        fontSize: 22,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+    cardTheme: CardThemeData(
+      color: const Color(0xB816122E),
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(22),
+        side: const BorderSide(color: Color(0x14FFFFFF)),
+      ),
+    ),
+    chipTheme: ChipThemeData(
+      backgroundColor: const Color(0xFF252041),
+      side: const BorderSide(color: Color(0x24FFFFFF)),
+      labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+    ),
     filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
       minimumSize: const Size(64, 56),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       textStyle: const TextStyle(
           fontSize: 16, fontWeight: FontWeight.w600, fontFamily: 'Roboto'),
     ).copyWith(
@@ -44,7 +78,16 @@ ThemeData buildWizTheme({bool tv = false}) {
     outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
       minimumSize: const Size(64, 52),
-    ).copyWith(side: ring(scheme.primary), overlayColor: overlay())),
+    ).copyWith(
+      side: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.disabled)) {
+          return BorderSide(color: scheme.onSurface.withValues(alpha: 0.12));
+        }
+        return ring(scheme.primary).resolve(states) ??
+            BorderSide(color: scheme.outlineVariant);
+      }),
+      overlayColor: overlay(),
+    )),
     textButtonTheme: TextButtonThemeData(
         style:
             ButtonStyle(side: ring(scheme.primary), overlayColor: overlay())),
@@ -53,11 +96,14 @@ ThemeData buildWizTheme({bool tv = false}) {
             ButtonStyle(side: ring(scheme.primary), overlayColor: overlay())),
     segmentedButtonTheme: SegmentedButtonThemeData(
         style: ButtonStyle(
+            textStyle: const WidgetStatePropertyAll(
+              TextStyle(fontWeight: FontWeight.w600),
+            ),
             side: WidgetStateProperty.resolveWith((states) {
               if (states.contains(WidgetState.focused)) {
                 return BorderSide(color: scheme.primary, width: ringWidth);
               }
-              return BorderSide(color: scheme.outline);
+              return BorderSide(color: scheme.outlineVariant);
             }),
             overlayColor: overlay())),
     visualDensity: density ?? VisualDensity.standard,
