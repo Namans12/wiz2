@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -5,12 +6,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/wiz_bulb.dart';
-import '../widgets/focus_ring.dart';
-import '../widgets/remote_slider.dart';
 import '../services/screen_capture_service.dart';
 import '../services/settings_service.dart';
 import '../services/sync_service.dart';
 import '../services/wiz_bulb_service.dart';
+import '../widgets/focus_ring.dart';
+import '../widgets/lamp_area_menu.dart';
+import '../widgets/remote_slider.dart';
+import '../widgets/wizlight_backdrop.dart';
+
+enum _LampSetupAction { discover, addIp }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, this.bulbService});
@@ -38,6 +43,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     FocusNode(debugLabel: 'Header: Add'),
     FocusNode(debugLabel: 'Header: Help'),
   ];
+  static const _diagnosticsDuration = Duration(milliseconds: 200);
+  final _diagnosticsBody = GlobalKey();
+  Timer? _diagnosticsScroll;
+  Timer? _lampHighlightTimer;
+  bool _highlightLampActions = false;
   bool _hdrFallbackShown = false;
   bool _playingPending = false;
   bool _pendingAutoRetry = false;
@@ -48,7 +58,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _syncBackend = 'screen'; // 'screen' | 'usb'
   String? _status;
   bool _busy = false;
-  bool _settingsPending = false;
+  bool _restartNeeded = false;
+  String? _runningSessionId;
+  Future<void> _settingsUpdates = Future<void>.value();
   String _sessionState = 'stopped';
   String? _lastMediaUri;
 
@@ -143,12 +155,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _saveSettings(SyncSettings settings) async {
-    setState(() {
-      _settings = settings;
-      _settingsPending = _syncRunning || _playerRunning;
+  Future<void> _saveSettings(SyncSettings settings) {
+    final sessionId = _runningSessionId;
+    setState(() => _settings = settings);
+    // Preserve the order of rapid input, including slider adjustments.
+    return _settingsUpdates = _settingsUpdates.then((_) async {
+      try {
+        await _settingsService.saveSyncSettings(settings);
+      } catch (error) {
+        if (mounted) {
+          setState(() => _status = 'Could not save settings: $error');
+        }
+        return;
+      }
+      if (!mounted || sessionId == null || sessionId != _runningSessionId) {
+        return;
+      }
+      try {
+        final restart = await _captureService.updateSettings(settings);
+        if (!mounted || sessionId != _runningSessionId) return;
+        final needed = restart?.isNotEmpty ?? false;
+        if (needed != _restartNeeded) setState(() => _restartNeeded = needed);
+      } catch (error) {
+        if (mounted && sessionId == _runningSessionId) {
+          setState(() => _status = 'Could not apply live settings: $error');
+        }
+      }
     });
-    await _settingsService.saveSyncSettings(settings);
   }
 
   Future<void> _discover() async {
@@ -217,11 +250,60 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _saveBulbs(WizBulb.merge(_bulbs, nextBulbs));
   }
 
+  Future<void> _showLampSetup() async {
+    _lampHighlightTimer?.cancel();
+    setState(() => _highlightLampActions = true);
+    _lampHighlightTimer = Timer(const Duration(seconds: 5), () {
+      setState(() => _highlightLampActions = false);
+    });
+    final action = await showDialog<_LampSetupAction>(
+      context: context,
+      barrierColor: const Color(0x66000000),
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.lightbulb_outline),
+        title: const Text('Add your lamps first'),
+        content: const Text(
+          'Discover finds lamps on your Wi-Fi network. Use + to add a lamp by IP address.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.pop(context, _LampSetupAction.addIp),
+            icon: const Icon(Icons.add),
+            label: const Text('Add by IP'),
+          ),
+          FilledButton.icon(
+            autofocus: true,
+            onPressed: () => Navigator.pop(context, _LampSetupAction.discover),
+            icon: const Icon(Icons.search),
+            label: const Text('Discover'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case _LampSetupAction.discover:
+        await _discover();
+      case _LampSetupAction.addIp:
+        await _addIp();
+      case null:
+        break;
+    }
+  }
+
   void _onSession(Map<dynamic, dynamic> session) {
     if (!mounted) return;
     setState(() {
       _sessionState = session['state'] as String? ?? 'stopped';
       final running = _sessionState == 'running';
+      final sessionId =
+          running ? (session['sessionId'] as String? ?? '') : null;
+      if (_runningSessionId != sessionId) _restartNeeded = false;
+      _runningSessionId = sessionId;
       _syncRunning = running && session['backend'] == 'screen';
       _playerRunning = running && session['backend'] == 'usb';
       if (running) _syncBackend = session['backend'] as String? ?? 'screen';
@@ -229,7 +311,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (_sessionState == 'stopped' || _sessionState == 'error') {
         // Stale numbers from the previous run must not look live.
         _runtimeStats = null;
-        _settingsPending = false;
       }
     });
     if (session['hdrFallback'] == true) _noteHdrFallback();
@@ -350,6 +431,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _captureService.dispose();
     _syncActionFocus.dispose();
     _bodyFocus.dispose();
+    _diagnosticsScroll?.cancel();
+    _lampHighlightTimer?.cancel();
     for (final node in _headerFocus) {
       node.dispose();
     }
@@ -370,6 +453,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _toggleSync() async {
     if (_transitioning) return;
+    if (!_syncRunning && !_playerRunning && _bulbs.isEmpty) {
+      await _showLampSetup();
+      return;
+    }
     setState(() => _busy = true);
     try {
       if (_syncRunning) {
@@ -385,7 +472,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       if (!granted) throw StateError('Screen capture permission denied');
       setState(() {
-        _settingsPending = false;
+        _restartNeeded = false;
         _status = 'Starting screen capture...';
       });
       final accepted = await _captureService.startCapture(
@@ -401,6 +488,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<bool> _pickAndPlayUsb({String? replayUri}) async {
     if (_transitioning) return false;
+    if (!_playerRunning && !_syncRunning && _bulbs.isEmpty) {
+      await _showLampSetup();
+      return false;
+    }
     setState(() => _busy = true);
     try {
       if (_playerRunning) {
@@ -416,7 +507,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!mounted || uri == null || uri.isEmpty) return false;
       _lastMediaUri = uri;
       setState(() {
-        _settingsPending = false;
+        _restartNeeded = false;
         _status = 'Starting local player...';
       });
       final accepted = await _captureService.playMedia(
@@ -480,26 +571,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _pendingSettingsNotice() => Column(children: [
-        if (_settingsPending)
+        if (_restartNeeded)
           ListTile(
-            title: const Text(
-                'Settings changed. Press Apply / restart to use them - the running sync still uses the old settings.'),
+            title: const Text('Restart needed'),
+            subtitle: const Text('Restart to apply HDR-aware capture changes.'),
             trailing: FilledButton(
                 onPressed: _transitioning ? null : _applySettings,
-                child: const Text('Apply / restart')),
+                child: const Text('Restart sync')),
           ),
         if (_syncBackend == 'usb')
           const Padding(
             padding: EdgeInsets.all(8),
             child: Text(
-                'Local player uses single full-frame sampling. Zone, letterbox and FP16 capture controls apply only to screen capture.'),
+                'USB video uses Single mode. Regions, letterbox and HDR-aware capture apply to screen capture.'),
           ),
       ]);
 
   @override
   Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [const WizLightBackdrop(), _buildPage()],
+    );
+  }
+
+  Widget _buildPage() {
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
 
     // Build the small settings form eagerly so off-screen controls remain in
@@ -515,8 +616,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       },
       child: Scaffold(
+        backgroundColor: Colors.transparent,
         appBar: AppBar(
-          title: const Text('WizLight'),
+          backgroundColor: Colors.transparent,
+          title: Row(children: [
+            Image.asset(
+              'assets/branding/wizlight_mark.png',
+              width: 32,
+              height: 32,
+              excludeFromSemantics: true,
+              errorBuilder: (_, __, ___) =>
+                  const Icon(Icons.lightbulb_outline, size: 32),
+            ),
+            const SizedBox(width: 10),
+            const Flexible(child: Text('WizLight')),
+          ]),
           actions: <Widget>[_buildHeaderActions()],
         ),
         body: SafeArea(
@@ -555,60 +669,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.stretch,
                                     children: [
-                                      Text('Your screen. Your atmosphere.',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .headlineSmall),
-                                      const SizedBox(height: 6),
-                                      const Text(
-                                          'Remote: Up / Down moves between controls. Left / Right adjusts a slider.'),
-                                      const SizedBox(height: 20),
                                       _pendingSettingsNotice(),
                                       _buildSyncHero(),
                                       const SizedBox(height: 16),
-                                      Text('Your lights',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleLarge),
-                                      const SizedBox(height: 8),
-                                      ..._bulbs.map(_buildBulbTile),
-                                      if (_bulbs.isEmpty)
-                                        const Card(
-                                            child: ListTile(
-                                          leading:
-                                              Icon(Icons.lightbulb_outline),
-                                          title: Text('No bulbs configured'),
-                                          subtitle: Text(
-                                              'Use Discover or + above to add your lights.'),
-                                        )),
+                                      _buildLights(),
                                       const SizedBox(height: 16),
                                       _buildSyncControls(),
                                       const SizedBox(height: 16),
-                                      Card(
-                                          child: FocusRing(
-                                              child: ExpansionTile(
-                                        title: const Text('Live diagnostics'),
-                                        subtitle: const Text(
-                                            'Performance, capture details and support report'),
-                                        children: [
-                                          _buildRuntimeCard(),
-                                          _buildDiagnosticsCard()
-                                        ],
-                                      ))),
+                                      _buildLiveDiagnostics(),
                                       const SizedBox(height: 16),
                                       Align(
                                           alignment: Alignment.centerLeft,
                                           child: TextButton.icon(
-                                            onPressed: () {
-                                              _syncActionFocus.requestFocus();
-                                              final actionContext =
-                                                  _syncActionFocus.context;
-                                              if (actionContext != null) {
-                                                Scrollable.ensureVisible(
-                                                    actionContext,
-                                                    alignment: 0.1);
-                                              }
-                                            },
+                                            onPressed: _focusSyncAction,
                                             icon:
                                                 const Icon(Icons.arrow_upward),
                                             label: const Text('Back to sync'),
@@ -622,6 +695,87 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  Widget _sectionTitle(IconData icon, String title) {
+    return Row(children: [
+      Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
+      const SizedBox(width: 10),
+      Expanded(
+          child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
+    ]);
+  }
+
+  Widget _buildLights() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _sectionTitle(Icons.lightbulb_outline, 'Lights'),
+            const SizedBox(height: 12),
+            if (_bulbs.isEmpty)
+              const Card(
+                child: ListTile(
+                  title: Text('No lamps added'),
+                  subtitle:
+                      Text('Tap Discover to find lamps or + to add one by IP.'),
+                ),
+              ),
+            for (final bulb in _bulbs) ...[
+              if (bulb != _bulbs.first) const SizedBox(height: 12),
+              _buildBulbTile(bulb),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLiveDiagnostics() {
+    return Card(
+      child: FocusRing(
+        radius: 22,
+        child: ExpansionTile(
+          leading: Icon(Icons.monitor_heart_outlined,
+              color: Theme.of(context).colorScheme.primary, size: 20),
+          title: const Text('Live diagnostics'),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          shape: const Border(),
+          collapsedShape: const Border(),
+          expansionAnimationStyle:
+              const AnimationStyle(duration: _diagnosticsDuration),
+          onExpansionChanged: _revealDiagnostics,
+          children: [
+            Column(
+              key: _diagnosticsBody,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildRuntimeCard(),
+                const SizedBox(height: 12),
+                _buildDiagnosticsCard(),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _revealDiagnostics(bool expanded) {
+    _diagnosticsScroll?.cancel();
+    if (!expanded) return;
+    _diagnosticsScroll = Timer(_diagnosticsDuration, () {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final body = _diagnosticsBody.currentContext;
+        if (body == null) return;
+        Scrollable.ensureVisible(body,
+            duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
+    });
   }
 
   void _focusSyncAction() {
@@ -663,16 +817,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         skipTraversal: true,
         onKeyEvent: onKey,
         child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
-          IconButton(
+          _lampHeaderAction(IconButton(
               focusNode: _headerFocus[0],
               onPressed: _discover,
               icon: const Icon(Icons.search),
-              tooltip: 'Discover bulbs'),
-          IconButton(
+              tooltip: 'Discover bulbs')),
+          _lampHeaderAction(IconButton(
               focusNode: _headerFocus[1],
               onPressed: _addIp,
               icon: const Icon(Icons.add),
-              tooltip: 'Add bulb by IP'),
+              tooltip: 'Add bulb by IP')),
           IconButton(
               focusNode: _headerFocus[2],
               onPressed: _showSyncGuide,
@@ -680,6 +834,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               tooltip: 'Sync guide'),
         ]),
       ),
+    );
+  }
+
+  Widget _lampHeaderAction(IconButton button) {
+    final accent = Theme.of(context).colorScheme.primary;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      foregroundDecoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          width: 2,
+          color: _highlightLampActions ? accent : Colors.transparent,
+        ),
+      ),
+      child: button,
     );
   }
 
@@ -795,8 +964,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Row(
               children: <Widget>[
                 Icon(
-                  _syncRunning ? Icons.sync : Icons.sync_disabled,
-                  color: _syncRunning ? Colors.green : null,
+                  _playerRunning ? Icons.usb : Icons.sync,
+                  size: 20,
+                  color: Theme.of(context).colorScheme.primary,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -809,10 +979,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             : _playerRunning
                                 ? 'USB player running'
                                 : 'Ready to sync',
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: Theme.of(context).textTheme.titleLarge,
                       ),
                       Text(
-                        _status ?? '${_bulbs.length} bulb(s) configured',
+                        _status ?? '${_bulbs.length} lamps added',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -830,27 +1000,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
               ],
             ),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: <Widget>[
-                _buildStatChip('FPS', '${stats?.currentFps ?? '-'}'),
-                _buildStatChip(
-                  'Send',
-                  '${stats?.sendRateHz.toStringAsFixed(1) ?? '-'} Hz',
-                ),
-                _buildStatChip(
-                  'Motion',
-                  stats?.motionScore.toStringAsFixed(3) ?? '-',
-                ),
-                _buildStatChip('Mode', stats?.mode ?? _settings.mode),
-                _buildStatChip(
-                  'Color',
-                  stats?.sourceColorSpace ?? _settings.sourceColorSpace,
-                ),
-              ],
-            ),
+            if (stats != null) ...[
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildStatChip('FPS', '${stats.currentFps}'),
+                  _buildStatChip(
+                      'Send', '${stats.sendRateHz.toStringAsFixed(1)} Hz'),
+                  _buildStatChip(
+                      'Motion', stats.motionScore.toStringAsFixed(3)),
+                  _buildStatChip(
+                      'Mode', stats.mode == 'zones' ? 'Regions' : 'Single'),
+                  _buildStatChip('Color', stats.sourceColorSpace),
+                ],
+              ),
+            ],
             if (stats?.captureLooksBlack == true) ...<Widget>[
               const SizedBox(height: 10),
               Container(
@@ -900,6 +1066,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ],
             const SizedBox(height: 14),
             SegmentedButton<String>(
+              showSelectedIcon: false,
+              expandedInsets: EdgeInsets.zero,
               segments: <ButtonSegment<String>>[
                 ButtonSegment(
                   value: 'screen',
@@ -924,8 +1092,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const SizedBox(height: 6),
             Text(
               _syncBackend == 'usb'
-                  ? 'Plays a local USB video and sends one shared colour to the lights. Supports non-DRM files.'
-                  : 'Mirrors accessible screen content. Some protected apps and HDMI inputs may not allow capture.',
+                  ? 'Play an unprotected video from USB.'
+                  : 'Sync lamps to your screen. Some apps and HDMI inputs block capture.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 10),
@@ -972,39 +1140,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildBulbTile(WizBulb bulb) {
+    final inRegions = _settings.mode == 'zones';
     return Card(
+      key: ValueKey(bulb.ip),
       child: Column(children: [
         ListTile(
           leading: const Icon(Icons.lightbulb),
           title: Text(bulb.name),
           subtitle: Text(bulb.ip),
-          trailing: FocusRing(
-              radius: 8,
-              child: DropdownButton<String>(
-                value: bulb.region,
-                items: const <DropdownMenuItem<String>>[
-                  DropdownMenuItem(value: 'left', child: Text('Left')),
-                  DropdownMenuItem(value: 'right', child: Text('Right')),
-                  DropdownMenuItem(value: 'top', child: Text('Top')),
-                  DropdownMenuItem(value: 'bottom', child: Text('Bottom')),
-                  DropdownMenuItem(value: 'center', child: Text('Center')),
-                ],
-                onChanged: _transitioning
-                    ? null
-                    : (value) {
-                        if (value == null) {
-                          return;
-                        }
-                        final next = _bulbs
-                            .map(
-                              (item) => item.ip == bulb.ip
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  inRegions ? 'Screen area' : 'Used in Regions mode',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Flexible(
+                child: LampAreaMenu(
+                  value: bulb.region,
+                  busy: _transitioning,
+                  onChanged: !inRegions
+                      ? null
+                      : (value) => _saveBulbs([
+                            for (final item in _bulbs)
+                              item.ip == bulb.ip
                                   ? item.copyWith(region: value)
                                   : item,
-                            )
-                            .toList(growable: false);
-                        _saveBulbs(next);
-                      },
-              )),
+                          ]),
+                ),
+              ),
+            ],
+          ),
         ),
         Row(
           children: [
@@ -1111,6 +1282,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             subtitle: subtitle));
   }
 
+  Future<void> _showModeInfo() => showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Single and Regions'),
+          content: const Text(
+            'Single uses one colour from the whole screen for every lamp. '
+            'Lamp areas are ignored.\n\n'
+            'Regions gives each lamp the colour of its assigned screen area '
+            '(left, right, top, bottom or centre). Use Regions when your lamps '
+            'sit on different sides of the screen.',
+          ),
+          scrollable: true,
+          actions: [
+            TextButton(
+              autofocus: true,
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+
   Widget _buildSyncControls() {
     return Card(
       child: Padding(
@@ -1118,23 +1311,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text('Picture & response',
-                style: Theme.of(context).textTheme.titleLarge),
+            _sectionTitle(Icons.tune, 'Picture & response'),
             const SizedBox(height: 12),
-            SegmentedButton<String>(
-              segments: const <ButtonSegment<String>>[
-                ButtonSegment(value: 'single', label: Text('Single')),
-                ButtonSegment(value: 'zones', label: Text('Regions')),
+            Row(
+              children: [
+                Expanded(
+                  child: SegmentedButton<String>(
+                    showSelectedIcon: false,
+                    expandedInsets: EdgeInsets.zero,
+                    style: const ButtonStyle(
+                        padding: WidgetStatePropertyAll(
+                      EdgeInsets.symmetric(horizontal: 6),
+                    )),
+                    segments: const <ButtonSegment<String>>[
+                      ButtonSegment(
+                        value: 'single',
+                        label: Text('Single'),
+                        icon: Icon(Icons.lightbulb_outline),
+                      ),
+                      ButtonSegment(
+                        value: 'zones',
+                        label: Text('Regions'),
+                        icon: Icon(Icons.view_column),
+                      ),
+                    ],
+                    selected: <String>{_settings.mode},
+                    onSelectionChanged: (selection) {
+                      _saveSettings(_settings.copyWith(mode: selection.first));
+                    },
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  onPressed: _showModeInfo,
+                  icon: const Icon(Icons.info_outline),
+                  tooltip: 'About Single and Regions',
+                ),
               ],
-              selected: <String>{_settings.mode},
-              onSelectionChanged: (selection) {
-                _saveSettings(_settings.copyWith(mode: selection.first));
-              },
             ),
             const SizedBox(height: 12),
             Text('Sync feel', style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 6),
             SegmentedButton<String>(
+              showSelectedIcon: false,
+              expandedInsets: EdgeInsets.zero,
               segments: <ButtonSegment<String>>[
                 ButtonSegment(
                   value: 'auto',
@@ -1211,10 +1431,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   : (value) =>
                       _saveSettings(_settings.copyWith(hdrToneMapping: value)),
               title: const Text('HDR tone mapping'),
-              subtitle: _settings.sourceColorSpace == 'auto'
-                  ? const Text(
-                      'Only used when source colour space is set manually')
-                  : null,
+              subtitle: const Text(
+                'Only used when Source colour space is set to Display P3 or Rec.2020 (not Auto)',
+              ),
             ),
             _ringedSwitch(
               value: _settings.hdrCapture,
@@ -1294,13 +1513,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _buildRuntimeCard() {
     final stats = _runtimeStats;
     final color = stats?.primaryOutputColor;
+    final fallbackReason = stats?.hdrFallbackReason;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text('Runtime', style: Theme.of(context).textTheme.titleMedium),
+            _sectionTitle(Icons.speed, 'Runtime'),
             const SizedBox(height: 8),
             Text('Mode: ${stats?.mode ?? '-'}'),
             Text(
@@ -1335,6 +1555,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Text('Primary HDR: ${stats?.primaryHdrType ?? '-'}'),
             Text(
                 'Capture buffer: ${stats?.captureBufferFormat ?? '-'}${(stats?.hdrCaptureActive ?? false) ? ' (HDR active)' : ''}'),
+            if (fallbackReason != null) Text('HDR fallback: $fallbackReason'),
             Text('Updates queued: ${stats?.updatesSent ?? 0}'),
             Text('Scene cuts: ${stats?.cutsDetected ?? 0}'),
             Text('Profile: ${stats?.syncProfile ?? _settings.syncProfile}'),
@@ -1396,12 +1617,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text('Diagnostics', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            const Text(
-              'Exports a compact JSON report for support and production validation.',
-            ),
-            const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
