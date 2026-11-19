@@ -3,7 +3,7 @@
 Run desktop commands from the repo root:
 
 ```powershell
-cd C:\Users\naman\Desktop\wizlight-master
+cd <repo folder>
 ```
 
 ## Python Setup
@@ -12,9 +12,14 @@ cd C:\Users\naman\Desktop\wizlight-master
 py -3.10 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
-pip install -e ".[dev,calibration,package]"
+pip install -r requirements-dev.txt
+pip install -e . --no-deps
 ```
+
+`requirements-dev.txt` pulls in the pinned runtime set (`requirements.txt`) plus pytest, ruff,
+OpenCV and PyInstaller. To install only what is needed to run the app, use
+`pip install -r requirements.txt`. `requirements-lock.txt` is the full transitive freeze.
+`pip install -e . --no-deps` registers the `wizlight` console command.
 
 If PowerShell blocks activation:
 
@@ -29,12 +34,6 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 python -m src.gui
 ```
 
-Installed console command:
-
-```powershell
-wizlight gui
-```
-
 Built executable:
 
 ```powershell
@@ -46,6 +45,10 @@ Built executable:
 ```powershell
 wizlight --help
 wizlight discover
+wizlight add-bulb 192.168.1.3 --name Desk
+wizlight remove-bulb 192.168.1.3
+wizlight prune-bulbs
+wizlight list-bulbs
 wizlight status
 wizlight on
 wizlight off
@@ -53,17 +56,16 @@ wizlight toggle
 wizlight brightness 80
 wizlight color 255 80 20
 wizlight temp 4000
-wizlight preset warm
-wizlight preset cool
-wizlight preset night
+wizlight preset            # list presets
+wizlight preset warm       # also: cool, daylight, sunset, party, movie, reading, night, focus, relax
+wizlight config-path
 ```
 
 Most bulb-control commands accept `-i IP` to target one bulb.
 
-Screen sync:
+Screen sync (the CLI has no sync command; use the desktop app or this script):
 
 ```powershell
-wizlight sync-screen
 python scripts\sync_screen.py
 ```
 
@@ -127,9 +129,12 @@ Outputs:
 
 ```text
 dist\WizLight\WizLight.exe   (onedir folder; keep it together)
-dist\WizLight-portable.zip   (unzip anywhere and run WizLight.exe)
-dist\installer\WizLight-Setup.exe
+dist\WizLight-<version>-portable.zip   (unzip anywhere and run WizLight.exe)
+dist\installer\WizLight-<version>-Setup.exe
 ```
+
+`<version>` is `__version__` from `src/__init__.py` (for example `WizLight-1.0.0-Setup.exe`). The
+same value is written into the exe's file properties.
 
 The installer (and the portable zip) unpack the onedir build, so launches no longer extract
 to a temp folder. Installing over an older install replaces the old files; close WizLight first
@@ -139,13 +144,26 @@ install folder plus the shortcuts.
 Run installer:
 
 ```powershell
-.\dist\installer\WizLight-Setup.exe
+.\dist\installer\WizLight-<version>-Setup.exe
 ```
+
+## Releasing A New Version
+
+`src/__init__.py` is the single source of truth. `pyproject.toml`, the Windows version resource,
+the macOS bundle and the installer/zip names all read it at build time. Only the Android
+`pubspec.yaml` holds a second literal, which the helper keeps in sync:
+
+```powershell
+python scripts\bump_version.py 1.1.0              # keeps the Android build number
+python scripts\bump_version.py 1.1.0 --build 2    # also sets the Android build number
+```
+
+`tests/test_version_consistency.py` fails if any location disagrees.
 
 ## Android
 
 ```powershell
-cd C:\Users\naman\Desktop\wizlight-master\wizlight-android
+cd <repo folder>\wizlight-android
 flutter pub get
 flutter analyze
 flutter test
@@ -193,7 +211,7 @@ Remove-Item -Recurse -Force build,dist -ErrorAction SilentlyContinue
 Android:
 
 ```powershell
-cd C:\Users\naman\Desktop\wizlight-master\wizlight-android
+cd <repo folder>\wizlight-android
 flutter clean
 flutter pub get
 ```
@@ -201,7 +219,7 @@ flutter pub get
 ## Recommended Daily Flow
 
 ```powershell
-cd C:\Users\naman\Desktop\wizlight-master
+cd <repo folder>
 .\.venv\Scripts\Activate.ps1
 python -m ruff check .
 python -m pytest

@@ -4,15 +4,14 @@
 # Run on macOS only (PyInstaller needs the target platform's runtime).
 # Prereqs:
 #   * Python 3.10+ (recommend pyenv or python.org installer)
-#   * pip install -r requirements.txt
-#   * pip install pyinstaller pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-Quartz
+#   * pip install -r requirements-dev.txt   (includes pyinstaller and the pyobjc packages)
 #   * (optional, for .dmg)  brew install create-dmg
 #
 # Usage:
 #   bash packaging/build_macos.sh
 # Output:
 #   dist/WizLight.app
-#   dist/WizLight-macOS.dmg   (only if create-dmg is on PATH)
+#   dist/WizLight-<version>-macOS.dmg   (only if create-dmg is on PATH)
 
 set -euo pipefail
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -62,7 +61,8 @@ fi
 echo "==> App bundle ready: $APP_PATH"
 
 if command -v create-dmg >/dev/null 2>&1; then
-    DMG_PATH="dist/WizLight-macOS.dmg"
+    VERSION="$("$PYTHON" packaging/version_tools.py --print)"
+    DMG_PATH="dist/WizLight-${VERSION}-macOS.dmg"
     echo "==> Building DMG: $DMG_PATH"
     rm -f "$DMG_PATH"
     create-dmg \

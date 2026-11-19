@@ -12,11 +12,7 @@ Python runtime, so cross-compiling from Windows or Linux does not work.
 3. Install build dependencies:
 
    ```sh
-   pip install -r requirements.txt
-   pip install pyinstaller \
-               pyobjc-core \
-               pyobjc-framework-Cocoa \
-               pyobjc-framework-Quartz
+   pip install -r requirements-dev.txt   # includes pyinstaller and the pyobjc packages
    ```
 
 4. (Optional, for a `.dmg` installer) install `create-dmg`:
@@ -34,7 +30,7 @@ bash packaging/build_macos.sh
 Outputs:
 
 * `dist/WizLight.app` — Cocoa app bundle, drag-installable.
-* `dist/WizLight-macOS.dmg` — installer disk image (only if `create-dmg`
+* `dist/WizLight-<version>-macOS.dmg` — installer disk image (only if `create-dmg`
   is on `PATH`).
 
 ## Codesigning & notarisation
@@ -47,12 +43,12 @@ the `notarytool` CLI. After the bundle is built, sign + notarise with:
 codesign --deep --force --options runtime \
     --sign "$DEVELOPER_ID_APPLICATION" \
     dist/WizLight.app
-xcrun notarytool submit dist/WizLight-macOS.dmg \
+xcrun notarytool submit dist/WizLight-<version>-macOS.dmg \
     --apple-id "$APPLE_ID" \
     --team-id "$TEAM_ID" \
     --password "$APP_SPECIFIC_PWD" \
     --wait
-xcrun stapler staple dist/WizLight-macOS.dmg
+xcrun stapler staple dist/WizLight-<version>-macOS.dmg
 ```
 
 If you skip signing, users will see a "developer cannot be verified" warning

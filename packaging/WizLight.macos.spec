@@ -2,12 +2,17 @@
 # macOS PyInstaller spec for WizLight.
 # Produces a .app bundle that is then packaged into a .dmg by build_macos.sh.
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 root = Path.cwd()
+sys.path.insert(0, str(root / "packaging"))
+from version_tools import read_version  # noqa: E402
+
+VERSION = read_version()  # single source: src/__init__.py
 datas = [
     (str(root / "README.md"), "."),
     (str(root / "LICENSE"), "."),
@@ -96,12 +101,12 @@ app = BUNDLE(
         if (root / "packaging" / "assets" / "wizlight.icns").exists()
         else None,
     bundle_identifier="com.wizlight.desktop",
-    version="0.1.0",
+    version=VERSION,
     info_plist={
         "CFBundleName": "WizLight",
         "CFBundleDisplayName": "WizLight",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "0.1.0",
+        "CFBundleShortVersionString": VERSION,
+        "CFBundleVersion": VERSION,
         "LSMinimumSystemVersion": "11.0",
         "NSHighResolutionCapable": True,
         "NSRequiresAquaSystemAppearance": False,

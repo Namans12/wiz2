@@ -1,5 +1,5 @@
 {
-  "video": "C:/Users/naman/Videos/color-test.mp4",
+  "video": "C:/path/to/color-test.mp4",
   "output_dir": "output/hardware-runs",
   "mean_error_threshold": 95.0,
   "max_error_threshold": 170.0,

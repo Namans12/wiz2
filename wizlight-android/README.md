@@ -26,7 +26,7 @@ Android companion app for syncing tablet/phone screen colors directly to WiZ bul
 ## Build
 
 ```powershell
-cd C:\Users\naman\Desktop\wizlight-master\wizlight-android
+cd <repo folder>\wizlight-android
 flutter pub get
 flutter analyze
 flutter test
@@ -114,7 +114,7 @@ Screen capture starts but lights do not react:
 Build fails on Windows:
 
 ```powershell
-cd C:\Users\naman\Desktop\wizlight-master\wizlight-android\android
+cd <repo folder>\wizlight-android\android
 .\gradlew.bat --stop
 cd ..
 flutter clean

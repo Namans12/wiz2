@@ -34,6 +34,12 @@ MANIFEST
 !packaging/WizLight.macos.spec
 !packaging/FrozenDiag.spec
 
+# Build outputs (installers and app bundles are release artifacts, not source)
+*.apk
+*.aab
+*.exe
+*.dmg
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
@@ -51,13 +57,13 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.ruff_cache/
 
 # Translations
 *.mo
 *.pot
 
 # Django stuff:
-*.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -84,9 +90,6 @@ ipython_config.py
 
 # pyenv
 .python-version
-
-# pipenv
-Pipfile.lock
 
 # PEP 582
 __pypackages__/

@@ -12,7 +12,9 @@
 ├── wizlight-android/            # Flutter + native Android sync app
 ├── hardware_targets.example.json
 ├── pyproject.toml
-├── requirements.txt
+├── requirements.txt             # Pinned runtime dependencies
+├── requirements-dev.txt         # + pytest, ruff, OpenCV, PyInstaller
+├── requirements-lock.txt        # Full transitive freeze (Windows, Python 3.10)
 ├── README.md
 └── LICENSE
 ```

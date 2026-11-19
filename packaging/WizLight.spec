@@ -1,11 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 root = Path.cwd()
+sys.path.insert(0, str(root / "packaging"))
+from version_tools import write_windows_version_file  # noqa: E402
+
+# Windows file-properties version, generated from src/__init__.py at build time.
+version_file = write_windows_version_file(root / "build" / "version_info.txt")
 datas = [
     (str(root / "README.md"), "."),
     (str(root / "LICENSE"), "."),
@@ -72,6 +78,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(root / "packaging" / "assets" / "wizlight.ico"),
+    version=str(version_file),
 )
 
 coll = COLLECT(

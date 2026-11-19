@@ -96,13 +96,13 @@ def test_windows_build_rejects_native_failure_or_stale_artifacts(tmp_path, nativ
     script = packaging / "build_windows.ps1"
     script.write_text(source, encoding="utf-8")
     stub = tmp_path / "stub-python.cmd"
-    stub.write_text(f"@echo off\nexit /b {native_exit}\n", encoding="utf-8")
+    stub.write_text(f"@echo off\necho 1.0.0\nexit /b {native_exit}\n", encoding="utf-8")
     if stale:
         output = tmp_path / "dist"
         (output / "installer").mkdir(parents=True)
         (output / "WizLight").mkdir()
         (output / "WizLight/WizLight.exe").write_bytes(b"old")
-        (output / "installer/WizLight-Setup.exe").write_bytes(b"old")
+        (output / "installer/WizLight-1.0.0-Setup.exe").write_bytes(b"old")
     result = subprocess.run([shell, "-NoProfile", "-File", str(script), "-PythonPath", str(stub)], capture_output=True, text=True)
     assert result.returncode != 0
     assert "Build complete:" not in result.stdout

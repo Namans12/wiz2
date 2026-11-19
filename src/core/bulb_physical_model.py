@@ -45,6 +45,10 @@ from typing import Optional, Protocol
 import numpy as np
 
 from .color_science import (
+    _OKLAB_M1,
+    _OKLAB_M1_INV,
+    _OKLAB_M2,
+    _OKLAB_M2_INV,
     SRGB_TO_XYZ,
     XYZ_TO_SRGB,
     blackbody_xyz,
@@ -279,6 +283,64 @@ def _compress_toward_gray(target_xyz: np.ndarray, primaries: PhysicalPrimaries, 
     return SRGB_TO_XYZ @ oklab_to_linear_srgb(candidate_lab)
 
 
+def _compress_toward_gray_batch(targets: np.ndarray, primaries: PhysicalPrimaries, triangles: list[tuple[int, int, int]]) -> np.ndarray:
+    """``_compress_toward_gray`` over an (M, 3) batch, bisecting in lockstep.
+
+    Performs exactly the scalar function's steps (24 lightness probes where
+    pure gray is unreachable, then 24 chroma probes) but every bisection
+    probe is one batched ``_bounded_mixes`` call instead of M separate ones.
+    """
+
+    targets = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
+    count = len(targets)
+    m1, m2 = _OKLAB_M1, _OKLAB_M2
+    m2_inv, m1_inv = _OKLAB_M2_INV, _OKLAB_M1_INV
+
+    # A stack of matrix-vector products (not ``rows @ M.T``): numpy's batched
+    # matmul runs the same per-row kernel as the scalar path's ``M @ v``, so
+    # results match it bit for bit, whereas a single GEMM can differ in the
+    # last ulp.
+    def matvec(matrix: np.ndarray, rows: np.ndarray) -> np.ndarray:
+        return np.matmul(matrix, rows[:, :, None])[:, :, 0]
+
+    def to_xyz(lab: np.ndarray) -> np.ndarray:
+        lms = matvec(m2_inv, lab) ** 3
+        return matvec(SRGB_TO_XYZ, matvec(m1_inv, lms))
+
+    def reachable(lab_rows: np.ndarray) -> np.ndarray:
+        return _bounded_mixes(to_xyz(lab_rows), primaries, triangles)[1]
+
+    lms0 = matvec(m1, matvec(XYZ_TO_SRGB, targets))
+    lab = matvec(m2, np.sign(lms0) * np.abs(lms0) ** (1.0 / 3.0))
+    gray_lab = np.stack([lab[:, 0], np.zeros(count), np.zeros(count)], axis=1)
+
+    # Pure gray at the target's lightness unreachable: lightness is out of
+    # range, so pull it toward mid-gray lightness first.
+    stuck = ~reachable(lab + (gray_lab - lab) * 1.0)
+    if np.any(stuck):
+        mid_lab = np.array([0.6, 0.0, 0.0])
+        sub = lab[stuck]
+        lo_l = np.zeros(len(sub))
+        hi_l = np.ones(len(sub))
+        for _ in range(24):
+            mid = (lo_l + hi_l) / 2.0
+            probe = sub * (1 - mid)[:, None] + mid_lab * mid[:, None]
+            ok = reachable(probe)
+            hi_l = np.where(ok, mid, hi_l)
+            lo_l = np.where(ok, lo_l, mid)
+        lab[stuck] = sub * (1 - hi_l)[:, None] + mid_lab * hi_l[:, None]
+        gray_lab = np.stack([lab[:, 0], np.zeros(count), np.zeros(count)], axis=1)
+
+    lo = np.zeros(count)
+    hi = np.ones(count)
+    for _ in range(24):
+        mid = (lo + hi) / 2.0
+        ok = reachable(lab + (gray_lab - lab) * mid[:, None])
+        hi = np.where(ok, mid, hi)
+        lo = np.where(ok, lo, mid)
+    return to_xyz(lab + (gray_lab - lab) * hi[:, None])
+
+
 def solve_channel_mix_batch(
     target_xyz: np.ndarray,
     primaries: PhysicalPrimaries,
@@ -306,8 +368,12 @@ def solve_channel_mix_batch(
     # out-of-gamut compression path isn't practically vectorizable (each
     # point needs its own bisection), but this subset is normally small.
     out_of_gamut = np.where(~any_valid)[0]
-    for idx in out_of_gamut:
-        result[idx] = solve_channel_mix(targets[idx], primaries, triangles)
+    if out_of_gamut.size:
+        # The bisections are independent per point, so run them in lockstep
+        # over the whole subset (same steps and decisions as the scalar path).
+        compressed = _compress_toward_gray_batch(targets[out_of_gamut], primaries, triangles)
+        mixes, valid = _bounded_mixes(compressed, primaries, triangles)
+        result[out_of_gamut] = np.where(valid[:, None], mixes, 0.0)
 
     return result.reshape(np.asarray(target_xyz).shape[:-1] + (n_channels,))
 

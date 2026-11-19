@@ -38,7 +38,8 @@ import mss
 from .screen_sync import (
     CaptureConfig,
     adaptive_color_boost,
-    crop_content_area,
+    apply_content_bounds,
+    detect_content_bounds,
     crop_relative_region,
     enhance_color,
     perceptual_color_distance,
@@ -219,6 +220,41 @@ def _analysis_sample_indices(height: int, width: int, sample_size: int) -> tuple
     rows = np.minimum(y0 + hashed % y_span, height - 1)
     cols = np.minimum(x0 + (hashed // y_span) % x_span, width - 1)
     return rows, cols
+
+
+# How long a detected letterbox crop box is reused before it is re-detected.
+# A scene cut or a frame-size change re-detects immediately. 0 disables reuse.
+CROP_REDETECT_INTERVAL_S = 1.0
+
+
+def _histogram_32(values: np.ndarray, bins: int, upper: float) -> np.ndarray:
+    """Counts of float32 ``values`` in ``bins`` equal bins over [0, upper].
+
+    Bit-for-bit what ``np.histogram(values, bins=bins, range=(0.0, upper))[0]``
+    returns, but ~3x faster: the bin index is a single multiply, and numpy's
+    edge-correction step is only run for the few samples that land within
+    1e-3 of a bin boundary. Falls back to numpy for anything out of range or
+    non-finite (numpy drops those), and for non-float32 input.
+    """
+
+    flat = values.ravel()
+    if flat.dtype != np.float32 or not flat.size:
+        return np.histogram(flat, bins=bins, range=(0.0, upper))[0]
+    if not (flat.min() >= 0.0 and flat.max() <= upper):  # also true for NaN
+        return np.histogram(flat, bins=bins, range=(0.0, upper))[0]
+    scaled = flat * np.float32(bins / upper)
+    idx = scaled.astype(np.intp)
+    frac = scaled - idx
+    near = np.flatnonzero((frac < 1e-3) | (frac > 0.999))
+    if near.size:
+        edges = np.linspace(0.0, upper, bins + 1, dtype=np.float32)
+        v = flat[near]
+        i = idx[near]
+        i[i == bins] -= 1
+        i[v < edges[i]] -= 1
+        i[(v >= edges[i + 1]) & (i != bins - 1)] += 1
+        idx[near] = i
+    return np.bincount(idx, minlength=bins)
 
 
 def _sample_even_rgb(image: np.ndarray, sample_size: int) -> np.ndarray:
@@ -1288,7 +1324,7 @@ class MotionDetector:
             + small[:, :, 1] * 0.7152
             + small[:, :, 2] * 0.0722
         )
-        hist = np.histogram(luma, bins=self._CUT_HIST_BINS, range=(0.0, 255.0))[0]
+        hist = _histogram_32(luma, self._CUT_HIST_BINS, 255.0)
         hist = hist.astype(np.float64) / max(1.0, float(hist.sum()))
         hist_tv = (
             0.0
@@ -1452,6 +1488,9 @@ class OptimizedScreenSync:
         # Image-derived work (crop, scene stats, per-zone colours) memoised
         # for the array object last analysed; see _image_memo().
         self._image_memo_state: Optional[dict] = None
+        # (frame shape, content bounds, detected-at) of the last letterbox
+        # detection; see _content_bounds().
+        self._crop_state: Optional[tuple] = None
         self._prev_loop_image: Optional[np.ndarray] = None
         self._frame_unchanged = False
         self._black_since: Optional[float] = None
@@ -1508,6 +1547,7 @@ class OptimizedScreenSync:
         self._gpu_probe_after = 0.0
         self._gpu_fallback_reason = None
         self._motion_detector.reset()
+        self._crop_state = None
         self._color_predictor.clear()
         self._current_fps = self.config.max_fps if self.config.adaptive_fps else self.config.fps
         with self._stats_lock:
@@ -1769,6 +1809,31 @@ class OptimizedScreenSync:
         # must not light as brightly as a bright right edge.
         return region, adapted, effective_boost, region_value
 
+    def _crop_content(self, image: np.ndarray) -> np.ndarray:
+        """Letterbox-crop ``image``, re-detecting the bars only when needed.
+
+        The bars rarely change, so the detected box is reused for up to
+        ``CROP_REDETECT_INTERVAL_S``; a scene cut (the aspect ratio of a
+        cinematic cut can change) or a different frame size re-detects on
+        that very frame.
+        """
+
+        if not self.config.ignore_letterbox:
+            self._crop_state = None
+            return image
+        now = time.monotonic()
+        state = self._crop_state
+        shape = image.shape[:2]
+        if (
+            state is None
+            or state[0] != shape
+            or self._motion_detector.last_scene_cut
+            or now - state[2] >= CROP_REDETECT_INTERVAL_S
+        ):
+            state = (shape, detect_content_bounds(image), now)
+            self._crop_state = state
+        return apply_content_bounds(image, state[1])
+
     def _image_memo(self, image: np.ndarray, reuse: bool) -> dict:
         """Image-derived work, reused only when the caller vouches for it.
 
@@ -1782,7 +1847,7 @@ class OptimizedScreenSync:
         memo = self._image_memo_state
         if reuse and memo is not None and memo["image"] is image and memo["signature"] == signature:
             return memo
-        content = crop_content_area(image, ignore_letterbox=self.config.ignore_letterbox)
+        content = self._crop_content(image)
         memo = {
             "image": image,
             "signature": signature,

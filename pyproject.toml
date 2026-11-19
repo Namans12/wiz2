@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wizlight"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Advanced WiZ smart light controller with screen sync and clap detection"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,15 +13,15 @@ authors = [
     {name = "Naman"}
 ]
 dependencies = [
-    "pywizlight>=0.5.14",
-    "click>=8.0",
-    "mss>=9.0",
-    "Pillow>=10.0",
-    "customtkinter>=5.0",
-    "sounddevice>=0.4",
-    "numpy>=1.24",
-    "pystray>=0.19",
-    "dxcam[winrt]>=0.3.0; sys_platform == 'win32'",
+    "pywizlight>=0.5.14,<0.7",
+    "click>=8.0,<9",
+    "mss>=9.0,<11",
+    "Pillow>=10.0,<13",
+    "customtkinter>=5.0,<6",
+    "sounddevice>=0.4,<0.6",
+    "numpy>=1.24,<3",
+    "pystray>=0.19,<0.20",
+    "dxcam[winrt]>=0.3.0,<0.4; sys_platform == 'win32'",
     "pyobjc-core>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
@@ -29,20 +29,24 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.21",
-    "ruff>=0.4",
-    "opencv-python>=4.8",
+    "pytest>=7.0,<9",
+    "pytest-asyncio>=0.21,<2",
+    "ruff>=0.4,<0.12",
+    "opencv-python>=4.8,<5",
+    "pyinstaller>=6.0,<7",
 ]
 calibration = [
-    "opencv-python>=4.8",
+    "opencv-python>=4.8,<5",
 ]
 package = [
-    "pyinstaller>=6.0",
+    "pyinstaller>=6.0,<7",
 ]
 
 [project.scripts]
 wizlight = "src.cli.commands:cli"
+
+[tool.setuptools.dynamic]
+version = {attr = "src.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -51,6 +55,12 @@ include = ["src*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Capture at the sys level, not the file-descriptor level.  The GUI test modules each create a
+# Tk interpreter; pytest's fd capture re-points fds 0-2 between test phases, which closes the
+# Win32 handles Tcl keeps for its standard channels.  A later interpreter can then get a
+# recycled handle and fail to read its own init.tcl/tk.tcl ("couldn't read file ... No error"),
+# intermittently when the machine is busy.
+addopts = "--capture=sys"
 markers = [
     "hardware: tests that control real bulbs, cameras, or local network devices",
 ]
