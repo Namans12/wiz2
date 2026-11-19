@@ -154,11 +154,12 @@ jobs:
           cache: true
       - name: Prepare release signing
         shell: bash
+        # Secrets are only exposed outside pull_request runs, so PR builds are always debug-signed.
         env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEYSTORE_BASE64: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+          KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEY_ALIAS || '' }}
+          KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEY_PASSWORD || '' }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
             keystore="$RUNNER_TEMP/release.jks"
@@ -170,8 +171,10 @@ jobs:
               echo "ANDROID_KEY_PASSWORD=$KEY_PASSWORD"
             } >> "$GITHUB_ENV"
             echo "Release keystore configured."
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "::warning title=PR build: debug-signed by design::Pull request builds never use the release key. The APK is signed with the debug key."
           else
-            echo "::warning title=Android APK is debug-signed::The ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD secrets are not all set, so the APK is signed with the debug key. Updates will not install over an APK signed with a different key. See docs/releasing.md."
+            echo "::warning title=No keystore secret: debug-signed::The ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD secrets are not all set, so the APK is signed with the debug key. Updates will not install over an APK signed with a different key. See docs/releasing.md."
           fi
       - run: flutter pub get
       - run: flutter build apk --release

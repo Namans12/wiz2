@@ -39,7 +39,7 @@ Artifacts are attached to the run for 14 days. The `publish` job only runs for t
 
 ## Android signing secrets
 
-The APK is signed with the debug key unless all four repository secrets exist (Settings > Secrets and variables > Actions). Without them the build still succeeds and prints a warning. Android refuses to update an app signed with a different key, so create the real key before the first public release and keep it forever.
+The APK is signed with the debug key unless all four repository secrets exist (Settings > Secrets and variables > Actions). Without them the build still succeeds and prints a warning. The secrets are never exposed to `pull_request` runs, so PR builds are always debug-signed. Android refuses to update an app signed with a different key, so create the real key before the first public release and keep it forever.
 
 | Secret | Value |
 | --- | --- |
