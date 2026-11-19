@@ -70,6 +70,15 @@ internal data class LiveSettings(
             )
         }
 
+        /** Keys that mean nothing to the USB player: it has no screen reader, letterbox or sample grid. */
+        val PLAYER_IGNORED_KEYS = setOf("hdrCapture", "sampleSize", "ignoreLetterbox")
+
+        /** Player reply: screen-only keys are neither applied nor ever "restart required". */
+        fun reportForPlayer(args: Map<String, Any?>): Map<String, Any?> {
+            val sent = args.keys.filter { it in KEYS && it !in PLAYER_IGNORED_KEYS }
+            return mapOf("accepted" to true, "applied" to sent, "restartRequired" to emptyList<String>())
+        }
+
         /** What the channel returns: which of the sent keys were applied live and which need a restart. */
         fun report(args: Map<String, Any?>, runningHdrCapture: Boolean): Map<String, Any?> {
             val sent = args.keys.filter { it in KEYS }

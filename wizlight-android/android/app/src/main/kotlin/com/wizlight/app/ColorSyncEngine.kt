@@ -55,7 +55,7 @@ class ColorSyncEngine {
     var adaptiveFps = true
     var minFps = 10
     var maxFps = 24
-    var currentFps = 24
+    @Volatile var currentFps = 24
     var smoothing = 0.2
     var colorBoost = 1.18
     var colorAlgorithm = "auto"
@@ -219,6 +219,7 @@ class ColorSyncEngine {
     }
 
     fun reset() {
+        synchronized(requestLock) { lastRequested = null; pendingSettings.set(null) }
         previousMotionSample = null
         previousSingleColor = null
         prevLumaHist = null
@@ -286,11 +287,22 @@ class ColorSyncEngine {
     // ── Live settings ───────────────────────────────────────────────────────────
     private val pendingSettings = AtomicReference<LiveSettings?>(null)
 
-    /** Latest snapshot waiting to be installed, if any (main thread: merge partial updates onto it). */
-    internal fun queuedSettings(): LiveSettings? = pendingSettings.get()
+    // Producer side (main thread): the last snapshot REQUESTED. Every partial update merges against
+    // this, never against what the capture thread has or has not installed yet.
+    private val requestLock = Any()
+    private var lastRequested: LiveSettings? = null
 
-    /** Any thread. Replaces a queued snapshot that the capture thread has not installed yet. */
-    internal fun queueSettings(settings: LiveSettings) { pendingSettings.set(settings) }
+    /**
+     * Any thread. Merges [args] onto the last requested snapshot ([current] seeds the first one) and
+     * publishes the merged result atomically for the capture thread to install between frames.
+     */
+    internal fun requestSettings(args: Map<String, Any?>, current: () -> LiveSettings): LiveSettings =
+        synchronized(requestLock) {
+            val merged = LiveSettings.merge(lastRequested ?: current(), args)
+            lastRequested = merged
+            pendingSettings.set(merged)
+            merged
+        }
 
     /** The settings the engine is running with, as a snapshot. */
     internal fun liveSettings(requestedMode: String, sampleSize: Int, ignoreLetterbox: Boolean, hdrCapture: Boolean) =

@@ -50,8 +50,7 @@ class LiveSettingsTest {
     private fun Rig.snapshot(mode: String) = engine.liveSettings(mode, n, true, false)
 
     private fun Rig.update(mode: String, args: Map<String, Any?>) {
-        val base = engine.queuedSettings() ?: snapshot(mode)
-        engine.queueSettings(LiveSettings.merge(base, args))
+        engine.requestSettings(args) { snapshot(mode) }
     }
 
     @Test fun anAppliedSnapshotChangesTheNextFramesOutput() {
@@ -173,13 +172,12 @@ class LiveSettingsTest {
             try {
                 var i = 0
                 while (!Thread.currentThread().isInterrupted && i < 5000) {
-                    val base = rig.engine.queuedSettings() ?: rig.snapshot("zones")
-                    rig.engine.queueSettings(LiveSettings.merge(base, mapOf(
+                    rig.engine.requestSettings(mapOf(
                         "mode" to if (i % 2 == 0) "single" else "zones",
                         "smoothing" to 0.05 + (i % 80) / 100.0,
                         "colorBoost" to 1.0 + (i % 8) / 10.0,
                         "predictiveSmoothing" to (i % 3 == 0),
-                    )))
+                    )) { rig.snapshot("zones") }
                     i++
                 }
             } catch (t: Throwable) {
@@ -198,5 +196,47 @@ class LiveSettingsTest {
         assertNull(failure.get()?.stackTraceToString(), failure.get())
         // Every frame saw one consistent snapshot: the bulb map always covered both lamps.
         assertTrue(rig.batches.isNotEmpty())
+    }
+
+    @Test fun aPartialUpdateAfterTheCaptureThreadTookTheLastOneKeepsTheMode() {
+        val rig = running("zones")
+        rig.update("zones", mapOf("mode" to "single"))
+        rig.engine.applyPendingSettings()  // capture thread consumed the pending snapshot
+        // The next partial update seeds from stale "zones" if it merged against installed state.
+        rig.engine.requestSettings(mapOf("smoothing" to 0.4)) { rig.snapshot("zones") }
+        rig.engine.applyPendingSettings()
+        assertEquals("single", rig.engine.effectiveMode)
+        assertEquals(0.4, rig.engine.smoothing, 0.0)
+    }
+
+    @Test fun anUpdateOnlyEverPublishesTheMergedSnapshot() {
+        val rig = running("single")
+        val first = rig.engine.requestSettings(mapOf("colorBoost" to 1.4)) { rig.snapshot("single") }
+        val second = rig.engine.requestSettings(mapOf("smoothing" to 0.3)) { rig.snapshot("single") }
+        assertEquals(1.4, second.colorBoost, 0.0)
+        assertEquals(0.3, second.smoothing, 0.0)
+        assertEquals(second, rig.engine.applyPendingSettings())
+        assertEquals(1.4, first.colorBoost, 0.0)
+    }
+
+    @Test fun playerReplyNeverAsksForARestartOrClaimsScreenOnlyKeys() {
+        val reply = LiveSettings.reportForPlayer(mapOf(
+            "smoothing" to 0.4, "hdrCapture" to true, "sampleSize" to 80, "ignoreLetterbox" to false,
+        ))
+        assertEquals(listOf("smoothing"), reply["applied"])
+        assertEquals(emptyList<String>(), reply["restartRequired"])
+    }
+
+    @Test fun staleGridsAreHeldBackAfterAGridChangeUntilAFreshFrameHadItsChance() {
+        val areas = setOf("left", "right")
+        val p = CaptureFormatPolicy::replayAllowed
+        assertTrue(p(0L, 5_000L, false, setOf("all"), areas))
+        assertTrue(p(0L, 5_000L, true, setOf("all", "left", "right"), areas))
+        // Regions needs the area grids; a Single-era replay can never serve it.
+        assertTrue(!p(0L, 5_000L, true, setOf("all"), areas))
+        assertTrue(!p(4_800L, 5_000L, true, setOf("all"), areas))
+        // Just changed sample size / letterbox: wait for the fresh frame, then fall back to the replay.
+        assertTrue(!p(4_800L, 5_000L, false, setOf("all"), areas))
+        assertTrue(p(4_800L, 4_800L + CaptureFormatPolicy.STALE_REPLAY_GRACE_MS, false, setOf("all"), areas))
     }
 }

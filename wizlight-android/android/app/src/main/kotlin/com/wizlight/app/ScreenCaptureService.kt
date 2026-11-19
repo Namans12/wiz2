@@ -130,6 +130,7 @@ class ScreenCaptureService : Service() {
     private var sessionFailure: String? = null
     private var latestGrids: Map<String, IntArray>? = null
     private var latestGridsSize = 56
+    private var freshNeededSinceMs = 0L
     private var lastStatusUpdateAt = 0L
     private var cachedContentBounds: Rect? = null
     private var cachedContentBoundsAtFrame = -1
@@ -460,8 +461,14 @@ class ScreenCaptureService : Service() {
             // on change) — keep the diagnostics heartbeat alive regardless so
             // the UI doesn't look dead.
             latestGrids?.let {
-                replayedFrames += 1
-                engine.submitFrame(it, latestGridsSize)
+                val allowed = CaptureFormatPolicy.replayAllowed(
+                    freshNeededSinceMs, SystemClock.elapsedRealtime(), engine.effectiveMode == "zones",
+                    it.keys, bulbTargets.map { target -> target.region }.toSet(),
+                )
+                if (allowed) {
+                    replayedFrames += 1
+                    engine.submitFrame(it, latestGridsSize)
+                }
             }
             maybePostStatus()
             return
@@ -491,16 +498,19 @@ class ScreenCaptureService : Service() {
             val frame = imageToFrame(image) ?: return
             val contentFrame = cropContentArea(frame, ignoreLetterbox)
 
-            // Region grids are always sampled next to the whole-frame grid, so a live Single <-> Regions
-            // switch has the right data on the very next frame, even a replayed one on a static screen.
+            // Dedicated area grids only while Regions is active. A live switch to Regions is made
+            // immediate by forcing a fresh frame (applyQueuedSettings), not by always sampling them.
             val size = sampleSize
             val grids = mutableMapOf("all" to sampleGrid(contentFrame, size))
-            for (region in bulbTargets.map { it.region }.toSet()) {
-                grids[region] = sampleGrid(cropRelativeRegion(contentFrame, region), size)
+            if (engine.effectiveMode == "zones") {
+                for (region in bulbTargets.map { it.region }.toSet()) {
+                    grids[region] = sampleGrid(cropRelativeRegion(contentFrame, region), size)
+                }
             }
 
             latestGrids = grids
             latestGridsSize = size
+            freshNeededSinceMs = 0L
             engine.submitFrame(grids, size)
             framesProcessed += 1
             if (engine.updatesSent > 0) {
@@ -604,21 +614,37 @@ class ScreenCaptureService : Service() {
 
     /** Capture thread, between frames. */
     private fun applyQueuedSettings() {
+        val modeBefore = engine.effectiveMode
         val s = engine.applyPendingSettings() ?: return
-        if (s.ignoreLetterbox != ignoreLetterbox) {
+        val letterboxChanged = s.ignoreLetterbox != ignoreLetterbox
+        if (letterboxChanged) {
             cachedContentBounds = null
             cachedContentBoundsAtFrame = -1
         }
+        val gridsChanged = letterboxChanged || s.sampleSize != sampleSize || engine.effectiveMode != modeBefore
         ignoreLetterbox = s.ignoreLetterbox
         sampleSize = s.sampleSize
         requestedMode = s.mode
+        if (gridsChanged) {
+            // Replayed grids were built with the old crop / size / mode. Hold them back and make the
+            // virtual display deliver a fresh frame (same nudge as rebuildDisplay) so it takes effect now.
+            freshNeededSinceMs = SystemClock.elapsedRealtime()
+            nudgeFreshFrame()
+        }
     }
 
-    /** Any thread: queue a settings snapshot for the capture thread and say what needs a restart. */
+    private fun nudgeFreshFrame() {
+        val display = virtualDisplay ?: return
+        try {
+            display.resize(screenWidth, screenHeight, screenDensity + 1)
+            display.resize(screenWidth, screenHeight, screenDensity)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Any thread: publish a merged settings snapshot for the capture thread and say what needs a restart. */
     private fun updateSettings(args: Map<String, Any?>): Map<String, Any?> {
-        val base = engine.queuedSettings()
-            ?: engine.liveSettings(requestedMode, sampleSize, ignoreLetterbox, requestedHdrCapture)
-        engine.queueSettings(LiveSettings.merge(base, args))
+        engine.requestSettings(args) { engine.liveSettings(requestedMode, sampleSize, ignoreLetterbox, requestedHdrCapture) }
         return LiveSettings.report(args, requestedHdrCapture)
     }
 

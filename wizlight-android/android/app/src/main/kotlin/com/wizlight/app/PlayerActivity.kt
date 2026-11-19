@@ -139,6 +139,7 @@ class PlayerActivity : Activity() {
 
     @Volatile private var isSyncing = false
     private val framePending = AtomicBoolean(false)
+    @Volatile private var cadenceFps = 24
     private var sessionId = ""
     private var sessionFailure: String? = null
     private var lastStatusAt = 0L
@@ -148,7 +149,7 @@ class PlayerActivity : Activity() {
         override fun run() {
             if (!isSyncing) return
             captureAndSubmit()
-            val delay = Math.max(15L, (1000L / Math.max(engine.currentFps, 1)).toLong())
+            val delay = Math.max(15L, (1000L / Math.max(cadenceFps, 1)).toLong())
             mainHandler.postDelayed(this, delay)
         }
     }
@@ -249,7 +250,6 @@ class PlayerActivity : Activity() {
     }
 
     private fun captureAndSubmit() {
-        engine.applyPendingSettings()
         val view = textureView
         if (!view.isAvailable || !framePending.compareAndSet(false, true)) return
         try {
@@ -262,7 +262,10 @@ class PlayerActivity : Activity() {
         val grid = samplePixels.copyOf()
         sampleHandler?.post {
             try {
+                // Install queued settings here, on the worker, never while a frame is mid-flight.
+                engine.applyPendingSettings()
                 engine.submitFrame(mapOf("all" to grid), GRID)
+                cadenceFps = engine.currentFps
                 if (engine.updatesSent > 0) lastError = null
             } catch (error: Exception) {
                 lastError = error.message ?: error.toString()
@@ -287,9 +290,8 @@ class PlayerActivity : Activity() {
 
     /** Engine settings apply live; the player has no letterbox/sample-size/HDR-reader state of its own. */
     private fun updateSettings(args: Map<String, Any?>): Map<String, Any?> {
-        val base = engine.queuedSettings() ?: engine.liveSettings("single", 0, true, false)
-        engine.queueSettings(LiveSettings.merge(base, args))
-        return LiveSettings.report(args, false)
+        engine.requestSettings(args) { engine.liveSettings("single", 0, true, false) }
+        return LiveSettings.reportForPlayer(args)
     }
 
     private fun updateTargets(targets: List<ColorSyncEngine.BulbTarget>, complete: (Boolean) -> Unit) {

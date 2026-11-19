@@ -39,6 +39,21 @@ internal object CaptureFormatPolicy {
         else -> "rgba8888 (HDR unavailable: $reason)"
     }
 
+    /** After a grid-affecting setting changed, stale replays are held back this long for a fresh frame. */
+    const val STALE_REPLAY_GRACE_MS = 1000L
+
+    /**
+     * May the stored grids be replayed on a static screen? Never when the active mode needs an area
+     * grid they lack; and, right after a sample-size / letterbox / mode change, not until a fresh frame
+     * had [STALE_REPLAY_GRACE_MS] to arrive (the service nudges the display to produce one).
+     */
+    fun replayAllowed(
+        freshNeededSinceMs: Long, nowMs: Long, zones: Boolean, gridKeys: Set<String>, areas: Set<String>,
+    ): Boolean {
+        if (zones && !gridKeys.containsAll(areas)) return false
+        return freshNeededSinceMs == 0L || nowMs - freshNeededSinceMs >= STALE_REPLAY_GRACE_MS
+    }
+
     fun isFp16Pq(pixelStride: Int, actualDataSpace: Int, bt2020Pq: Int): Boolean =
         pixelStride >= 8 && actualDataSpace == bt2020Pq
 
