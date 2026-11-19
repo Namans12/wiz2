@@ -369,7 +369,9 @@ def test_persistent_socket_errors_back_off_and_reset_on_success(monkeypatch):
     finally:
         monitor.stop()
     gaps = [b - a for a, b in zip(attempts, attempts[1:])]
-    assert gaps[0] < 0.2 and gaps[1] >= gaps[0] * 1.5  # starts short, doubles
+    # Starts short and grows. Compare the ends, not neighbours: the Windows
+    # timer (~16 ms) blurs the 0.05 s and 0.1 s steps.
+    assert gaps[0] < 0.2 and gaps[-1] >= 0.3 and gaps[-1] > gaps[0] * 2
     assert max(gaps) <= udp._LINK_ERROR_BACKOFF_MAX + 0.15
 
 

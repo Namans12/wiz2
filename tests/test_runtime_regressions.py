@@ -585,7 +585,7 @@ def test_windows_capture_requests_nonwaiting_frames_and_accepts_changes():
     assert capture.grab() is None
     assert tuple(capture.grab()[0, 0]) == (255, 0, 0)
     assert tuple(capture.grab()[0, 0]) == (0, 0, 255)
-    assert all(call.kwargs == {"new_frame_only": False} for call in camera.grab.call_args_list)
+    assert all(call.kwargs == {"new_frame_only": False, "copy": False} for call in camera.grab.call_args_list)
 
 
 @pytest.mark.parametrize("value,accepted", [(120, True), (240, False)])
