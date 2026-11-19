@@ -106,7 +106,8 @@ void main() {
         hasLength(1));
   });
 
-  testWidgets('unticking the only selected light stops sync and turns it off once',
+  testWidgets(
+      'unticking the only selected light stops sync and turns it off once',
       (tester) async {
     tester.view.physicalSize = const Size(1280, 1100);
     tester.view.devicePixelRatio = 1;
@@ -134,7 +135,8 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     final service = _RecordingBulbService();
-    await tester.pumpWidget(MaterialApp(home: HomeScreen(bulbService: service)));
+    await tester
+        .pumpWidget(MaterialApp(home: HomeScreen(bulbService: service)));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Start Screen Sync'));
     await tester.pumpAndSettle();

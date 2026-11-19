@@ -16,7 +16,29 @@ class ScreenCaptureService {
 
   SyncStatsListener? onStats;
   void Function(Map<dynamic, dynamic>)? onSession;
+
+  /// Native asks Dart to collect a video opened from outside the app.
+  void Function()? onPendingMedia;
   String _sessionId = '';
+
+  /// True on Android TV / Google TV. Any failure means "not a TV".
+  static Future<bool> isTelevision() async {
+    try {
+      return await _channel.invokeMethod<bool>('isTelevision') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// A media URI handed to the app by "open with", or null. One-shot.
+  Future<String?> takePendingMediaUri() async {
+    try {
+      final uri = await _channel.invokeMethod<String>('takePendingMediaUri');
+      return (uri == null || uri.isEmpty) ? null : uri;
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<void> refreshSession() async {
     final state =
@@ -30,6 +52,7 @@ class ScreenCaptureService {
   void dispose() {
     onStats = null;
     onSession = null;
+    onPendingMedia = null;
     _channel.setMethodCallHandler(null);
   }
 
@@ -105,6 +128,10 @@ class ScreenCaptureService {
     if (call.method == 'onSessionState' && call.arguments is Map) {
       final state = call.arguments as Map;
       if (state['sessionId'] == _sessionId) onSession?.call(state);
+      return;
+    }
+    if (call.method == 'onPendingMediaUri') {
+      onPendingMedia?.call();
       return;
     }
     if (call.method != 'onSyncUpdate') {

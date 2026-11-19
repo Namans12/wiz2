@@ -154,7 +154,7 @@ class SyncSettings {
               .contains(json['colorAlgorithm'])
           ? json['colorAlgorithm'] as String
           : 'auto',
-      minBrightness: number('minBrightness', 20).toInt().clamp(0, 80),
+      minBrightness: number('minBrightness', 20).toInt().clamp(10, 60),
       minColorDelta: number('minColorDelta', 8).toInt().clamp(2, 48),
       adaptiveFps: flag('adaptiveFps', true),
       predictiveSmoothing: flag('predictiveSmoothing', true),
@@ -226,6 +226,10 @@ class SyncRuntimeStats {
     this.syncProfile = 'auto',
     this.brightnessFollow = true,
     this.captureLooksBlack = false,
+    this.hdrFallback = false,
+    this.sendError,
+    this.sendErrors = 0,
+    this.datagramsSent = 0,
     this.framesProcessed = 0,
     this.replayedFrames = 0,
     this.freshFrameAgeMs,
@@ -264,6 +268,10 @@ class SyncRuntimeStats {
   final String syncProfile;
   final bool brightnessFollow;
   final bool captureLooksBlack;
+  final bool hdrFallback;
+  final String? sendError;
+  final int sendErrors;
+  final int datagramsSent;
   final int framesProcessed;
   final int replayedFrames;
   final int? freshFrameAgeMs;
@@ -318,6 +326,10 @@ class SyncRuntimeStats {
       'syncProfile': syncProfile,
       'brightnessFollow': brightnessFollow,
       'captureLooksBlack': captureLooksBlack,
+      'hdrFallback': hdrFallback,
+      'sendError': sendError,
+      'sendErrors': sendErrors,
+      'datagramsSent': datagramsSent,
       'framesProcessed': framesProcessed,
       'replayedFrames': replayedFrames,
       'freshFrameAgeMs': freshFrameAgeMs,
@@ -366,6 +378,10 @@ class SyncRuntimeStats {
       syncProfile: map['syncProfile'] as String? ?? 'auto',
       brightnessFollow: map['brightnessFollow'] as bool? ?? true,
       captureLooksBlack: map['captureLooksBlack'] as bool? ?? false,
+      hdrFallback: map['hdrFallback'] as bool? ?? false,
+      sendError: map['sendError'] as String?,
+      sendErrors: (map['sendErrors'] as num?)?.toInt() ?? 0,
+      datagramsSent: (map['datagramsSent'] as num?)?.toInt() ?? 0,
       framesProcessed: (map['framesProcessed'] as num?)?.toInt() ?? 0,
       replayedFrames: (map['replayedFrames'] as num?)?.toInt() ?? 0,
       freshFrameAgeMs: (map['freshFrameAgeMs'] as num?)?.toInt(),
