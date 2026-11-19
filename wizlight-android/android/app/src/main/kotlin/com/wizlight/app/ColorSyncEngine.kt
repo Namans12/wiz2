@@ -93,6 +93,11 @@ class ColorSyncEngine {
     private var blackSinceMs = 0L
     private var currentBrightnessFactor = 1.0
     private val dimmingPolicy = DimmingPolicy()
+    // Zone mode: every region keeps its own neutral strength, value and dimming smoothing
+    // (desktop _process_region / _finalize_output_brightness per region).
+    private val regionDimming = ZoneDimming()
+    private val regionNeutral = mutableMapOf<String, Double>()
+    private val regionBrightness = mutableMapOf<String, Int>()
     var outputBrightness = 255
         private set
     private val lastSentBrightness = mutableMapOf<String, Int>()
@@ -132,10 +137,13 @@ class ColorSyncEngine {
     // When loaded, mapViaLut() interpolates it identically to desktop map_rgb so a
     // color produces the SAME bulb payload on TV and desktop. Falls back to the
     // hue-basis projection if the asset is missing.
-    private var lut: IntArray? = null
-    private var lutGray: IntArray? = null
-    private var lutGrid = 33
-    private var lutChannels = 5
+    private var heuristicLut: WizLut? = null
+    // Physical-model tables per white-LED count (same mixing model desktop uses with
+    // mixing_model "physical"); chosen per bulb from its getModelConfig probe.
+    private val physicalLuts = mutableMapOf<WhiteLayout, WizLut>()
+    private var profileProbe: BulbProfileProbe? = null
+    // Which table each light last received, so a probe answer forces a resend.
+    private val lastSentTable = mutableMapOf<String, WhiteLayout?>()
 
     private val wizBasis = arrayOf(
         doubleArrayOf(cos(0.0), sin(0.0)),
@@ -183,6 +191,8 @@ class ColorSyncEngine {
     fun start() {
         reset()
         val socket = DatagramSocket().apply { sendBufferSize = 262144 }
+        profileProbe?.close()
+        profileProbe = BulbProfileProbe()
         udpSocket = socket
         outputSender = LatestWizSender(
             transmit = { ip, payload ->
@@ -215,8 +225,12 @@ class ColorSyncEngine {
         blackSinceMs = 0L
         currentBrightnessFactor = 1.0
         dimmingPolicy.reset()
+        regionDimming.reset()
+        regionNeutral.clear()
+        regionBrightness.clear()
         outputBrightness = 255
         lastSentBrightness.clear()
+        lastSentTable.clear()
         lastSendError = null
         datagramsSent = 0
         sendErrors = 0
@@ -242,6 +256,8 @@ class ColorSyncEngine {
         outputSender?.close()
         outputSender = null
         udpSocket = null
+        profileProbe?.close()
+        profileProbe = null
     }
 
     // Called on the same worker that submits capture frames.
@@ -252,9 +268,11 @@ class ColorSyncEngine {
         if (offs.isEmpty()) outputSender?.invalidate() else outputSender?.invalidateThenOffer(offs)
         for (ip in offs.keys) { currentOutputColors.remove(ip); predictionTargets.remove(ip); refreshPolicy.remove(ip) }
         bulbTargets = targets
+        for (target in targets) profileProbe?.layoutOf(target.ip)  // start probing early
         effectiveMode = mode
         lastSentColors.clear()
         lastSentBrightness.clear()
+        lastSentTable.clear()
         lastSubmitAtMs = 0L
     }
 
@@ -446,6 +464,15 @@ class ColorSyncEngine {
         val avgSat = satSum / n
         val avgLuma = lumaSum / n
         val avgValue = valueSum / n
+        val regionGrids = ZoneOutput.regionGrids(effectiveMode == "zones", grids)
+        val perRegion = regionGrids.isNotEmpty()
+        val regionValue = mutableMapOf<String, Double>()
+        regionNeutral.clear()
+        for ((region, grid) in regionGrids) {
+            val (sat, value) = ZoneOutput.gridStats(grid)
+            regionNeutral[region] = neutralStrength(sat)
+            regionValue[region] = value
+        }
         val tNeutral = ((0.06 - avgSat) / 0.06).coerceIn(0.0, 1.0)
         sceneNeutral = tNeutral * tNeutral * (3.0 - 2.0 * tNeutral)
         sceneLuma = avgLuma
@@ -475,9 +502,24 @@ class ColorSyncEngine {
             }
         val peak = extractedTargets.values.maxOfOrNull { max(it.r, max(it.g, it.b)) } ?: 0
         if (!brightnessFollow && peak < 24) return false
-        outputBrightness = dimmingPolicy.value(avgValue, minBrightness, peak, brightnessFollow)
+        regionBrightness.clear()
+        if (perRegion) {
+            regionBrightness.putAll(regionDimming.update(
+                extractedTargets.filterKeys { it != "all" }.mapValues { (region, color) ->
+                    (regionValue[region] ?: avgValue) to max(color.r, max(color.g, color.b))
+                },
+                minBrightness,
+                brightnessFollow,
+            ))
+            outputBrightness = regionBrightness.values.maxOrNull() ?: 255
+        } else {
+            outputBrightness = dimmingPolicy.value(avgValue, minBrightness, peak, brightnessFollow)
+        }
         val targetColors = extractedTargets.mapValues { (_, color) ->
-            val rgb = WizOutputPolicy.normalize(intArrayOf(color.r, color.g, color.b))
+            // Desktop order: boost -> adapt -> orange trim -> normalize to full drive.
+            val rgb = WizOutputPolicy.normalize(
+                WizOutputPolicy.trimPhysicalOrange(intArrayOf(color.r, color.g, color.b)),
+            )
             RgbColor(rgb[0], rgb[1], rgb[2])
         }
         lastTargetColors.clear()
@@ -491,6 +533,7 @@ class ColorSyncEngine {
         var sentAnyUpdate = false
         val pendingColors = linkedMapOf<String, RgbColor>()
         val pendingPayloads = linkedMapOf<String, ByteArray>()
+        val pendingTables = linkedMapOf<String, WhiteLayout?>()
 
         for ((ip, targetColor) in mappedBulbColors) {
             val current = currentOutputColors[ip]
@@ -508,22 +551,27 @@ class ColorSyncEngine {
             currentOutputColors[ip] = smoothed
 
             val lastSent = lastSentColors[ip]
+            val table = tableFor(ip)
+            val ipBrightness = brightnessForIp(ip)
             val needsForcedRefresh = lastSent != null && refreshPolicy.due(ip, nowMs)
             if (
                 lastSent == null ||
-                lastSentBrightness[ip] != outputBrightness ||
+                lastSentBrightness[ip] != ipBrightness ||
+                lastSentTable[ip] != table ||
                 sceneCut ||
                 perceptualDelta(smoothed, lastSent) >= sendThreshold.toDouble() ||
                 needsForcedRefresh
             ) {
                 pendingColors[ip] = smoothed
-                pendingPayloads[ip] = makeColorPayload(smoothed)
+                pendingPayloads[ip] = makeColorPayload(smoothed, table, ipBrightness)
+                pendingTables[ip] = table
             }
         }
         if (pendingPayloads.isNotEmpty() && outputSender?.offerBatch(pendingPayloads) == true) {
             for ((ip, color) in pendingColors) {
                 lastSentColors[ip] = color
-                lastSentBrightness[ip] = outputBrightness
+                lastSentBrightness[ip] = brightnessForIp(ip)
+                lastSentTable[ip] = pendingTables[ip]
                 refreshPolicy.markQueued(ip, nowMs)
             }
             sentAnyUpdate = true
@@ -534,6 +582,7 @@ class ColorSyncEngine {
             lastSentColors.remove(ip)
             predictionTargets.remove(ip)
             lastSentBrightness.remove(ip)
+            lastSentTable.remove(ip)
             refreshPolicy.remove(ip)
         }
 
@@ -673,7 +722,10 @@ class ColorSyncEngine {
             for ((region, grid) in grids) {
                 if (region == "all") continue
                 val sampled = SampledFrame(grid, size, size)
-                targets[region] = enhanceColor(mapSourceColorToSrgb(extractColor(sampled)))
+                targets[region] = enhanceColor(
+                    mapSourceColorToSrgb(extractColor(sampled)),
+                    regionNeutral[region] ?: sceneNeutral,
+                )
             }
             targets
         }
@@ -870,8 +922,12 @@ class ColorSyncEngine {
                 val saturation = rgbSaturation(r, g, b)
                 val luma = rgbLuma(r, g, b)
                 var weight = 0.15 + saturation * 2.2 + luma * 0.5
-                if (x < border || y < border || x >= sample.width - border || y >= sample.height - border) {
-                    weight *= edgeWeight
+                // Each edge band multiplies (desktop edge mask): corners get edgeWeight^2.
+                if (edgeWeight > 1.0) {
+                    if (y < border) weight *= edgeWeight
+                    if (y >= sample.height - border) weight *= edgeWeight
+                    if (x < border) weight *= edgeWeight
+                    if (x >= sample.width - border) weight *= edgeWeight
                 }
                 totalR += srgb8ToLinear[r] * weight
                 totalG += srgb8ToLinear[g] * weight
@@ -969,8 +1025,12 @@ class ColorSyncEngine {
                 val sat = rgbSaturation(r, g, b)
                 val luma = rgbLuma(r, g, b)
                 var ambient = 0.15 + sat * 2.2 + luma * 0.5
-                if (x < border || y < border || x >= sample.width - border || y >= sample.height - border) {
-                    ambient *= edgeWeight
+                // Each edge band multiplies (desktop edge mask): corners get edgeWeight^2.
+                if (edgeWeight > 1.0) {
+                    if (y < border) ambient *= edgeWeight
+                    if (y >= sample.height - border) ambient *= edgeWeight
+                    if (x < border) ambient *= edgeWeight
+                    if (x >= sample.width - border) ambient *= edgeWeight
                 }
                 val w = paletteWeight(ambient, sat, luma)
                 if (w <= 0.0) continue
@@ -1094,6 +1154,11 @@ class ColorSyncEngine {
         return count.toDouble() / sample.pixels.size.toDouble()
     }
 
+    private fun brightnessForIp(ip: String): Int =
+        ZoneDimming.forLight(ip, bulbTargets, regionBrightness, outputBrightness)
+
+    private fun neutralStrength(avgSaturation: Double): Double = ZoneOutput.neutralStrength(avgSaturation)
+
     private fun buildBulbColorMap(targetColors: Map<String, RgbColor>): Map<String, RgbColor> {
         if (bulbTargets.isEmpty() || targetColors.isEmpty()) {
             return emptyMap()
@@ -1211,12 +1276,11 @@ class ColorSyncEngine {
         return if (v <= 0.0031308) v * 12.92 else 1.055 * Math.pow(v, 1.0 / 2.4) - 0.055
     }
 
-    private fun enhanceColor(color: RgbColor): RgbColor {
+    private fun enhanceColor(color: RgbColor, neutral: Double = sceneNeutral): RgbColor {
         // Neutral scenes suppress the color boost (boost amplifies faint tints
         // in B&W film) and are desaturated toward true gray so the WiZ mapper
         // routes them to the white LEDs. Brightness-follow scales dim scenes
         // down instead of pinning them at the minimum-brightness floor.
-        val neutral = sceneNeutral
         // Saturation-aware boost (desktop adaptive_color_boost parity): damp the
         // boost on low-saturation colors so already-vivid frames aren't
         // over-saturated, THEN suppress further on neutral/B&W scenes.
@@ -1558,94 +1622,35 @@ class ColorSyncEngine {
     }
 
     private fun loadLut(context: Context) {
-        if (lut != null) return  // already loaded
-        try {
-            val bytes = context.assets.open("wiz_rgbcw_lut_v1.bin").use { it.readBytes() }
-            // magic(6) grid(i32) channels(i32) lut(bytes) grayN(i32) gray(bytes)
-            var off = 6
-            fun i32(): Int {
-                val v = (bytes[off].toInt() and 0xFF) or
-                    ((bytes[off + 1].toInt() and 0xFF) shl 8) or
-                    ((bytes[off + 2].toInt() and 0xFF) shl 16) or
-                    ((bytes[off + 3].toInt() and 0xFF) shl 24)
-                off += 4
-                return v
-            }
-            if (bytes.size < 14 ||
-                bytes[0].toInt() != 'W'.code || bytes[1].toInt() != 'Z'.code
-            ) {
-                return
-            }
-            val grid = i32()
-            val channels = i32()
-            val lutSize = grid * grid * grid * channels
-            val lutArr = IntArray(lutSize) { bytes[off + it].toInt() and 0xFF }
-            off += lutSize
-            val grayN = i32()
-            val grayArr = IntArray(grayN * channels) { bytes[off + it].toInt() and 0xFF }
-            lutGrid = grid
-            lutChannels = channels
-            lut = lutArr
-            lutGray = grayArr
+        fun load(name: String): WizLut? = try {
+            WizLut.parse(context.assets.open(name).use { it.readBytes() })
         } catch (_: Throwable) {
-            lut = null
-            lutGray = null
+            null
+        }
+        if (heuristicLut == null) heuristicLut = load("wiz_rgbcw_lut_v1.bin")
+        if (physicalLuts.isEmpty()) {
+            load("wiz_rgb_physical_lut_v1.bin")?.let { physicalLuts[WhiteLayout.NONE] = it }
+            load("wiz_rgbw_physical_lut_v1.bin")?.let { physicalLuts[WhiteLayout.SINGLE] = it }
+            load("wiz_rgbcw_physical_lut_v1.bin")?.let { physicalLuts[WhiteLayout.DUAL] = it }
         }
     }
 
-    /** Trilinear RGBCW lookup identical to desktop map_rgb (LUT + gray ramp). */
-    private fun mapViaLut(color: RgbColor): WizPilotColor {
-        val lutArr = lut ?: return mapToWizPilotColor(color)
-        val ch = lutChannels
-        val gmax = lutGrid - 1
-        val fr = color.r / 255.0 * gmax
-        val fg = color.g / 255.0 * gmax
-        val fb = color.b / 255.0 * gmax
-        val ri0 = fr.toInt(); val gi0 = fg.toInt(); val bi0 = fb.toInt()
-        val ri1 = min(ri0 + 1, gmax); val gi1 = min(gi0 + 1, gmax); val bi1 = min(bi0 + 1, gmax)
-        val tr = fr - ri0; val tg = fg - gi0; val tb = fb - bi0
+    /** Table layout for [ip]: the probed physical table, or null for the heuristic fallback. */
+    private fun tableFor(ip: String): WhiteLayout? {
+        val layout = profileProbe?.layoutOf(ip) ?: return null
+        return if (physicalLuts.containsKey(layout)) layout else null
+    }
 
-        fun idx(ri: Int, gi: Int, bi: Int) = ((ri * lutGrid + gi) * lutGrid + bi) * ch
-        val i000 = idx(ri0, gi0, bi0); val i001 = idx(ri0, gi0, bi1)
-        val i010 = idx(ri0, gi1, bi0); val i011 = idx(ri0, gi1, bi1)
-        val i100 = idx(ri1, gi0, bi0); val i101 = idx(ri1, gi0, bi1)
-        val i110 = idx(ri1, gi1, bi0); val i111 = idx(ri1, gi1, bi1)
-
-        val out = DoubleArray(ch)
-        for (k in 0 until ch) {
-            val c00 = lutArr[i000 + k] + (lutArr[i001 + k] - lutArr[i000 + k]) * tb
-            val c01 = lutArr[i010 + k] + (lutArr[i011 + k] - lutArr[i010 + k]) * tb
-            val c10 = lutArr[i100 + k] + (lutArr[i101 + k] - lutArr[i100 + k]) * tb
-            val c11 = lutArr[i110 + k] + (lutArr[i111 + k] - lutArr[i110 + k]) * tb
-            val c0 = c00 + (c01 - c00) * tg
-            val c1 = c10 + (c11 - c10) * tg
-            out[k] = c0 + (c1 - c0) * tr
-        }
-
-        // Near-neutral inputs blend toward the exact-gray ramp (desktop parity).
-        val maxc = max(color.r, max(color.g, color.b))
-        val grayArr = lutGray
-        if (maxc > 0 && grayArr != null) {
-            val sat = (maxc - min(color.r, min(color.g, color.b))).toDouble() / maxc
-            if (sat < 0.12) {
-                val t = min(1.0, (0.12 - sat) / 0.08)
-                val blend = t * t * (3.0 - 2.0 * t)
-                val luma = (color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722)
-                    .roundToInt().coerceIn(0, 255)
-                for (k in 0 until ch) {
-                    out[k] += (grayArr[luma * ch + k] - out[k]) * blend
-                }
-            }
-        }
-
-        val pr = out[0].roundToInt().coerceIn(0, 255)
-        val pg = out[1].roundToInt().coerceIn(0, 255)
-        val pb = out[2].roundToInt().coerceIn(0, 255)
-        var cold = if (ch >= 5) out[3].roundToInt().coerceIn(0, 255) else 0
-        var warm = if (ch >= 5) out[4].roundToInt().coerceIn(0, 255) else if (ch == 4) out[3].roundToInt().coerceIn(0, 255) else 0
-
-        // Per-device cool bias applied post-hoc (single generic LUT serves all).
-        val bias = when (deviceProfile) {
+    /** Trilinear lookup identical to desktop map_rgb (LUT + gray ramp), per bulb. */
+    private fun mapViaLut(color: RgbColor, layout: WhiteLayout?): WizPilotColor {
+        val table = (if (layout != null) physicalLuts[layout] else null) ?: heuristicLut
+            ?: return mapToWizPilotColor(color)
+        val v = table.map(color.r, color.g, color.b)
+        var cold = v[3]
+        var warm = v[4]
+        // Panel-dependent cool bias belongs to the heuristic table only; the physical
+        // tables are unbiased (the bias was never validated on top of them).
+        val bias = if (layout != null && table !== heuristicLut) 0.0 else when (deviceProfile) {
             DeviceProfile.BRAVIA -> 0.10
             DeviceProfile.WIDE_GAMUT_HDR -> 0.05
             DeviceProfile.GENERIC -> 0.0
@@ -1657,15 +1662,15 @@ class ColorSyncEngine {
                 warm = total - cold
             }
         }
-        return WizPilotColor(RgbColor(pr, pg, pb), cold, warm)
+        return WizPilotColor(RgbColor(v[0], v[1], v[2]), cold, warm)
     }
 
-    private fun makeColorPayload(color: RgbColor): ByteArray {
-        val mapped = mapViaLut(color)
+    private fun makeColorPayload(color: RgbColor, layout: WhiteLayout?, brightness: Int): ByteArray {
+        val mapped = mapViaLut(color, layout)
         val channels = intArrayOf(mapped.rgb.r, mapped.rgb.g, mapped.rgb.b, mapped.coldWhite, mapped.warmWhite)
-        val cacheKey = channels.joinToString(":") + ":$outputBrightness"
+        val cacheKey = channels.joinToString(":") + ":$brightness"
         val payload = packetCache.getOrPut(cacheKey) {
-            WizOutputPolicy.packet(channels, outputBrightness).toByteArray(StandardCharsets.UTF_8)
+            WizOutputPolicy.packet(channels, brightness).toByteArray(StandardCharsets.UTF_8)
         }
         return payload
     }
