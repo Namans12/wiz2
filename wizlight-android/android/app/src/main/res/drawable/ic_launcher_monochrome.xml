@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Bulb dome and neck silhouette matching desktop brand icon outline -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,26 C43.5,26 35,34.5 35,45 C35,51.8 38.6,57.7 44,61 L44,65.5 C44,66.3 44.7,67 45.5,67 L62.5,67 C63.3,67 64,66.3 64,65.5 L64,61 C69.4,57.7 73,51.8 73,45 C73,34.5 64.5,26 54,26 Z" />
+
+    <!-- Screw base thread 1 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M45.5,69 L62.5,69 C63.3,69 64,69.7 64,70.5 C64,71.3 63.3,72 62.5,72 L45.5,72 C44.7,72 44,71.3 44,70.5 C44,69.7 44.7,69 45.5,69 Z" />
+
+    <!-- Screw base thread 2 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M47,73.5 L61,73.5 C61.8,73.5 62.5,74.2 62.5,75 C62.5,75.8 61.8,76.5 61,76.5 L47,76.5 C46.2,76.5 45.5,75.8 45.5,75 C45.5,74.2 46.2,73.5 47,73.5 Z" />
+
+    <!-- Rounded bottom contact -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M49.5,78 L58.5,78 C58.5,79.8 56.5,81 54,81 C51.5,81 49.5,79.8 49.5,78 Z" />
+</vector>
