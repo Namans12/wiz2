@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -26,9 +28,41 @@ android {
         versionName = flutter.versionName
     }
 
+    // Release signing: android/key.properties (local) or ANDROID_KEYSTORE_* env vars (CI).
+    // With neither, release builds fall back to the debug key so local and PR builds still work.
+    val keyProps = Properties()
+    val keyPropsFile = rootProject.file("key.properties")
+    if (keyPropsFile.exists()) {
+        keyPropsFile.inputStream().use { keyProps.load(it) }
+    }
+    fun signingValue(propName: String, envName: String): String? =
+        keyProps.getProperty(propName) ?: System.getenv(envName)
+    val releaseStoreFile = signingValue("storeFile", "ANDROID_KEYSTORE_PATH")
+    val releaseStorePassword = signingValue("storePassword", "ANDROID_KEYSTORE_PASSWORD")
+    val releaseKeyAlias = signingValue("keyAlias", "ANDROID_KEY_ALIAS")
+    val releaseKeyPassword = signingValue("keyPassword", "ANDROID_KEY_PASSWORD")
+    val hasReleaseSigning = listOf(
+        releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword
+    ).all { !it.isNullOrBlank() }
+
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
