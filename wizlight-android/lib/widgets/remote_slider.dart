@@ -16,6 +16,7 @@ class RemoteSlider extends StatefulWidget {
     required this.max,
     required this.onChanged,
     this.divisions,
+    this.onChangeEnd,
   });
 
   final String label;
@@ -24,6 +25,7 @@ class RemoteSlider extends StatefulWidget {
   final double max;
   final int? divisions;
   final ValueChanged<double>? onChanged;
+  final ValueChanged<double>? onChangeEnd;
 
   @override
   State<RemoteSlider> createState() => _RemoteSliderState();
@@ -120,6 +122,7 @@ class _RemoteSliderState extends State<RemoteSlider> {
                 semanticFormatterCallback: (value) =>
                     '${widget.label}: ${value.toStringAsFixed(value < 2 ? 2 : 0)}',
                 onChanged: widget.onChanged,
+                onChangeEnd: widget.onChangeEnd,
               ),
             ),
           ],

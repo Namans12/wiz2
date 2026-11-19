@@ -32,18 +32,39 @@ class LampAreaMenu extends StatefulWidget {
   State<LampAreaMenu> createState() => _LampAreaMenuState();
 }
 
-class _LampAreaMenuState extends State<LampAreaMenu> {
+class _LampAreaMenuState extends State<LampAreaMenu>
+    with WidgetsBindingObserver {
   static const _gap = 6.0;
   static const _itemHeight = 48.0;
   static const _menuPadding = 8.0;
   final _field = GlobalKey();
   final _fieldFocus = FocusNode(debugLabel: 'Lamp area');
   bool _opening = false;
+  bool _viewportChanged = false;
+  RawDialogRoute<String>? _menuRoute;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _fieldFocus.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!_opening) return;
+    _viewportChanged = true;
+    final route = _menuRoute;
+    if (route == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (route.isActive) route.navigator?.removeRoute(route);
+    });
   }
 
   Rect get _fieldRect {
@@ -54,6 +75,7 @@ class _LampAreaMenuState extends State<LampAreaMenu> {
   Future<void> _open() async {
     if (_opening || widget.busy) return;
     _opening = true;
+    _viewportChanged = false;
     try {
       final media = MediaQuery.of(context);
       final scroll = Scrollable.maybeOf(context)?.position;
@@ -70,7 +92,12 @@ class _LampAreaMenuState extends State<LampAreaMenu> {
           curve: Curves.easeOut,
         );
       }
-      if (!mounted || widget.onChanged == null || widget.busy) return;
+      if (!mounted ||
+          _viewportChanged ||
+          widget.onChanged == null ||
+          widget.busy) {
+        return;
+      }
 
       final field = _fieldRect;
       final top = field.bottom + _gap;
@@ -80,8 +107,7 @@ class _LampAreaMenuState extends State<LampAreaMenu> {
           math.max(field.width, 156.0), media.size.width - 2 * _menuPadding);
       final left = field.left
           .clamp(_menuPadding, media.size.width - width - _menuPadding);
-      final selected = await showGeneralDialog<String>(
-        context: context,
+      final route = RawDialogRoute<String>(
         barrierDismissible: true,
         barrierLabel:
             MaterialLocalizations.of(context).modalBarrierDismissLabel,
@@ -99,10 +125,14 @@ class _LampAreaMenuState extends State<LampAreaMenu> {
           ),
         ]),
       );
+      _menuRoute = route;
+      final selected =
+          await Navigator.of(context, rootNavigator: true).push(route);
       if (mounted && selected != null && !widget.busy) {
         widget.onChanged?.call(selected);
       }
     } finally {
+      _menuRoute = null;
       _opening = false;
     }
   }

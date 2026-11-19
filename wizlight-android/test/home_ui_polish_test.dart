@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +9,7 @@ import 'package:wizlight_android/models/wiz_bulb.dart';
 import 'package:wizlight_android/services/settings_service.dart';
 import 'package:wizlight_android/services/sync_service.dart';
 import 'package:wizlight_android/widgets/lamp_area_menu.dart';
+import 'package:wizlight_android/widgets/remote_slider.dart';
 
 const _channel = MethodChannel('com.wizlight.app/screen_capture');
 
@@ -17,7 +20,8 @@ Future<List<MethodCall>> _pumpHome(
   bool tv = false,
   Size size = const Size(390, 844),
   String? runningBackend,
-  Object? Function(MethodCall)? onUpdateSettings,
+  FutureOr<Object?> Function(MethodCall)? onUpdateSettings,
+  FutureOr<Object?> Function(MethodCall)? nativeHandler,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -36,6 +40,7 @@ Future<List<MethodCall>> _pumpHome(
   tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(_channel,
       (call) async {
     calls.add(call);
+    if (nativeHandler != null) return nativeHandler(call);
     if (call.method == 'querySession') {
       return {
         'sessionId': runningBackend == null ? '' : 'sync-session',
@@ -54,6 +59,11 @@ Future<List<MethodCall>> _pumpHome(
   await tester.pumpAndSettle();
   return calls;
 }
+
+Finder _slider(String label) => find.descendant(
+      of: find.widgetWithText(RemoteSlider, label),
+      matching: find.byType(Slider),
+    );
 
 void main() {
   testWidgets('home paints a full-screen gradient and drops the old hints',
@@ -167,6 +177,29 @@ void main() {
     expect(focus.hasFocus, isTrue);
   });
 
+  testWidgets('rotating the viewport dismisses the lamp area menu',
+      (tester) async {
+    await _pumpHome(tester, regions: true, size: const Size(600, 900));
+    final field = find.descendant(
+        of: find.byType(LampAreaMenu), matching: find.byType(OutlinedButton));
+    final menu = find.byKey(const ValueKey('lamp-area-options'));
+    await tester.ensureVisible(field);
+    await tester.tap(field);
+    await tester.pumpAndSettle();
+    expect(menu, findsOneWidget);
+
+    tester.view.physicalSize = const Size(900, 600);
+    await tester.pumpAndSettle();
+    expect(menu, findsNothing);
+
+    await tester.ensureVisible(field);
+    await tester.tap(field);
+    await tester.pumpAndSettle();
+    expect(menu, findsOneWidget);
+    expect(tester.getTopLeft(menu).dy,
+        greaterThan(tester.getBottomLeft(field).dy));
+  });
+
   testWidgets('opening diagnostics brings the runtime into view',
       (tester) async {
     await _pumpHome(tester);
@@ -234,5 +267,138 @@ void main() {
       expect(calls.map((call) => call.method),
           isNot(anyOf(contains('stopCapture'), contains('stopMedia'))));
     });
+
+    testWidgets('$backend applies the newest edits made while starting',
+        (tester) async {
+      var session = <String, Object?>{
+        'sessionId': '',
+        'backend': backend,
+        'state': 'stopped',
+      };
+      final startMethod = backend == 'screen' ? 'startCapture' : 'playMedia';
+      final calls = await _pumpHome(tester, nativeHandler: (call) {
+        if (call.method == startMethod) {
+          session = {
+            ...session,
+            'sessionId': call.arguments['sessionId'],
+            'state': 'starting',
+          };
+          return true;
+        }
+        return switch (call.method) {
+          'querySession' => session,
+          'requestPermission' => true,
+          'pickMedia' => 'content://test/video.mp4',
+          'updateSettings' => {
+              'accepted': true,
+              'restartRequired': ['hdrCapture'],
+            },
+          _ => null,
+        };
+      });
+
+      if (backend == 'usb') {
+        await tester.tap(find.text('USB video'));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.text(
+          backend == 'screen' ? 'Start Screen Sync' : 'Pick & Play USB Video'));
+      await tester.pumpAndSettle();
+      final start = calls.singleWhere((call) => call.method == startMethod);
+      expect(start.arguments, containsPair('mode', 'single'));
+      expect(start.arguments, containsPair('hdrCapture', false));
+      expect(find.text('Sync starting'), findsOneWidget);
+
+      for (final label in ['Regions', 'HDR-aware capture (Android 14+)']) {
+        final control = find.text(label);
+        await tester.ensureVisible(control);
+        await tester.tap(control);
+        await tester.pumpAndSettle();
+      }
+      final updates = calls.where((call) => call.method == 'updateSettings');
+      expect(updates, isEmpty);
+
+      session = {...session, 'state': 'running'};
+      for (var i = 0; i < 2; i++) {
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          _channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall('onSessionState', session),
+          ),
+          (_) {},
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(updates.single.arguments, containsPair('mode', 'zones'));
+      expect(updates.single.arguments, containsPair('hdrCapture', true));
+      expect(updates.single.arguments,
+          containsPair('sessionId', start.arguments['sessionId']));
+      expect(find.text('Restart needed'), findsOneWidget);
+    });
   }
+
+  testWidgets(
+      'slider drag keeps only the newest pending live value and saves on release',
+      (tester) async {
+    final firstReply = Completer<void>();
+    var inFlight = 0;
+    final values = <int>[];
+    await _pumpHome(tester, runningBackend: 'screen',
+        onUpdateSettings: (call) async {
+      expect(++inFlight, 1);
+      values.add(call.arguments['maxFps'] as int);
+      if (values.length == 1) await firstReply.future;
+      inFlight--;
+      return {'accepted': true};
+    });
+
+    final slider = _slider('Max FPS');
+    await tester.ensureVisible(slider);
+    await tester.pumpAndSettle();
+    final bounds = tester.getRect(slider);
+    Offset onTrack(double fraction) =>
+        Offset(bounds.left + bounds.width * fraction, bounds.center.dy);
+    final drag = await tester.startGesture(onTrack(0.2));
+    await tester.pump();
+    for (final fraction in [0.4, 0.55, 0.7, 0.9]) {
+      await drag.moveTo(onTrack(fraction));
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+    final latest = tester.widget<Slider>(slider).value.round();
+    expect(values, hasLength(1));
+    expect(latest, greaterThan(values.single));
+    expect((await SettingsService().loadSyncSettings()).maxFps,
+        const SyncSettings().maxFps);
+
+    await drag.up();
+    await tester.pump();
+    expect((await SettingsService().loadSyncSettings()).maxFps, latest);
+    expect(values, hasLength(1));
+
+    firstReply.complete();
+    await tester.pumpAndSettle();
+    expect(values, hasLength(2));
+    expect(values.last, latest);
+    expect(inFlight, 0);
+  });
+
+  testWidgets(
+      'slider prefs debounce edits and flush pending settings on dispose',
+      (tester) async {
+    await _pumpHome(tester);
+    final slider = _slider('Max FPS');
+    final settings = SettingsService();
+    tester.widget<Slider>(slider).onChanged!(25);
+    await tester.pump(const Duration(milliseconds: 200));
+    tester.widget<Slider>(slider).onChanged!(26);
+    await tester.pump(const Duration(milliseconds: 299));
+    expect((await settings.loadSyncSettings()).maxFps,
+        const SyncSettings().maxFps);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect((await settings.loadSyncSettings()).maxFps, 26);
+
+    tester.widget<Slider>(slider).onChanged!(27);
+    await tester.pumpWidget(const SizedBox());
+    expect((await settings.loadSyncSettings()).maxFps, 27);
+  });
 }

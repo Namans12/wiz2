@@ -60,7 +60,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _busy = false;
   bool _restartNeeded = false;
   String? _runningSessionId;
-  Future<void> _settingsUpdates = Future<void>.value();
+  int _settingsRevision = 0;
+  int? _settingsRevisionAtStart;
+  int _sentSettingsRevision = 0;
+  int _savedSettingsRevision = 0;
+  bool _applyingLiveSettings = false;
+  bool _savingSettings = false;
+  Timer? _settingsSaveTimer;
   String _sessionState = 'stopped';
   String? _lastMediaUri;
 
@@ -155,33 +161,79 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _saveSettings(SyncSettings settings) {
-    final sessionId = _runningSessionId;
-    setState(() => _settings = settings);
-    // Preserve the order of rapid input, including slider adjustments.
-    return _settingsUpdates = _settingsUpdates.then((_) async {
-      try {
-        await _settingsService.saveSyncSettings(settings);
-      } catch (error) {
-        if (mounted) {
-          setState(() => _status = 'Could not save settings: $error');
-        }
-        return;
-      }
-      if (!mounted || sessionId == null || sessionId != _runningSessionId) {
-        return;
-      }
-      try {
-        final restart = await _captureService.updateSettings(settings);
-        if (!mounted || sessionId != _runningSessionId) return;
-        final needed = restart?.isNotEmpty ?? false;
-        if (needed != _restartNeeded) setState(() => _restartNeeded = needed);
-      } catch (error) {
-        if (mounted && sessionId == _runningSessionId) {
-          setState(() => _status = 'Could not apply live settings: $error');
-        }
-      }
+  void _changeSettings(SyncSettings settings, {bool debounceSave = false}) {
+    setState(() {
+      _settings = settings;
+      _settingsRevision++;
     });
+    unawaited(_applyLiveSettings());
+    if (debounceSave) {
+      _settingsSaveTimer?.cancel();
+      _settingsSaveTimer = Timer(
+        const Duration(milliseconds: 300),
+        _flushSettingsSave,
+      );
+    } else {
+      unawaited(_flushSettingsSave());
+    }
+  }
+
+  Future<void> _flushSettingsSave() async {
+    _settingsSaveTimer?.cancel();
+    _settingsSaveTimer = null;
+    if (_savingSettings) return;
+    _savingSettings = true;
+    try {
+      // A newer drag can restart the debounce while a write is in flight.
+      while (_settingsSaveTimer == null &&
+          _savedSettingsRevision != _settingsRevision) {
+        final revision = _settingsRevision;
+        try {
+          await _settingsService.saveSyncSettings(_settings);
+          _savedSettingsRevision = revision;
+        } catch (error) {
+          if (mounted) {
+            setState(() => _status = 'Could not save settings: $error');
+          }
+          if (revision == _settingsRevision) break;
+        }
+      }
+    } finally {
+      _savingSettings = false;
+    }
+  }
+
+  Future<void> _applyLiveSettings() async {
+    if (_applyingLiveSettings) return;
+    _applyingLiveSettings = true;
+    try {
+      var sessionId = _runningSessionId;
+      while (sessionId != null && _sentSettingsRevision != _settingsRevision) {
+        final revision = _settingsRevision;
+        _sentSettingsRevision = revision;
+        // Read the latest snapshot only when the preceding update is done.
+        try {
+          final restart = await _captureService.updateSettings(_settings);
+          if (mounted &&
+              sessionId == _runningSessionId &&
+              revision == _settingsRevision) {
+            final needed = restart?.isNotEmpty ?? false;
+            if (needed != _restartNeeded) {
+              setState(() => _restartNeeded = needed);
+            }
+          }
+        } catch (error) {
+          if (mounted &&
+              sessionId == _runningSessionId &&
+              revision == _settingsRevision) {
+            setState(() => _status = 'Could not apply live settings: $error');
+          }
+        }
+        sessionId = _runningSessionId;
+      }
+    } finally {
+      _applyingLiveSettings = false;
+    }
   }
 
   Future<void> _discover() async {
@@ -302,17 +354,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final running = _sessionState == 'running';
       final sessionId =
           running ? (session['sessionId'] as String? ?? '') : null;
-      if (_runningSessionId != sessionId) _restartNeeded = false;
+      if (_runningSessionId != sessionId) {
+        _restartNeeded = false;
+        if (sessionId != null) {
+          _sentSettingsRevision = _settingsRevisionAtStart ?? 0;
+          _settingsRevisionAtStart = null;
+        }
+      }
       _runningSessionId = sessionId;
       _syncRunning = running && session['backend'] == 'screen';
       _playerRunning = running && session['backend'] == 'usb';
       if (running) _syncBackend = session['backend'] as String? ?? 'screen';
       _status = session['error'] as String? ?? 'Sync $_sessionState';
       if (_sessionState == 'stopped' || _sessionState == 'error') {
+        _settingsRevisionAtStart = null;
         // Stale numbers from the previous run must not look live.
         _runtimeStats = null;
       }
     });
+    unawaited(_applyLiveSettings());
     if (session['hdrFallback'] == true) _noteHdrFallback();
     _retryPendingSoon();
   }
@@ -428,6 +488,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _runningSessionId = null;
+    unawaited(_flushSettingsSave());
     _captureService.dispose();
     _syncActionFocus.dispose();
     _bodyFocus.dispose();
@@ -475,11 +537,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _restartNeeded = false;
         _status = 'Starting screen capture...';
       });
+      _settingsRevisionAtStart = _settingsRevision;
       final accepted = await _captureService.startCapture(
           bulbs: targets, settings: _settings);
       if (!accepted) throw StateError('Capture start was rejected');
       await _refreshSession();
     } catch (error) {
+      _settingsRevisionAtStart = null;
       if (mounted) setState(() => _status = 'Screen sync: $error');
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -510,18 +574,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _restartNeeded = false;
         _status = 'Starting local player...';
       });
+      _settingsRevisionAtStart = _settingsRevision;
       final accepted = await _captureService.playMedia(
           mediaUri: uri, bulbs: targets, settings: _settings);
       if (!accepted) throw StateError('Player start was rejected');
       await _refreshSession();
       return true;
     } on PlatformException catch (error) {
+      _settingsRevisionAtStart = null;
       if (mounted) {
         setState(() => _status = error.code == 'NO_PICKER'
             ? "No file picker on this device. Open the video from your TV's file browser and choose WizLight."
             : 'Local player: ${error.message ?? error.code}');
       }
     } catch (error) {
+      _settingsRevisionAtStart = null;
       if (mounted) setState(() => _status = 'Local player: $error');
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -1337,7 +1404,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ],
                     selected: <String>{_settings.mode},
                     onSelectionChanged: (selection) {
-                      _saveSettings(_settings.copyWith(mode: selection.first));
+                      _changeSettings(
+                          _settings.copyWith(mode: selection.first));
                     },
                   ),
                 ),
@@ -1379,7 +1447,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ],
               selected: <String>{_settings.syncProfile},
-              onSelectionChanged: (selection) => _saveSettings(
+              onSelectionChanged: (selection) => _changeSettings(
                 _settings.copyWith(syncProfile: selection.first),
               ),
             ),
@@ -1395,7 +1463,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _ringedSwitch(
               value: _settings.brightnessFollow,
               onChanged: (value) =>
-                  _saveSettings(_settings.copyWith(brightnessFollow: value)),
+                  _changeSettings(_settings.copyWith(brightnessFollow: value)),
               title: const Text('Follow scene brightness'),
               subtitle: const Text(
                   'Dim scenes dim the bulb; black turns it off; B&W maps to true white.'),
@@ -1420,7 +1488,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ],
               onChanged: (value) {
                 if (value != null) {
-                  _saveSettings(_settings.copyWith(sourceColorSpace: value));
+                  _changeSettings(_settings.copyWith(sourceColorSpace: value));
                 }
               },
             )),
@@ -1428,17 +1496,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               value: _settings.hdrToneMapping,
               onChanged: _settings.sourceColorSpace == 'auto'
                   ? null
-                  : (value) =>
-                      _saveSettings(_settings.copyWith(hdrToneMapping: value)),
+                  : (value) => _changeSettings(
+                      _settings.copyWith(hdrToneMapping: value)),
               title: const Text('HDR tone mapping'),
               subtitle: const Text(
-                'Only used when Source colour space is set to Display P3 or Rec.2020 (not Auto)',
+                'Not used when Source colour space is Auto.',
               ),
             ),
             _ringedSwitch(
               value: _settings.hdrCapture,
               onChanged: (value) =>
-                  _saveSettings(_settings.copyWith(hdrCapture: value)),
+                  _changeSettings(_settings.copyWith(hdrCapture: value)),
               title: const Text('HDR-aware capture (Android 14+)'),
               subtitle: const Text(
                   'FP16 + BT.2020 PQ. Falls back automatically if unsupported.'),
@@ -1450,8 +1518,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               max: 30,
               divisions:
                   30 - _settings.minFps > 0 ? 30 - _settings.minFps : null,
-              onChanged: (value) =>
-                  _saveSettings(_settings.copyWith(maxFps: value.round())),
+              settingsForValue: (value) =>
+                  _settings.copyWith(maxFps: value.round()),
             ),
             _buildSlider(
               label: 'Smoothing',
@@ -1459,8 +1527,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               min: 0.05,
               max: 0.85,
               divisions: 16,
-              onChanged: (value) =>
-                  _saveSettings(_settings.copyWith(smoothing: value)),
+              settingsForValue: (value) => _settings.copyWith(smoothing: value),
             ),
             _buildSlider(
               label: 'Color Boost',
@@ -1468,8 +1535,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               min: 1.0,
               max: 1.8,
               divisions: 16,
-              onChanged: (value) =>
-                  _saveSettings(_settings.copyWith(colorBoost: value)),
+              settingsForValue: (value) =>
+                  _settings.copyWith(colorBoost: value),
             ),
             _buildSlider(
               label: 'Minimum brightness',
@@ -1477,13 +1544,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               min: 10,
               max: 60,
               divisions: 10,
-              onChanged: (value) => _saveSettings(
-                  _settings.copyWith(minBrightness: value.round())),
+              settingsForValue: (value) =>
+                  _settings.copyWith(minBrightness: value.round()),
             ),
             _ringedSwitch(
               value: _settings.ignoreLetterbox,
               onChanged: (value) =>
-                  _saveSettings(_settings.copyWith(ignoreLetterbox: value)),
+                  _changeSettings(_settings.copyWith(ignoreLetterbox: value)),
               title: const Text('Ignore letterbox bars'),
             ),
           ],
@@ -1497,7 +1564,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required double value,
     required double min,
     required double max,
-    required ValueChanged<double> onChanged,
+    required SyncSettings Function(double) settingsForValue,
     int? divisions,
   }) {
     return RemoteSlider(
@@ -1506,7 +1573,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       min: min,
       max: max,
       divisions: divisions,
-      onChanged: onChanged,
+      onChanged: (value) =>
+          _changeSettings(settingsForValue(value), debounceSave: true),
+      onChangeEnd: (_) {
+        unawaited(_applyLiveSettings());
+        unawaited(_flushSettingsSave());
+      },
     );
   }
 
