@@ -342,6 +342,15 @@ class BulbDashboard(ctk.CTkFrame):
         if self._auto_refresh:
             self.refresh_status()
     
+    def has_cards(self) -> bool:
+        """True once the cards (or the empty state) have been laid out."""
+        return bool(self._cards) or (not self._bulbs and self._empty_label.winfo_manager() != "")
+
+    def prepare_cards(self, bulbs: List[BulbInfo]):
+        """Build the cards ahead of the first visit, without polling the bulbs."""
+        self._bulbs = bulbs
+        self._rebuild_cards()
+
     def _rebuild_cards(self):
         """Rebuild all bulb cards."""
         # Clear existing cards

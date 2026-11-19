@@ -3,10 +3,25 @@
 import time
 import threading
 from dataclasses import dataclass
-from typing import Optional, Callable
+from typing import Any, Optional, Callable
 
 import numpy as np
-import sounddevice as sd
+
+
+
+def _sounddevice():
+    """Import sounddevice on first use (it costs ~0.3 s at process start)."""
+    import sounddevice
+
+    return sounddevice
+
+
+def __getattr__(name: str):
+    # Keeps ``clap_detector.sd`` available (tests patch ``sd.InputStream``)
+    # without importing sounddevice when the module is merely imported.
+    if name == "sd":
+        return _sounddevice()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @dataclass
@@ -62,7 +77,7 @@ class ClapDetector:
         self.on_clap = on_clap
         
         self._running = False
-        self._stream: Optional[sd.InputStream] = None
+        self._stream: Optional[Any] = None
         self._thread: Optional[threading.Thread] = None
         
         # State for detection
@@ -97,7 +112,7 @@ class ClapDetector:
             raise
 
     def _start_stream(self) -> None:
-        self._stream = sd.InputStream(
+        self._stream = _sounddevice().InputStream(
             samplerate=self.config.sample_rate,
             blocksize=self.config.block_size,
             channels=1,
@@ -223,6 +238,7 @@ class ClapDetector:
 
 def list_audio_devices() -> list[dict]:
     """List available audio input devices."""
+    sd = _sounddevice()
     devices = sd.query_devices()
     input_devices = []
     default_input = None

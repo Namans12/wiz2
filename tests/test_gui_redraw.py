@@ -108,6 +108,7 @@ def test_view_switch_redraws_only_the_two_changed_navigation_buttons():
         _view_frames={view: SimpleNamespace(_parent_frame=Mock()) for view in views},
         _dashboard=Mock(),
     )
+    gui._ensure_page = lambda view: gui._view_frames[view]
 
     WizLightModernGUI._switch_view(gui, "lights")
     WizLightModernGUI._switch_view(gui, "lights")
