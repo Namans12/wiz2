@@ -93,6 +93,26 @@ class ScreenCaptureService {
     await waitUntilStopped();
   }
 
+  /// Applies [settings] to the running session without restarting capture.
+  ///
+  /// Call it whenever a setting changes while sync is running. Returns the keys that cannot be
+  /// applied live and need a restart (today only `hdrCapture`), an empty set when everything took
+  /// effect on the next frame, or null when there is no running session to update.
+  Future<Set<String>?> updateSettings(SyncSettings settings) async {
+    final reply = await _channel.invokeMapMethod<dynamic, dynamic>(
+      'updateSettings',
+      {...settings.toLiveArgs(), 'sessionId': _sessionId},
+    );
+    return parseSettingsReply(reply);
+  }
+
+  /// Parses the native `updateSettings` reply (see [updateSettings]).
+  static Set<String>? parseSettingsReply(Map<dynamic, dynamic>? reply) {
+    if (reply == null || reply['accepted'] != true) return null;
+    final restart = reply['restartRequired'];
+    return restart is List ? restart.whereType<String>().toSet() : <String>{};
+  }
+
   Future<void> updateTargets(List<WizBulb> bulbs) async {
     final accepted = await _channel.invokeMethod<bool>('updateTargets', {
       'sessionId': _sessionId,

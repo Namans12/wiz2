@@ -189,6 +189,7 @@ class PlayerActivity : Activity() {
             finish()
             return
         }
+        SyncSessionRegistry.attachSettings(sessionId, ::updateSettings)
         try {
         configureEngineFromIntent()
 
@@ -239,6 +240,7 @@ class PlayerActivity : Activity() {
         engine.brightnessFollow = intent.getBooleanExtra(ScreenCaptureService.EXTRA_BRIGHTNESS_FOLLOW, true)
         engine.bulbTargets = parseSyncTargets(intent.getStringExtra(ScreenCaptureService.EXTRA_BULBS_JSON) ?: "[]")
         engine.effectiveMode = "single"
+        engine.supportsZones = false
         engine.configureAutoFromDisplay(
             this,
             intent.getStringExtra(ScreenCaptureService.EXTRA_SOURCE_COLOR_SPACE) ?: "auto",
@@ -247,6 +249,7 @@ class PlayerActivity : Activity() {
     }
 
     private fun captureAndSubmit() {
+        engine.applyPendingSettings()
         val view = textureView
         if (!view.isAvailable || !framePending.compareAndSet(false, true)) return
         try {
@@ -280,6 +283,13 @@ class PlayerActivity : Activity() {
         payload["frameTimeMs"] = 0.0
         payload["lastError"] = lastError
         SyncBridge.post("onSyncUpdate", payload)
+    }
+
+    /** Engine settings apply live; the player has no letterbox/sample-size/HDR-reader state of its own. */
+    private fun updateSettings(args: Map<String, Any?>): Map<String, Any?> {
+        val base = engine.queuedSettings() ?: engine.liveSettings("single", 0, true, false)
+        engine.queueSettings(LiveSettings.merge(base, args))
+        return LiveSettings.report(args, false)
     }
 
     private fun updateTargets(targets: List<ColorSyncEngine.BulbTarget>, complete: (Boolean) -> Unit) {

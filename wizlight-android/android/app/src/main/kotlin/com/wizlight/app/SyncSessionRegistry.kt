@@ -7,6 +7,7 @@ object SyncSessionRegistry {
     private var state = "stopped"
     private var error: String? = null
     private var stopOwner: (() -> Unit)? = null
+    private var settingsOwner: ((Map<String, Any?>) -> Map<String, Any?>)? = null
     private var updateOwner: ((List<ColorSyncEngine.BulbTarget>, (Boolean) -> Unit) -> Unit)? = null
 
     @Synchronized fun snapshot(): Map<String, Any?> = mapOf(
@@ -48,6 +49,17 @@ object SyncSessionRegistry {
         owner(targets, complete)
     }
 
+    @Synchronized fun attachSettings(sessionId: String, owner: (Map<String, Any?>) -> Map<String, Any?>) {
+        if (sessionId == id) settingsOwner = owner
+    }
+
+    /** Applies settings to the running session; null when no session of that id is running. */
+    @Synchronized fun updateSettings(sessionId: String, args: Map<String, Any?>): Map<String, Any?>? {
+        val owner = settingsOwner
+        if (sessionId != id || state != "running" || owner == null) return null
+        return owner(args)
+    }
+
     @Synchronized fun running(sessionId: String) {
         if (sessionId != id || state != "starting") return
         state = "running"
@@ -77,6 +89,7 @@ object SyncSessionRegistry {
         error = failure
         stopOwner = null
         updateOwner = null
+        settingsOwner = null
         publish()
     }
 
