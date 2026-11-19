@@ -65,7 +65,8 @@ if command -v create-dmg >/dev/null 2>&1; then
     DMG_PATH="dist/WizLight-${VERSION}-macOS.dmg"
     echo "==> Building DMG: $DMG_PATH"
     rm -f "$DMG_PATH"
-    create-dmg \
+    # On CI there is no Finder session for create-dmg's AppleScript layout step; skip it there.
+    create-dmg ${CI:+--skip-jenkins} \
         --volname "WizLight" \
         --window-pos 200 120 \
         --window-size 600 320 \

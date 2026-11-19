@@ -1,12 +1,30 @@
 # WizLight
 
-Local-network controller for Philips WiZ bulbs, for Windows desktop and Android (including an Android TV launcher entry). It focuses on local control, low-latency screen sync, clap detection, bulb calibration, and a clean GUI for daily use. A macOS packaging script is included but is not yet a supported target.
+[![CI](https://github.com/Namans12/wiz2/actions/workflows/ci.yml/badge.svg)](https://github.com/Namans12/wiz2/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/Namans12/wiz2)](LICENSE)
+
+Local-network controller for Philips WiZ bulbs, for Windows desktop and Android (including an Android TV launcher entry). It focuses on local control, low-latency screen sync, clap detection, bulb calibration, and a clean GUI for daily use. Unsigned macOS builds are published too, but macOS is not yet a tested target.
 
 WiZ bulbs are controlled locally over UDP. Your bulbs and controlling device must be on the same trusted LAN, and local communication must be enabled in the WiZ app.
 
 ## Download
 
-Release builds (Windows installer and Android APK) are coming. Until then, build from source using the instructions below.
+Get the latest build from the [Releases page](https://github.com/Namans12/wiz2/releases/latest). Verify files against `SHA256SUMS.txt` there.
+
+| Platform | File |
+| --- | --- |
+| Windows | `WizLight-<version>-Setup.exe` (installer) or `WizLight-<version>-portable.zip` (unzip anywhere, run `WizLight.exe`) |
+| macOS, Apple Silicon | `WizLight-<version>-macOS-arm64.dmg` |
+| macOS, Intel | `WizLight-<version>-macOS-intel.dmg` |
+| Android | `WizLight-<version>.apk` |
+
+The builds are not signed with a paid certificate, so expect a warning the first time you run them:
+
+- **Windows:** SmartScreen says "Windows protected your PC". Click **More info**, then **Run anyway**.
+- **macOS:** the first launch is blocked. Open **System Settings > Privacy & Security** and click **Open Anyway**. Then allow **Screen Recording** (screen sync) and **Microphone** (clap detection), and restart the app.
+- **Android:** allow **Install unknown apps** for your browser or file manager when prompted.
+
+Maintainers: see [docs/releasing.md](docs/releasing.md).
 
 ## Documentation
 
