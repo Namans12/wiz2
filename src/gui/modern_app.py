@@ -14,6 +14,7 @@ from typing import Optional
 
 import customtkinter as ctk
 
+from .. import __version__
 from ..core.async_runtime import BackgroundAsyncLoop
 from ..core.bulb_controller import BulbController, PRESETS, apply_preset
 from ..core.config import Config, SCREEN_SYNC_REGIONS
@@ -1101,7 +1102,7 @@ class WizLightModernGUI(AnimationMixin):
     def _export_diagnostics_report(self) -> None:
         report = build_diagnostics_report(
             platform="windows-desktop",
-            app_version="0.1.0",
+            app_version=__version__,
             bulbs=[
                 {"name": bulb.name, "ip": bulb.ip, "mac": bulb.mac}
                 for bulb in self.config.bulbs

@@ -5,17 +5,22 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from version_tools import read_version  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
+VERSION = read_version()  # single source: src/__init__.py
 APP_DIR = ROOT / "dist" / "WizLight"
-PORTABLE_ZIP = ROOT / "dist" / "WizLight-portable.zip"
+PORTABLE_ZIP = ROOT / "dist" / f"WizLight-{VERSION}-portable.zip"
 PAYLOAD_NAME = "WizLight-app.zip"
 STAGING = ROOT / "build" / "installer-staging"
 OUT_DIR = ROOT / "dist" / "installer"
-SETUP_EXE = OUT_DIR / "WizLight-Setup.exe"
+SETUP_EXE = OUT_DIR / f"WizLight-{VERSION}-Setup.exe"
 SED = ROOT / "build" / "WizLight-Setup.sed"
 
 
@@ -100,8 +105,6 @@ SourceFiles0={STAGING}
 
 
 def main() -> None:
-    import sys
-
     if "--zip-only" in sys.argv:
         print(f"Wrote {make_portable_zip()}")
         return

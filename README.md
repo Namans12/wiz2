@@ -49,8 +49,8 @@ Run these from the repository folder (`<repo folder>`).
 py -3.10 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
-pip install -e ".[dev,calibration,package]"
+pip install -r requirements-dev.txt
+pip install -e . --no-deps
 python -m src.gui
 ```
 
@@ -181,8 +181,8 @@ Outputs:
 
 ```text
 dist\WizLight\WizLight.exe   (onedir folder; keep it together)
-dist\WizLight-portable.zip   (unzip anywhere and run WizLight.exe)
-dist\installer\WizLight-Setup.exe
+dist\WizLight-<version>-portable.zip   (unzip anywhere and run WizLight.exe)
+dist\installer\WizLight-<version>-Setup.exe
 ```
 
 Installer details and commands: [docs/commands.md](docs/commands.md#windows-installer).

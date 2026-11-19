@@ -1,0 +1,13 @@
+# Development, test and build tools. Install with: pip install -r requirements-dev.txt
+-r requirements.txt
+
+# Tests and lint
+pytest==8.4.0
+pytest-asyncio==1.3.0
+ruff==0.11.12
+
+# Camera calibration scripts and tests
+opencv-python==4.11.0.86
+
+# Windows / macOS app builds
+pyinstaller==6.13.0
