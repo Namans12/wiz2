@@ -32,7 +32,46 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
             </intent-filter>
+
+            <!-- "Open with WizLight" from a file browser (e.g. Android TV) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="content"/>
+                <data android:scheme="file"/>
+                <data android:mimeType="video/*"/>
+            </intent-filter>
         </activity>
+
+        <!-- Android TV: no-UI launcher entry that stops a running sync session -->
+        <activity
+            android:name=".StopSyncActivity"
+            android:exported="true"
+            android:label="Stop WizLight sync"
+            android:banner="@drawable/tv_banner_stop"
+            android:icon="@mipmap/ic_launcher"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <!-- Phones/tablets: Quick Settings tile -->
+        <service
+            android:name=".StopSyncTileService"
+            android:exported="true"
+            android:label="WizLight sync"
+            android:icon="@drawable/ic_tile"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE"/>
+            </intent-filter>
+        </service>
         
         <!-- Screen capture service -->
         <service

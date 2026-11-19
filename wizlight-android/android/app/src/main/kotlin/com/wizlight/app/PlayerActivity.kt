@@ -9,9 +9,19 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import java.util.concurrent.atomic.AtomicBoolean
+import android.graphics.Color
+import android.view.Gravity
+import android.view.KeyEvent
 import android.view.TextureView
+import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 
 /**
@@ -38,6 +48,87 @@ class PlayerActivity : Activity() {
     private val engine = ColorSyncEngine()
     private var player: ExoPlayer? = null
     private lateinit var textureView: TextureView
+    private lateinit var videoContainer: FrameLayout
+    private lateinit var hudView: TextView
+    private var videoSize: VideoSize = VideoSize.UNKNOWN
+    private val hideHud = Runnable { hudView.visibility = View.GONE }
+
+    private val playerListener = object : Player.Listener {
+        override fun onPlayerError(error: PlaybackException) {
+            val message = "Playback error: ${error.errorCodeName}"
+            sessionFailure = message
+            lastError = message
+            isSyncing = false
+            mainHandler.removeCallbacks(frameTick)
+            SyncBridge.post(
+                "onSyncUpdate",
+                hashMapOf<String, Any?>("lastError" to message, "captureBackend" to "usb_media_player"),
+            )
+            finish() // onDestroy publishes the "error" session state via the registry
+        }
+
+        override fun onPlaybackStateChanged(state: Int) {
+            if (state == Player.STATE_ENDED) {
+                isSyncing = false
+                mainHandler.removeCallbacks(frameTick)
+                finish() // onDestroy finishes the session as "stopped"
+            }
+        }
+
+        override fun onVideoSizeChanged(size: VideoSize) {
+            videoSize = size
+            fitVideo()
+        }
+    }
+
+    /** Letterbox the TextureView to the video's aspect ratio so sampling only sees video pixels. */
+    private fun fitVideo() {
+        val cw = videoContainer.width
+        val ch = videoContainer.height
+        if (cw <= 0 || ch <= 0 || videoSize.width <= 0 || videoSize.height <= 0) return
+        var vw = videoSize.width * videoSize.pixelWidthHeightRatio
+        var vh = videoSize.height.toFloat()
+        if (videoSize.unappliedRotationDegrees % 180 != 0) { val t = vw; vw = vh; vh = t }
+        val scale = minOf(cw / vw, ch / vh)
+        val lp = textureView.layoutParams as FrameLayout.LayoutParams
+        val w = (vw * scale).toInt().coerceAtLeast(1)
+        val h = (vh * scale).toInt().coerceAtLeast(1)
+        if (lp.width != w || lp.height != h) {
+            lp.width = w
+            lp.height = h
+            textureView.layoutParams = lp
+        }
+    }
+
+    private fun showHud(text: String) {
+        hudView.text = text
+        hudView.visibility = View.VISIBLE
+        mainHandler.removeCallbacks(hideHud)
+        mainHandler.postDelayed(hideHud, 2000L)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        val exo = player ?: return super.onKeyDown(keyCode, event)
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                if (event.repeatCount > 0) return true // ignore key repeats
+                // playWhenReady (not isPlaying) so pausing during buffering pauses.
+                if (exo.playWhenReady) { exo.pause(); showHud("Paused") } else { exo.play(); showHud("Playing") }
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                exo.seekTo((exo.currentPosition + 10_000L).coerceAtMost(if (exo.duration > 0) exo.duration else Long.MAX_VALUE))
+                showHud("+10 s")
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                exo.seekTo((exo.currentPosition - 10_000L).coerceAtLeast(0L))
+                showHud("-10 s")
+                return true
+            }
+        }
+        return super.onKeyDown(keyCode, event) // Back finishes the activity, which stops sync
+    }
 
     private val sampleBitmap: Bitmap = Bitmap.createBitmap(GRID, GRID, Bitmap.Config.ARGB_8888)
     private val samplePixels = IntArray(GRID * GRID)
@@ -67,7 +158,31 @@ class PlayerActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         textureView = TextureView(this)
-        setContentView(textureView)
+        videoContainer = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        videoContainer.addView(
+            textureView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER,
+            ),
+        )
+        hudView = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0x99000000.toInt())
+            textSize = 18f
+            setPadding(32, 16, 32, 16)
+            visibility = View.GONE
+        }
+        videoContainer.addView(
+            hudView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+            ).apply { bottomMargin = 48 },
+        )
+        videoContainer.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or2, ob ->
+            if (r - l != or2 - ol || b - t != ob - ot) fitVideo()
+        }
+        setContentView(videoContainer)
 
         sessionId = intent.getStringExtra("sessionId") ?: ""
         if (!SyncSessionRegistry.attach(sessionId, ::updateTargets) { runOnUiThread { finish() } }) {
@@ -90,6 +205,7 @@ class PlayerActivity : Activity() {
 
         val exo = ExoPlayer.Builder(this).build()
         player = exo
+        exo.addListener(playerListener)
         exo.setVideoTextureView(textureView)
         exo.setMediaItem(MediaItem.fromUri(Uri.parse(uriString)))
         exo.prepare()
@@ -189,6 +305,7 @@ class PlayerActivity : Activity() {
     override fun onDestroy() {
         isSyncing = false
         mainHandler.removeCallbacks(frameTick)
+        mainHandler.removeCallbacks(hideHud)
         if (active === this) active = null
         player?.release()
         player = null

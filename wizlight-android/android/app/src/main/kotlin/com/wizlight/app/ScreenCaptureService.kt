@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -11,6 +12,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
+import android.hardware.display.DisplayManager.DisplayListener
 import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
@@ -112,6 +114,13 @@ class ScreenCaptureService : Service() {
     private var hdrCaptureActive = false
     private var hdrReaderActive = false
     private var captureBufferFormat = "rgba8888"
+    private var hdrFallback = false
+    private var hdrStartedAtMs = 0L
+    private var sdrSwitchedAtMs = 0L
+    private var displayRebuilt = false
+    private var lastAcquiredAtMs = 0L
+    private var blackNotified = false
+    private var captureDensity = 0
 
     @Volatile private var isRunning = false
     private var cleanupStarted = false
@@ -136,7 +145,22 @@ class ScreenCaptureService : Service() {
                     stopSelf()
                 }
             }
+
+            // API 34+: the captured content changed size (e.g. rotation).
+            override fun onCapturedContentResize(width: Int, height: Int) {
+                if (width > 0 && height > 0) pendingContentSize = width to height
+                scheduleResize()
+            }
         }
+
+    // Older APIs (and as a belt-and-braces on 34+): display metrics changed.
+    private val displayListener = object : DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) {
+            scheduleResize()
+        }
+    }
 
     private val captureRunnable = object : Runnable {
         override fun run() {
@@ -166,14 +190,78 @@ class ScreenCaptureService : Service() {
         super.onCreate()
         createNotificationChannel()
 
+        readDisplayMetrics()
+    }
+
+    /** Capture size is a quarter of the real display; re-read after rotation. Returns true if it changed. */
+    private fun readDisplayMetrics(): Boolean {
         val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealMetrics(metrics)
-
-        screenWidth = max(360, metrics.widthPixels / 4)
-        screenHeight = max(240, metrics.heightPixels / 4)
+        val w = max(360, metrics.widthPixels / 4)
+        val h = max(240, metrics.heightPixels / 4)
+        val changed = w != screenWidth || h != screenHeight
+        screenWidth = w
+        screenHeight = h
         screenDensity = metrics.densityDpi
+        return changed
+    }
+
+    private fun scheduleResize() {
+        val handler = captureHandler ?: return
+        handler.removeCallbacks(resizeRunnable)
+        handler.postDelayed(resizeRunnable, 250L) // debounce rotation animation
+    }
+
+    private val resizeRunnable = Runnable { resizeCapture() }
+
+    /** Latest size from onCapturedContentResize (API 34+), kept through the debounce. */
+    @Volatile private var pendingContentSize: Pair<Int, Int>? = null
+
+    /** Resize the VirtualDisplay and replace the ImageReader so geometry follows rotation. */
+    private fun resizeCapture() {
+        if (!isRunning) return
+        val display = virtualDisplay ?: return
+        val previousReader = imageReader
+        val oldW = screenWidth
+        val oldH = screenHeight
+        val content = pendingContentSize
+        pendingContentSize = null
+        val changed = if (content != null) {
+            // Same scaling as the initial capture size; display metrics only as the pre-34 fallback.
+            val w = max(360, content.first / 4)
+            val h = max(240, content.second / 4)
+            val differs = w != screenWidth || h != screenHeight
+            screenWidth = w
+            screenHeight = h
+            differs
+        } else readDisplayMetrics()
+        if (!changed) return
+        try {
+            val replacement = createImageReaderWithHdrFallback()
+            try {
+                display.resize(screenWidth, screenHeight, screenDensity)
+                display.surface = replacement.surface
+            } catch (error: Exception) {
+                replacement.close()
+                throw error
+            }
+            imageReader = replacement
+            previousReader?.close()
+            latestGrids = null
+            cachedContentBounds = null
+            cachedContentBoundsAtFrame = -1
+            lastAcquiredAtMs = 0L
+            val now = SystemClock.elapsedRealtime()
+            if (hdrReaderActive) hdrStartedAtMs = now
+            else if (sdrSwitchedAtMs > 0L || displayRebuilt) sdrSwitchedAtMs = now
+        } catch (error: Exception) {
+            screenWidth = oldW
+            screenHeight = oldH
+            lastError = "Resize failed: ${error.message ?: error}"
+            maybePostStatus()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -217,8 +305,12 @@ class ScreenCaptureService : Service() {
             }
 
             ACTION_STOP -> {
-                stopCapture()
-                stopSelf()
+                // Publish "stopping" to Dart first via the registry; it calls back into
+                // our stop owner. Fall back to a direct stop if no session is registered.
+                if (!SyncSessionRegistry.stopCurrent()) {
+                    stopCapture()
+                    stopSelf()
+                }
             }
         }
         return START_NOT_STICKY
@@ -275,6 +367,16 @@ class ScreenCaptureService : Service() {
         }
 
         mediaProjectionData = null
+        hdrStartedAtMs = if (hdrReaderActive) SystemClock.elapsedRealtime() else 0L
+        sdrSwitchedAtMs = 0L
+        displayRebuilt = false
+        lastAcquiredAtMs = 0L
+        blackNotified = false
+        try {
+            (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager)
+                .registerDisplayListener(displayListener, mainHandler)
+        } catch (_: Exception) {
+        }
         engine.start()
         latestGrids = null
         lastError = null
@@ -295,13 +397,13 @@ class ScreenCaptureService : Service() {
 
     private fun createImageReaderWithHdrFallback(): ImageReader {
         val sdrReader = {
-            captureBufferFormat = "rgba8888"
+            captureBufferFormat = if (hdrFallback) "rgba8888 (HDR unavailable)" else "rgba8888"
             hdrCaptureActive = false
             hdrReaderActive = false
             engine.capturedPixelsAreSrgb = false
             ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
         }
-        if (!requestedHdrCapture) return sdrReader()
+        if (!requestedHdrCapture || hdrFallback) return sdrReader()
         if (Build.VERSION.SDK_INT < 34) return sdrReader()
         if (!engine.detectedHdrSupport && engine.deviceProfile != ColorSyncEngine.DeviceProfile.BRAVIA) {
             return sdrReader()
@@ -337,6 +439,7 @@ class ScreenCaptureService : Service() {
             { switchToSdrCapture() },
         ) ?: run {
             if (wasHdrReader && !hdrReaderActive) return
+            if (runWatchdog()) return
             // Static screens produce no new frames (VirtualDisplay only pushes
             // on change) — keep the diagnostics heartbeat alive regardless so
             // the UI doesn't look dead.
@@ -348,13 +451,20 @@ class ScreenCaptureService : Service() {
             return
         }
         lastFreshFrameAtMs = SystemClock.elapsedRealtime()
+        lastAcquiredAtMs = lastFreshFrameAtMs
         var fallbackToSdr = false
         try {
             if (hdrReaderActive) {
-                val plane = image.planes.firstOrNull()
-                val actualDataSpace = if (Build.VERSION.SDK_INT >= 33) image.dataSpace else 0
-                val pq = if (Build.VERSION.SDK_INT >= 33) android.hardware.DataSpace.DATASPACE_BT2020_PQ else -1
-                if (plane == null || !CaptureFormatPolicy.isFp16Pq(plane.pixelStride, actualDataSpace, pq)) {
+                // Any exception while touching an HDR frame counts as HDR failure. A frame with
+                // non-PQ metadata also falls back at once: the converter only knows PQ, so
+                // guessing "linear FP16" would risk wrong colours.
+                val ok = CaptureFormatPolicy.guardHdrRead({
+                    val plane = image.planes.firstOrNull()
+                    val actualDataSpace = if (Build.VERSION.SDK_INT >= 33) image.dataSpace else 0
+                    val pq = if (Build.VERSION.SDK_INT >= 33) android.hardware.DataSpace.DATASPACE_BT2020_PQ else -1
+                    plane != null && CaptureFormatPolicy.isFp16Pq(plane.pixelStride, actualDataSpace, pq)
+                }, { })
+                if (ok != true) {
                     fallbackToSdr = true
                     return
                 }
@@ -384,6 +494,7 @@ class ScreenCaptureService : Service() {
             maybePostStatus()
         } catch (error: Exception) {
             lastError = error.message ?: error.toString()
+            if (hdrReaderActive) fallbackToSdr = true // HDR frame handling failed: drop to SDR
             maybePostStatus()
         } finally {
             image.close()
@@ -402,7 +513,10 @@ class ScreenCaptureService : Service() {
             hdrReaderActive = false
             hdrCaptureActive = false
             engine.capturedPixelsAreSrgb = false
-            captureBufferFormat = "rgba8888 (HDR format unavailable)"
+            captureBufferFormat = "rgba8888 (HDR unavailable)"
+            hdrFallback = true
+            sdrSwitchedAtMs = SystemClock.elapsedRealtime()
+            lastAcquiredAtMs = 0L
             lastError = null
             latestGrids = null
             cachedContentBounds = null
@@ -416,6 +530,59 @@ class ScreenCaptureService : Service() {
             sessionFailure = lastError
             stopCapture()
             stopSelf()
+        }
+    }
+
+    /** Returns true if a corrective action ran (caller should skip the replay this tick). */
+    private fun runWatchdog(): Boolean {
+        val action = CaptureFormatPolicy.watchdog(
+            hdrReaderActive, hdrStartedAtMs, sdrSwitchedAtMs, displayRebuilt,
+            lastAcquiredAtMs, SystemClock.elapsedRealtime(),
+        )
+        when (action) {
+            CaptureFormatPolicy.WatchdogAction.SWITCH_TO_SDR -> switchToSdrCapture()
+            CaptureFormatPolicy.WatchdogAction.REBUILD_DISPLAY -> rebuildDisplay()
+            CaptureFormatPolicy.WatchdogAction.NONE -> return false
+        }
+        return true
+    }
+
+    /**
+     * setSurface alone can leave a static screen without a first frame. Replace the
+     * VirtualDisplay (SDK < 34) or nudge it (SDK 34+, where a second createVirtualDisplay on one
+     * projection throws SecurityException). Runs at most once per session (displayRebuilt).
+     */
+    private fun rebuildDisplay() {
+        displayRebuilt = true
+        sdrSwitchedAtMs = SystemClock.elapsedRealtime()
+        val oldDisplay = virtualDisplay ?: return
+        val oldReader = imageReader
+        if (Build.VERSION.SDK_INT < 34) {
+            val projection = mediaProjection
+            var newReader: ImageReader? = null
+            try {
+                newReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
+                val newDisplay = projection?.createVirtualDisplay(
+                    "WizLightCapture", screenWidth, screenHeight, screenDensity,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, newReader.surface, null, mainHandler,
+                ) ?: throw IllegalStateException("Projection unavailable")
+                virtualDisplay = newDisplay
+                imageReader = newReader
+                newReader = null
+                try { oldDisplay.release() } catch (_: Exception) {}
+                try { oldReader?.close() } catch (_: Exception) {}
+                lastAcquiredAtMs = 0L
+                return
+            } catch (_: Exception) {
+                newReader?.close() // old display/reader stay in place; fall through to nudge
+            }
+        }
+        try {
+            oldDisplay.surface = null
+            oldDisplay.surface = imageReader?.surface
+            oldDisplay.resize(screenWidth, screenHeight, screenDensity + 1)
+            oldDisplay.resize(screenWidth, screenHeight, screenDensity)
+        } catch (_: Exception) {
         }
     }
 
@@ -590,7 +757,9 @@ class ScreenCaptureService : Service() {
         payload["hdrCaptureActive"] = hdrCaptureActive
         payload["captureBufferFormat"] = captureBufferFormat
         payload["lastError"] = lastError
+        payload["hdrFallback"] = hdrFallback
 
+        updateBlackWarning(engine.captureLooksBlack)
         SyncBridge.post("onSyncUpdate", payload)
     }
 
@@ -602,6 +771,10 @@ class ScreenCaptureService : Service() {
         val worker = captureThread
         val handler = captureHandler
         handler?.removeCallbacksAndMessages(null)
+        try {
+            (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(displayListener)
+        } catch (_: Exception) {
+        }
         val cleanup = Runnable {
             fun release(action: () -> Unit) {
                 try { action() } catch (error: Exception) {
@@ -645,14 +818,48 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    private fun createNotification(): Notification {
+    private val blackMessage =
+        "Screen looks black \u2014 this app may block capture (protected video). Use Play from USB for local files."
+
+    private fun createNotification(black: Boolean = false): Notification {
+        val tv = isTelevisionDevice(this)
+        val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        val stopIntent = PendingIntent.getService(
+            this, 1, Intent(this, ScreenCaptureService::class.java).setAction(ACTION_STOP), flags,
+        )
+        val openIntent = PendingIntent.getActivity(
+            this, 2,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            flags,
+        )
+        val suffix = if (tv) " Select to stop sync." else ""
+        val text = (if (black) blackMessage else "Driving WiZ bulbs from screen color.") + suffix
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("WizLight Tablet Sync")
-            .setContentText("Driving WiZ bulbs from tablet screen color")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
+            // TV panels usually drop action buttons, so there the tap itself stops sync.
+            .setContentIntent(if (tv) stopIntent else openIntent)
+            .addAction(0, "Stop sync", stopIntent)
             .build()
+    }
+
+    private fun updateBlackWarning(looksBlack: Boolean) {
+        if (looksBlack == blackNotified || !isRunning) return
+        blackNotified = looksBlack
+        val session = sessionId
+        // Notify on the main thread (same thread that stops the foreground notification) and
+        // re-check state there so a stopped session never gets its notification back.
+        mainHandler.post {
+            if (!isRunning || cleanupStarted || session != sessionId || blackNotified != looksBlack) return@post
+            try {
+                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, createNotification(looksBlack))
+            } catch (_: Exception) {
+            }
+        }
     }
 
     override fun onDestroy() {
