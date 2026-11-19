@@ -180,7 +180,8 @@ Build:
 Outputs:
 
 ```text
-dist\WizLight.exe
+dist\WizLight\WizLight.exe   (onedir folder; keep it together)
+dist\WizLight-portable.zip   (unzip anywhere and run WizLight.exe)
 dist\installer\WizLight-Setup.exe
 ```
 

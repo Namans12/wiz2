@@ -100,13 +100,14 @@ def test_windows_build_rejects_native_failure_or_stale_artifacts(tmp_path, nativ
     if stale:
         output = tmp_path / "dist"
         (output / "installer").mkdir(parents=True)
-        (output / "WizLight.exe").write_bytes(b"old")
+        (output / "WizLight").mkdir()
+        (output / "WizLight/WizLight.exe").write_bytes(b"old")
         (output / "installer/WizLight-Setup.exe").write_bytes(b"old")
     result = subprocess.run([shell, "-NoProfile", "-File", str(script), "-PythonPath", str(stub)], capture_output=True, text=True)
     assert result.returncode != 0
     assert "Build complete:" not in result.stdout
     if stale:
-        assert (tmp_path / "dist/WizLight.exe").read_bytes() == b"old"
+        assert (tmp_path / "dist/WizLight/WizLight.exe").read_bytes() == b"old"
 
 
 def test_hardware_report_rejects_nonfinite_errors(tmp_path):
@@ -137,6 +138,8 @@ def test_uninstaller_preserves_unrelated_files_in_custom_install_directory(tmp_p
     for directory in (install, menu, desktop):
         directory.mkdir()
     (install / "WizLight.exe").write_bytes(b"test executable")
+    (install / "_internal/sub").mkdir(parents=True)
+    (install / "_internal/sub/lib.dll").write_bytes(b"dll")
     (install / "uninstall.cmd").write_text("test")
     (install / "other.txt").write_text("keep")
     (menu / "other.txt").write_text("keep")
@@ -149,4 +152,45 @@ def test_uninstaller_preserves_unrelated_files_in_custom_install_directory(tmp_p
     assert (install / "other.txt").read_text() == "keep"
     assert (menu / "other.txt").read_text() == "keep"
     assert not (install / "WizLight.exe").exists()
+    assert not (install / "_internal").exists()
     assert not script.exists()
+
+
+def test_onedir_installer_upgrades_cleanly_and_uninstalls_whole_folder(tmp_path):
+    shell = shutil.which("powershell") or shutil.which("pwsh")
+    if shell is None or sys.platform != "win32":
+        pytest.skip("Windows PowerShell and WScript are required")
+    import zipfile
+
+    source = tmp_path / "src dir"
+    source.mkdir()
+    shutil.copy2(ROOT / "packaging/installer/install.ps1", source / "install.ps1")
+    with zipfile.ZipFile(source / "WizLight-app.zip", "w") as archive:
+        archive.writestr("WizLight/WizLight.exe", b"new exe")
+        archive.writestr("WizLight/_internal/lib/new.dll", b"dll")
+    install = tmp_path / "install dir" / "Wiz Light"
+    (install / "_internal").mkdir(parents=True)
+    (install / "WizLight.exe").write_bytes(b"old onefile exe")
+    (install / "_internal/stale.dll").write_bytes(b"stale")
+    (install / "keep.txt").write_text("keep")
+    menu, desktop = tmp_path / "menu", tmp_path / "desktop"
+    desktop.mkdir()
+
+    def run(script, *args):
+        return subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), *args],
+                              capture_output=True, text=True, timeout=60)
+
+    for _ in range(2):  # fresh upgrade over an old layout, then reinstall over the new one
+        result = run(source / "install.ps1", "-SourceDir", str(source), "-InstallDir", str(install),
+                     "-StartMenuDir", str(menu), "-DesktopDir", str(desktop), "-NoLaunch")
+        assert result.returncode == 0, result.stderr
+        assert (install / "WizLight.exe").read_bytes() == b"new exe"
+        assert (install / "_internal/lib/new.dll").is_file()
+        assert not (install / "_internal/stale.dll").exists()
+        assert (install / "keep.txt").read_text() == "keep"
+        assert (menu / "WizLight.lnk").is_file() and (desktop / "WizLight.lnk").is_file()
+    (install / "keep.txt").unlink()
+    result = run(install / "uninstall.ps1", "-StartMenuDir", str(menu), "-DesktopDir", str(desktop))
+    assert result.returncode == 0, result.stderr
+    assert not install.exists()
+    assert not (menu / "WizLight.lnk").exists() and not (desktop / "WizLight.lnk").exists()
